@@ -7,6 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-07-22
+
+Phase 3 — sky, clouds, fog. The vanilla sky is gone: the pack now computes its own
+atmosphere, volumetric clouds, aerial perspective, and night sky.
+
+### Added
+
+- **Physically based atmosphere.** Analytic Rayleigh + Mie + ozone single
+  scattering with numerically integrated transmittance, baked once per frame into
+  a horizon-biased sky-view LUT and sampled everywhere. Sunrise, noon, sunset,
+  and dusk follow the sun's real elevation; the horizon reads warmer and hazier
+  than the zenith. Procedural limb-darkened HDR sun disc (vanilla sun texture
+  retired; moon kept). Sun and ambient light colours are now atmosphere-driven,
+  with the warm amber / cool blue identity preserved as tunable modifiers.
+- **Volumetric clouds.** Two layers — 3D cumulus with erosion detail and height
+  shaping, plus a high cirrus sheet — with sun light-marching, multiple-scattering
+  approximation, powder-effect dark undersides, weather-driven coverage, wind
+  drift, and temporal accumulation. Cloud shadows sweep the terrain and align
+  with the sun. Quality tiers per preset; Potato/Low keep vanilla clouds.
+- **Aerial perspective fog.** Distance shifts bluer and desaturated by scattering
+  toward the real sky; density falls off with altitude and is gated by sky
+  exposure (caves stay dark). Biome-modulated (swamp, jungle, desert, badlands,
+  snow) and weather-responsive (rain thickens and greys, thunder darkens).
+- **Procedural night sky.** Star field with magnitude distribution, colour
+  variation and gentle twinkle, a tilted galaxy band with dust structure, and
+  occasional shooting stars — all fading through dusk, kept below moon brightness.
+- New settings screens/options: sky (mie, turbidity, sun disc, night sky,
+  star density), clouds (quality, coverage), fog (density).
+
+### Fixed (during phase review)
+
+- Aerial fog no longer floods caves or below-sea-level terrain with sky-coloured
+  haze (sea-level density floor + skylight gating).
+- Cloud lighting and cloud shadows now use the exact sun direction including
+  sunPathRotation (was ~17 degrees off, misaligning silver linings and shadows).
+
 ## [0.2.1] - 2026-07-22
 
 Hotfix for regressions found testing 0.2.0 on real hardware (M4 Mac + Windows).

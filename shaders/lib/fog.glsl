@@ -6,10 +6,14 @@
  lib/fog.glsl — aerial-perspective fog (Phase 3, FOG subsystem)
 ----------------------------------------------------------------------------
  The model, in one paragraph. This is NOT a uniform-density distance fade and
- NOT a hard cutoff. It is single-scattering aerial perspective with an
- EXPONENTIAL HEIGHT falloff: air is densest at sea level and thins with
- altitude (scale height AL_FOG_HEIGHT). Along the view ray we integrate that
- density analytically to an optical depth tau; extinction = exp(-tau) darkens
+ NOT a hard cutoff. It is single-scattering aerial perspective with a
+ SEA-LEVEL-FLOORED EXPONENTIAL HEIGHT falloff: air density is CONSTANT at and
+ below sea level and thins with altitude ABOVE it (scale height AL_FOG_HEIGHT).
+ The floor matters — an un-floored exp would grow without bound below sea level
+ and drown caves in bright sky haze. Aerial fog is also gated by sky exposure
+ (see alApplyAerialFog) so enclosed spaces get none. Along the view ray we
+ integrate the floored density analytically to an optical depth tau;
+ extinction = exp(-tau) darkens
  the scene toward the distance while in-scattered light — sampled from the
  atmosphere's own sky LUT in the view direction, alSkySample(viewDir) — is
  added back in. Because the in-scatter colour IS the sky, distance naturally
