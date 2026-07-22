@@ -5,6 +5,7 @@
 #include "/lib/encoding.glsl"
 #include "/lib/space.glsl"
 #include "/lib/shadow.glsl"
+#include "/lib/contact.glsl"
 #include "/lib/lighting.glsl"
 
 /*
@@ -18,8 +19,13 @@
  NOTE: gbufferProjectionInverse / gbufferModelViewInverse are declared in
  lib/space.glsl (included above) — do NOT redeclare them here.
 
- Sampler count: 6 (colortex0, colortex1, colortex2, colortex3, depthtex0,
-                   shadowtex1[SHADOWS])
+ Sampler count (max over branches):
+   colortex0,1,2,3 + depthtex0                                   = 5
+   + shadow samplers via lib/shadow.glsl (SHADOWS):
+       hardware-flag path : shadowtex0 + shadowtex1HW + noisetex = 3  -> 8 total
+       Mac fallback path  : shadowtex1 + noisetex               = 2  -> 7 total
+   contact shadows (CONTACT_SHADOWS) reuse depthtex0/noisetex (no new sampler).
+ Well within the 16-sampler Mac limit and the contract's <=14 budget.
 */
 
 uniform sampler2D colortex0;   // sky / scene HDR
@@ -79,6 +85,17 @@ void main() {
     float shadowVis = (matID == AL_MATID_HAND)
                     ? 1.0
                     : alShadowVisibility(playerPos, N, NdotL);
+
+    // Screen-space contact shadows multiply the shadow term for fine detail the
+    // shadow map is too coarse to resolve. Hand exempt (its near projection makes
+    // view reconstruction here invalid), same as the shadow-map path.
+#ifdef CONTACT_SHADOWS
+    if (matID != AL_MATID_HAND && NdotL > 0.0) {
+        vec3  viewLightDir = normalize(shadowLightPosition);
+        float dither = texture(noisetex, gl_FragCoord.xy / 256.0).x;
+        shadowVis *= alContactShadow(depthtex0, viewPos, viewLightDir, dither);
+    }
+#endif
 
     vec3 color = alLightPhase1(albedoLin, N, lm, shadowVis, wLightDir, dayFactor);
 

@@ -9,7 +9,9 @@
  blended into colortex0 with the shared lighting model so they match the
  opaque entities shaded in the deferred pass. entityColor (hurt flash etc.)
  is mixed in per the Iris convention.
- Sampler count: 2 (gtexture, shadowtex1[SHADOWS])
+ Sampler count: gtexture + shadow samplers via lib/shadow.glsl (SHADOWS):
+   Mac fallback = 3 (gtexture, shadowtex1, noisetex);
+   hardware-flag = 4 (gtexture, shadowtex0, shadowtex1HW, noisetex). <=4 budget.
 */
 
 uniform sampler2D gtexture;

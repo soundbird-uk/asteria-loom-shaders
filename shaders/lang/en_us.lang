@@ -45,8 +45,16 @@ value.shadowMapResolution.3072 = 3072
 value.shadowMapResolution.4096 = 4096
 option.shadowDistance = Shadow Distance
 option.shadowDistance.comment = How far from the camera shadows are cast, in blocks.
-option.SHADOW_FILTER = Soft Filter
-option.SHADOW_FILTER.comment = Cheap 2x2 softening of shadow edges. Off gives a single hard tap.
+option.SHADOW_PCSS = Soft Shadows (PCSS)
+option.SHADOW_PCSS.comment = Penumbrae widen with distance from the caster (contact-hardening). Off gives a plain fixed-radius blur. Needs hardware shadow samplers.
+option.SHADOW_SAMPLES = Shadow Samples
+option.SHADOW_SAMPLES.comment = Filter tap count. More is smoother but costlier.
+value.SHADOW_SAMPLES.8 = 8
+value.SHADOW_SAMPLES.12 = 12
+value.SHADOW_SAMPLES.16 = 16
+value.SHADOW_SAMPLES.24 = 24
+option.CONTACT_SHADOWS = Contact Shadows
+option.CONTACT_SHADOWS.comment = Screen-space raymarch for fine contact detail the shadow map misses (block bases, tight gaps).
 
 # ---- Sky -------------------------------------------------------------------
 option.VANILLA_CLOUDS = Vanilla Clouds

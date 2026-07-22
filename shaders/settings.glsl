@@ -36,10 +36,12 @@
    -------------------------------------------------------------------------
    The five presets (POTATO/LOW/MEDIUM/HIGH/ULTRA) are defined in
    shaders.properties via `profile.*`. They only flip options declared in
-   THIS file. Phase-1 differentiators:
+   THIS file. Differentiators:
      - SHADOWS          (POTATO off; everyone else on)
      - shadowMapResolution(1024 / 1536 / 2048 / 2048 / 3072)
-     - SHADOW_FILTER    (POTATO/LOW off; MEDIUM+ on)
+     - SHADOW_PCSS      (LOW off -> plain Vogel; MEDIUM+ on -> contact-hardening)
+     - SHADOW_SAMPLES   (8 / 12 / 16 / 24)
+     - CONTACT_SHADOWS  (HIGH/ULTRA on)
    Later phases add SSAO / TAA / clouds / SSR quality knobs here.
    ========================================================================= */
 
@@ -110,8 +112,52 @@ const int shadowMapResolution = 2048; // [1024 1536 2048 3072 4096]
 // literal `shadowDistance` directive value directly).
 const float shadowDistance = 128.0; // [64.0 96.0 128.0 192.0 256.0]
 
-// Soften shadow edges with a cheap 2x2 tap. Off = single hard tap (cheapest).
-#define SHADOW_FILTER // [SHADOW_FILTER]
+// Percentage-Closer Soft Shadows: penumbrae widen with distance from the
+// occluder (contact-hardening) instead of a fixed blur. Needs a raw shadow
+// depth read for the blocker search, so it is active only on the hardware-
+// sampler path (SEPARATE_HARDWARE_SAMPLERS); the fallback uses a fixed-radius
+// soft filter with the same tap budget. Off (LOW) = plain fixed-radius Vogel.
+#define SHADOW_PCSS // [SHADOW_PCSS]
+
+// Shadow filter tap count (Vogel disc). More = smoother penumbrae, more cost.
+#define SHADOW_SAMPLES 12 // [8 12 16 24]
+
+// Screen-space contact shadows: a short view-space raymarch that catches the
+// fine contact detail the shadow map is too coarse for (block bases, tight
+// gaps). Multiplies the shadow term. Off by default; on for HIGH/ULTRA.
+//#define CONTACT_SHADOWS // [CONTACT_SHADOWS]
+
+// --- Shadow shaping (internal, not GUI) -----------------------------------
+// Distortion warp strength k in (0,1): factor = (1-k) + k*length(ndc.xy).
+// Higher = more texels concentrated near the camera. 0.85 gives ~6.7x linear
+// centre density (~3x useful average). See lib/shadow.glsl for the full maths
+// and the guarantee that the map corners never leave [-1,1].
+#define AL_SHADOW_DISTORT 0.85
+
+// Sun angular radius (radians) driving the PCSS penumbra growth. The real sun
+// is ~0.0047; enlarged here for the brief's deliberately soft, dreamy edges.
+#define AL_SUN_ANGULAR_RADIUS 0.025
+// Extra artistic widening multiplied onto the physical penumbra.
+#define AL_SHADOW_SOFTNESS 2.5
+// Penumbra clamp (in shadow texels) — min keeps contact crisp, max bounds blur.
+#define AL_SHADOW_MIN_PEN_TEXELS 1.0
+#define AL_SHADOW_MAX_PEN_TEXELS 48.0
+// Fixed soft radius (world metres) for the non-PCSS / fallback path.
+#define AL_SHADOW_FIXED_PEN_WORLD 0.30
+// Blocker-search radius (world metres) for the PCSS occluder estimate.
+#define AL_SHADOW_SEARCH_WORLD 2.0
+// Depth bias (base + slope*(1-NdotL)), later scaled by the LOCAL warped texel.
+#define AL_SHADOW_BIAS 0.00008
+#define AL_SHADOW_SLOPE_BIAS 0.00040
+// Normal offset growth (base + slope*(1-NdotL)) in LOCAL warped texels.
+#define AL_SHADOW_NOFFSET_BASE 0.85
+#define AL_SHADOW_NOFFSET_SLOPE 2.50
+
+// --- Contact-shadow shaping (internal, not GUI) ---------------------------
+#define AL_CONTACT_STEPS 14        // raymarch steps (12-16)
+#define AL_CONTACT_LENGTH 0.75     // total march length, world metres
+#define AL_CONTACT_THICKNESS 0.50  // max occluder thickness (view-space metres)
+#define AL_CONTACT_BIAS 0.02       // ignore hits within this of the start
 
 
 /* =========================================================================

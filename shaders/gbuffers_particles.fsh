@@ -11,7 +11,9 @@
  G-buffer and be shaded by the deferred pass; instead they shade themselves
  with the shared lighting model here, exactly like translucent water/entities.
  Cutout particles (block-break, crit) still need the alpha test.
- Sampler count: 2 (gtexture, shadowtex1[SHADOWS])
+ Sampler count: gtexture + shadow samplers via lib/shadow.glsl (SHADOWS):
+   Mac fallback = 3 (gtexture, shadowtex1, noisetex);
+   hardware-flag = 4 (gtexture, shadowtex0, shadowtex1HW, noisetex). <=4 budget.
 */
 
 uniform sampler2D gtexture;

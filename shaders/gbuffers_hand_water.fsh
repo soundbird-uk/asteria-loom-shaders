@@ -7,7 +7,9 @@
 /*
  gbuffers_hand_water (fragment) — translucent held items, forward-lit and
  blended into colortex0 with the shared lighting model.
- Sampler count: 2 (gtexture, shadowtex1[SHADOWS])
+ Sampler count: gtexture + shadow samplers via lib/shadow.glsl (SHADOWS):
+   Mac fallback = 3 (gtexture, shadowtex1, noisetex);
+   hardware-flag = 4 (gtexture, shadowtex0, shadowtex1HW, noisetex). <=4 budget.
 */
 
 uniform sampler2D gtexture;

@@ -8,7 +8,9 @@
  gbuffers_water (fragment) — forward-lit translucent water, blended over the
  already-lit opaque scene in colortex0. Uses the SAME lighting model as the
  deferred opaque pass so water matches its surroundings.
- Sampler count: 2 (gtexture, shadowtex1[SHADOWS])
+ Sampler count: gtexture + shadow samplers via lib/shadow.glsl (SHADOWS):
+   Mac fallback = 3 (gtexture, shadowtex1, noisetex);
+   hardware-flag = 4 (gtexture, shadowtex0, shadowtex1HW, noisetex). <=4 budget.
 */
 
 uniform sampler2D gtexture;
