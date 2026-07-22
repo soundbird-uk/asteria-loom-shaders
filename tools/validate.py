@@ -72,15 +72,21 @@ import tempfile
 # These tables are intentionally at the top of the file and easy to extend as
 # later phases use more Iris features.
 #
-# There are two macro environments (compile "targets"). Both are guarded with
+# There are three macro environments (compile "targets"). All are guarded with
 # #ifndef so a real definition in the shader always wins.
-#   * mac      — the M4 path: MC_OS_MAC defined, GL/GLSL 410, and NO
-#                IRIS_FEATURE_* flags, so every AL_ADVANCED_TIER gate compiles
-#                out exactly as on macOS. This is the path that must never
-#                false-PASS.
+#   * mac      — the plain M4 path: MC_OS_MAC, GL/GLSL 410, and NO IRIS_FEATURE_*
+#                flags, so every AL_ADVANCED_TIER gate compiles out as on macOS.
+#   * mac-hw   — the M4 path WITH hardware shadow sampling. macOS caps at GL 4.1,
+#                but SEPARATE_HARDWARE_SAMPLERS is NOT a GL 4.2+ feature, so Iris
+#                reports it on Apple Silicon and the M4 takes the
+#                `#ifdef IRIS_FEATURE_SEPARATE_HARDWARE_SAMPLERS` PCSS branch
+#                UNDER MC_OS_MAC — a combination the other two targets never
+#                compile. So: MC_OS_MAC + GL/GLSL 410 + ONLY that one flag (no
+#                compute/SSBO/images — those genuinely cannot exist on Mac).
 #   * advanced — the Windows path: MC_OS_WINDOWS, GL/GLSL 460, and all four
 #                IRIS_FEATURE_* flags defined, so AL_ADVANCED_TIER branches get
-#                syntax coverage (inert in Phase 1; correct from Phase 6 on).
+#                syntax coverage.
+# The mac & mac-hw targets are the ones that must never false-PASS.
 # ---------------------------------------------------------------------------
 
 # name -> value string ('' => object-like define with no value).
@@ -90,6 +96,17 @@ IRIS_MACRO_STUBS_MAC = {
     "MC_GLSL_VERSION": "410",
     "MC_OS_MAC": "1",            # the Mac path
     "IS_IRIS": "1",
+}
+
+# The M4 path with hardware shadow filtering. Same as mac, plus the ONE optional
+# feature Apple Silicon actually reports.
+IRIS_MACRO_STUBS_MAC_HW = {
+    "MC_VERSION": "12100",
+    "MC_GL_VERSION": "410",
+    "MC_GLSL_VERSION": "410",
+    "MC_OS_MAC": "1",
+    "IS_IRIS": "1",
+    "IRIS_FEATURE_SEPARATE_HARDWARE_SAMPLERS": "1",
 }
 
 IRIS_MACRO_STUBS_ADVANCED = {
@@ -108,6 +125,7 @@ IRIS_MACRO_STUBS_ADVANCED = {
 
 TARGET_MACROS = {
     "mac": IRIS_MACRO_STUBS_MAC,
+    "mac-hw": IRIS_MACRO_STUBS_MAC_HW,
     "advanced": IRIS_MACRO_STUBS_ADVANCED,
 }
 
@@ -1473,9 +1491,12 @@ def main(argv=None):
                     help="restrict to a profile (repeatable)")
     ap.add_argument("--program", default=None,
                     help="restrict to programs matching this glob (e.g. 'gbuffers_*.fsh')")
-    ap.add_argument("--target", choices=["mac", "advanced", "both"], default="mac",
-                    help="compile-macro environment(s): mac (M4 path, default), "
-                         "advanced (Windows/AL_ADVANCED_TIER path), or both")
+    ap.add_argument("--target",
+                    choices=["mac", "mac-hw", "advanced", "both", "all"], default="mac",
+                    help="compile-macro environment(s): mac (plain M4 path, default), "
+                         "mac-hw (M4 + hardware shadow sampling), "
+                         "advanced (Windows/AL_ADVANCED_TIER path), "
+                         "both (mac+advanced, back-compat), or all (mac+mac-hw+advanced)")
     ap.add_argument("--keep", action="store_true",
                     help="keep the patched output under --out instead of deleting it")
     ap.add_argument("--self-test", action="store_true",
@@ -1490,7 +1511,11 @@ def main(argv=None):
     repo_root = os.path.dirname(shaders_root)
     out_dir = args.out or os.path.join(repo_root, "out", "patched")
 
-    targets = ["mac", "advanced"] if args.target == "both" else [args.target]
+    target_sets = {
+        "both": ["mac", "advanced"],
+        "all": ["mac", "mac-hw", "advanced"],
+    }
+    targets = target_sets.get(args.target, [args.target])
 
     result = run_validation(
         shaders_root, out_dir,

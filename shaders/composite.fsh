@@ -46,7 +46,7 @@ void main() {
 
     // AO history: r = AO, g = confidence, b = linear eye depth of this sample.
     vec2  ao    = texture(colortex4, texcoord).rg;
-    float depth = texture(depthtex0, texcoord).r;
+    float depth = texture(depthtex1, texcoord).r;
     float linZ  = (depth >= 1.0) ? 0.0
                                  : alLinearEyeDepth(alScreenToView(texcoord, depth));
     outHistory = vec4(ao.r, ao.g, linZ, 1.0);

@@ -142,6 +142,18 @@ float alShadowCompare(vec2 uv, float refD) {
 #endif
 }
 
+// Maximum penumbra softness as a WORLD constant (metres), NOT texels. A texel
+// cap would shrink the max world softness as shadowMapResolution rises, making
+// ULTRA (3072) ~1.5x HARDER than MEDIUM (2048) and inverting the brief's
+// "higher preset = softer/dreamier" intent. Keeping it in world units makes
+// maximum softness resolution-independent. Tuned to preserve MEDIUM's look:
+// realistic penumbrae stay well under this, so the cap only bounds extremes.
+// (Lives here rather than settings.glsl because this fix is scoped to
+// lib/shadow.glsl; guarded so a future settings.glsl definition wins.)
+#ifndef AL_SHADOW_MAX_PEN_WORLD
+#define AL_SHADOW_MAX_PEN_WORLD 1.8
+#endif
+
 // World radius (metres) -> distorted-UV radius at local warp scale. The shadow
 // ortho spans 2*shadowDistance world units across the [0,1] UV range; the
 // distortion then magnifies by 1/localScale (see header).
@@ -212,14 +224,17 @@ float alShadowVisibility(vec3 playerPos, vec3 worldN, float NdotL) {
     float depthDiff = max(uvz.z - avgBlocker, 0.0);
     float penWorld  = depthDiff * (2.0 * shadowDistance)
                     * tan(AL_SUN_ANGULAR_RADIUS) * AL_SHADOW_SOFTNESS;
-    radiusUV = alWorldToShadowUV(penWorld, localScale);
-    radiusUV = clamp(radiusUV, AL_SHADOW_MIN_PEN_TEXELS * texel,
-                               AL_SHADOW_MAX_PEN_TEXELS * texel);
+    // MAX in WORLD units (resolution-independent softness); MIN in texels (hides
+    // sampling noise at the map's actual resolution).
+    penWorld = min(penWorld, AL_SHADOW_MAX_PEN_WORLD);
+    radiusUV = max(alWorldToShadowUV(penWorld, localScale),
+                   AL_SHADOW_MIN_PEN_TEXELS * texel);
 #else
     // Non-PCSS (LOW profile) and the no-hardware-flag Mac fallback: a fixed
-    // world-radius soft edge, shared PCF loop below.
-    radiusUV = clamp(alWorldToShadowUV(AL_SHADOW_FIXED_PEN_WORLD, localScale),
-                     1.0 * texel, AL_SHADOW_MAX_PEN_TEXELS * texel);
+    // world-radius soft edge, shared PCF loop below. World-based (resolution-
+    // independent), floored at one texel to hide sampling noise.
+    float penWorld = min(AL_SHADOW_FIXED_PEN_WORLD, AL_SHADOW_MAX_PEN_WORLD);
+    radiusUV = max(alWorldToShadowUV(penWorld, localScale), 1.0 * texel);
 #endif
 
     // --- Vogel-disc PCF (shared by all paths) ----------------------------
