@@ -7,6 +7,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-07-22
+
+Phase 2 — lighting & shadows. PCSS soft shadows, GTAO, and the field-feedback
+lighting fixes from on-device 0.1.1 testing.
+
+### Added
+
+- **PCSS shadows with contact-hardening.** Shadow-map distortion warp (~6.7x centre
+  texel density, position-dependent bias/offset scaling), 4-tap blocker search,
+  Vogel-disc PCF with 8-24 taps by preset, blue-noise + R2 per-frame rotation.
+  Uses Iris separate hardware shadow samplers where available, with a
+  compare-sampled Vogel PCF fallback otherwise.
+- **Screen-space contact shadows** (High/Ultra): 14-step raymarch toward the light
+  for fine-detail contact darkening.
+- **GTAO with temporal accumulation.** New dedicated AO pass (horizon-based,
+  quality-tiered slices/steps) with history reprojection through previous-frame
+  matrices, depth-mismatch rejection, and a persistent history buffer; applied to
+  indirect lighting only. New AO settings screen and debug view.
+- **Warm Light Ramp**: blocklight tint ramps candle-amber to ember-orange.
+
+### Changed
+
+- Blocklight curve retuned: torches/campfires now visibly warm a ~6 block radius
+  at night (field fix from M4 testing).
+- Cool ambient desaturates as sky exposure falls — caves and underwater terrain no
+  longer read purple; open-shade warm/cool identity unchanged (field fix).
+- Maximum penumbra softness is now a world-space constant, so higher shadow
+  resolutions no longer cap shadows harder than lower ones.
+- `SHADOW_FILTER` option replaced by `SHADOW_PCSS` + `SHADOW_SAMPLES`.
+
+### Fixed
+
+- AO history depth is sourced from opaque-only depth, fixing shimmering
+  unaccumulated AO on terrain seen through water, glass, or particles.
+- Validator gained a `mac-hw` target covering the macOS + hardware-shadow-samplers
+  path the M4 actually runs (CI now compiles all three platform combinations).
+
 ## [0.1.1] - 2026-07-22
 
 Hotfix for a real-device failure found testing 0.1.0 on an M4 Mac (Iris, OpenGL 4.1).
