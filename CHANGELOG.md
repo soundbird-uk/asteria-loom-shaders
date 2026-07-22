@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-07-22
+
+Cloud and fog polish from macOS 0.3.1 field testing (first fully-working build on
+both platforms).
+
+### Fixed
+
+- **Dark rectangular veil lagging behind the camera** — cloud temporal history is
+  now strictly rejected off-screen (no edge-clamp reads), gated to sky pixels so
+  it can never darken terrain, and carries a validity sentinel so uninitialised
+  history reads fail transparent. Verified with a camera-rotation simulation.
+- **Cloud drift speed** — new Cloud Speed slider; the default is ~44x slower than
+  before (a gentle roll of ~29 blocks/second), with the detail "boil" slowed to
+  match.
+- **Clouds now fade into the distance haze** using the same optical-depth model
+  and sky in-scatter as terrain fog, so horizon clouds melt into the sky instead
+  of ending abruptly.
+- **Render-distance seam removed** — fogged terrain converges to the exact sky
+  colour over the last stretch of the frustum, so the world edge is invisible at
+  any render distance.
+- **Sunset white-out softened** — ground-level haze compresses highlights and
+  desaturates slightly relative to the sky's own glow; noon is unchanged.
+
 ## [0.3.1] - 2026-07-22
 
 Forensic hotfix for field regressions reported on Windows and macOS across

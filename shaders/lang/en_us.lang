@@ -116,6 +116,13 @@ value.VC_COVERAGE.0.55 = 55%
 value.VC_COVERAGE.0.60 = 60%
 value.VC_COVERAGE.0.65 = 65%
 value.VC_COVERAGE.0.70 = 70%
+option.CLOUD_SPEED = Cloud Speed
+option.CLOUD_SPEED.comment = How fast clouds drift across the sky. 1.0 is a gentle dreamy roll (~29 blocks/second); lower is nearly still, higher a brisk storm front.
+value.CLOUD_SPEED.0.25 = Becalmed
+value.CLOUD_SPEED.0.5 = Slow
+value.CLOUD_SPEED.1.0 = Gentle
+value.CLOUD_SPEED.2.0 = Brisk
+value.CLOUD_SPEED.4.0 = Storm
 option.VANILLA_CLOUDS = Vanilla Clouds
 option.VANILLA_CLOUDS.comment = Draw Minecraft's flat forward-lit clouds instead of the volumetric layer. Used as the cheap fallback on the Potato and Low presets.
 
