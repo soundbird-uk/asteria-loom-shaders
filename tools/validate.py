@@ -27,7 +27,16 @@ What it does, for every (profile x program-stage) combination:
      compile *target* (see below).
   6. Runs a set of static lint checks (unresolved includes, RENDERTARGETS
      count/index integrity, sampler budget, unknown render-stage macros,
-     buffer-format single-source-of-truth, option/screen/lang consistency).
+     live-vs-commented buffer-format declarations + single-source-of-truth,
+     option/screen/lang consistency).
+
+IMPORTANT — buffer formats: Iris reads colortexNFormat/shadowcolorNFormat only
+from COMMENTS. A live `const int colortexNFormat = RGBA16F;` leaves a non-GLSL
+identifier that real drivers reject. This validator therefore (a) injects NO
+format-identifier stubs — a live one is meant to fail glslang — and (b) hard-
+fails lint_format_live on any uncommented format const with an identifier
+initializer. (A stub table here once masked exactly this into a false PASS that
+shipped to the user's Mac.)
 
 Compile targets (`--target`): the same source is compiled under different
 Iris-macro environments so both platform code paths get syntax coverage.
