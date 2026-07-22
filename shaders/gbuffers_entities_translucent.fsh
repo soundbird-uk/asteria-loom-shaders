@@ -20,6 +20,7 @@ uniform vec4 entityColor;
 uniform vec3 sunPosition;
 uniform vec3 shadowLightPosition;
 uniform mat4 gbufferModelViewInverse;
+uniform vec3 cameraPosition;       // world-space camera (for cloud shadow)
 
 in vec2 texcoord;
 in vec2 lmcoord;
@@ -45,7 +46,8 @@ void main() {
     float NdotL = max(dot(N, wLightDir), 0.0);
     float shadowVis = alShadowVisibility(playerPos, N, NdotL);
 
-    vec3 color = alLightPhase1(albedoLin, N, lmcoord, shadowVis, wLightDir, dayFactor);
+    vec3 color = alLightPhase1(albedoLin, N, lmcoord, shadowVis, wLightDir, wSunDir,
+                               playerPos + cameraPosition, dayFactor);
 
     outColor = vec4(color, tex.a);
 }

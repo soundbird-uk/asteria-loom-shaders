@@ -125,7 +125,10 @@ void main() {
     ao = pow(aoRaw, AO_STRENGTH);
 #endif
 
-    vec3 color = alLightPhase1(albedoLin, N, lm, shadowVis, wLightDir, dayFactor, ao);
+    // worldPos (feet + camera) drives the cloud-shadow factor inside the lib.
+    vec3 worldPos = playerPos + cameraPosition;
+    vec3 color = alLightPhase1(albedoLin, N, lm, shadowVis, wLightDir, wSunDir,
+                               worldPos, dayFactor, ao);
 
     outColor = vec4(color, 1.0);
 }

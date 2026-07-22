@@ -205,19 +205,129 @@ const float shadowDistance = 128.0; // [64.0 96.0 128.0 192.0 256.0]
 
 
 /* =========================================================================
-   SKY
+   CLOUDS  (volumetric 2-layer raymarch — cumulus 3D + cirrus 2D)
+   -------------------------------------------------------------------------
+   Rendered in `composite` (raymarch + temporal accumulation into colortex7)
+   and composited over the scene. The cheap sampler-free cloud SHADOW that
+   feeds the lighting pass lives in lib/clouds_common.glsl. Vanilla clouds are
+   kept as a low-cost fallback (POTATO/LOW), gated the same way as before
+   (gbuffers_clouds self-discards when VANILLA_CLOUDS is off).
    ========================================================================= */
 
-// Draw vanilla clouds (forward-lit). Defaults ON until volumetric clouds
-// replace them in Phase 3. Also gates `program.gbuffers_clouds.enabled`.
-#define VANILLA_CLOUDS // [VANILLA_CLOUDS]
+// Master volumetric-cloud toggle. When on, the composite pass raymarches the
+// two cloud layers; when off, composite is a pure passthrough and (if
+// VANILLA_CLOUDS is on) Minecraft's forward clouds draw instead.
+#define VOLUMETRIC_CLOUDS // [VOLUMETRIC_CLOUDS]
 
-// Overall sky-gradient brightness (reproduced vanilla gradient for now).
+// Cloud raymarch quality. 1 = 12 primary steps, 2 = 20, 3 = 32 (light steps
+// and multiple-scattering octaves scale with it too — see lib/clouds.glsl).
+// Temporal accumulation + dithering keep even tier 1 grain-free.
+#define VC_QUALITY 2 // [1 2 3]
+
+// Base cloud coverage (fraction of sky filled in clear weather). Rain pushes
+// this higher automatically (storm build-up). Lower = sparse fair-weather
+// cumulus; higher = a brooding overcast.
+#define VC_COVERAGE 0.45 // [0.30 0.35 0.40 0.45 0.50 0.55 0.60 0.65 0.70]
+
+// Draw vanilla clouds (forward-lit) as a cheap fallback. Default OFF now that
+// volumetric clouds exist; POTATO/LOW turn volumetric off and this back on.
+// Also gates `program.gbuffers_clouds.enabled` (self-discards otherwise).
+//#define VANILLA_CLOUDS // [VANILLA_CLOUDS]
+
+// --- Cloud layer geometry (internal, not GUI — world Y in blocks) ----------
+// Cumulus slab [BOT,TOP] gives the fluffy 3D layer; cirrus is a thin high sheet.
+#define AL_CLOUD_CUMULUS_BOT 300.0
+#define AL_CLOUD_CUMULUS_TOP 460.0
+#define AL_CLOUD_CIRRUS_ALT  700.0
+#define AL_CLOUD_MAX_DIST    30000.0   // far cap on the cloud march (blocks)
+
+// --- Coverage field (2D FBM value noise; shared by render + shadow) ---------
+#define AL_CLOUD_COVERAGE_SCALE   0.00028 // world XZ -> noise domain
+#define AL_CLOUD_COVERAGE_OCTAVES 4       // FBM octaves for the coverage map
+#define AL_CLOUD_WIND_SPEED       0.35    // coverage drift (noise units / sec)
+#define AL_CLOUD_STORM_BOOST      0.22    // extra coverage added at full rain
+
+// --- Cumulus 3D shaping -----------------------------------------------------
+#define AL_CLOUD_DETAIL_SCALE   0.006  // 3D erosion-noise frequency
+#define AL_CLOUD_DETAIL_OCTAVES 3      // 3D FBM octaves (billow erosion)
+#define AL_CLOUD_EDGE           0.30   // coverage->density remap softness
+#define AL_CLOUD_BOTTOM_ROUND   0.18   // flat-ish base rise (first 18% of slab)
+#define AL_CLOUD_TOP_ROUND      0.55   // billowy top erodes over the upper 45%
+#define AL_CLOUD_EROSION        0.55   // how hard detail carves cloud edges
+#define AL_CLOUD_DENSITY        1.40   // overall optical density multiplier
+#define AL_CLOUD_EXTINCTION     0.045  // extinction per block per unit density
+
+// --- Sun light march + scattering ------------------------------------------
+#define AL_CLOUD_LIGHT_STEP   9.0   // base step toward the sun (blocks)
+#define AL_CLOUD_LIGHT_GROWTH 1.7   // exponential light-step growth
+#define AL_CLOUD_HG_G         0.62  // Henyey-Greenstein forward eccentricity
+#define AL_CLOUD_MS_EXT       0.55  // Wrenninge per-octave extinction decay (a)
+#define AL_CLOUD_MS_PHASE     0.60  // per-octave phase-g decay (b)
+#define AL_CLOUD_MS_BRIGHT    0.70  // per-octave brightness decay (c)
+#define AL_CLOUD_POWDER       0.35  // powder (dark-edge) term strength
+#define AL_CLOUD_POWDER_STR   0.60  // how much powder is mixed in
+#define AL_CLOUD_AMBIENT      0.65  // sky-ambient contribution to cloud fill
+#define AL_CLOUD_SUN          22.0  // direct sun-scatter brightness (HDR)
+
+// --- Cirrus (cheap thin high layer) ----------------------------------------
+#define AL_CIRRUS_SCALE   0.00090
+#define AL_CIRRUS_COVER   0.55
+#define AL_CIRRUS_DENSITY 1.10
+#define AL_CIRRUS_HG      0.70
+#define AL_CIRRUS_SUN     8.0
+#define AL_CIRRUS_AMB     0.50
+
+// --- Cloud shadow (lib/clouds_common.glsl) ---------------------------------
+#define AL_CLOUD_SHADOW_CLEAR 0.50  // ground darkening under clear-sky cloud
+#define AL_CLOUD_SHADOW_STORM 0.80  // stronger under storm cloud
+
+// --- Temporal accumulation --------------------------------------------------
+#define AL_CLOUD_HISTORY_BLEND 0.85 // fraction of valid history kept per frame
+#define AL_CLOUD_HDR_MAX       65000.0 // range-validation ceiling (NaN-proof)
+
+
+/* =========================================================================
+   SKY  (physically based atmosphere — Phase 3)
+   -------------------------------------------------------------------------
+   The sky is an analytic single-scatter atmosphere (Rayleigh + Mie + ozone,
+   lib/atmosphere*.glsl) baked once per frame into the colortex6 sky-view LUT
+   tile by the prepare pass and sampled everywhere. Direct/ambient LIGHT colours
+   are derived from the same model (pure math, no LUT) in lib/lighting.glsl —
+   the warm amber sun bias (AL_SUN_TINT) and cool ambient identity
+   (AL_AMBIENT_SKY) are the tint MODIFIERS in the identity block below.
+   ========================================================================= */
+
+// Overall sky brightness. Baked into the LUT by the prepare pass so every
+// reader (sky, clouds, fog, reflections) scales consistently.
 #define SKY_BRIGHTNESS 1.0 // [0.50 0.75 1.00 1.25 1.50 2.00]
 
-// HDR boost applied to the sun/moon textures so the disc reads through the
-// tonemap and blooms in later phases.
+// HDR boost applied to the MOON texture (and any custom sky textures) so it
+// reads through the tonemap and blooms later. NOTE: MOON-ONLY now — the vanilla
+// sun texture is discarded and replaced by the procedural sun disc below
+// (SUN_DISC_BRIGHTNESS), so this no longer affects the sun.
 #define SUNMOON_BRIGHTNESS 3.0 // [1.0 2.0 3.0 4.0 6.0]
+
+// Mie (haze/aerosol) scattering strength. Higher = a brighter, hazier white
+// glow around the sun and a milkier horizon band.
+#define MIE_STRENGTH 1.0 // [0.25 0.50 0.75 1.00 1.50 2.00 3.00]
+
+// Atmospheric turbidity. Higher = dustier air: warmer, redder sun and a
+// thicker, more washed-out horizon.
+#define TURBIDITY 1.0 // [0.50 0.75 1.00 1.50 2.00 3.00]
+
+// Procedural sun-disc angular size, multiplying AL_SUN_ANGULAR_RADIUS. 1.0 is
+// the pack's deliberately soft, dreamy sun; lower is a tighter, sharper disc.
+#define SUN_DISC_SIZE 1.0 // [0.50 0.75 1.00 1.50 2.00 3.00]
+
+// Procedural sun-disc HDR brightness. High values bloom hard once bloom lands
+// in Phase 4; the placeholder tonemap keeps them from clipping now.
+#define SUN_DISC_BRIGHTNESS 2.0 // [0.50 1.00 2.00 4.00 8.00 16.00]
+
+// Sun path tilt (degrees). Iris reads this const directive from the literal
+// source text with NO macro expansion, so it must BE the constant — edit the
+// number to retune. Negative tilts the sun's arc so it rakes low across the
+// sky for long, warm golden hours (the pack's signature light).
+const float sunPathRotation = -35.0;
 
 // Procedural night sky: hash-cell twinkling stars, a tilted galaxy band and
 // rare shooting stars, faded in through dusk and kept below the moon's
@@ -229,6 +339,28 @@ const float shadowDistance = 128.0; // [64.0 96.0 128.0 192.0 256.0]
 // bright regardless). 1.00 is the tuned baseline; lower for a sparse minimalist
 // sky, higher for a dense field.
 #define STARS_DENSITY 1.00 // [0.50 0.75 1.00 1.50 2.00]
+
+
+/* =========================================================================
+   FOG
+   -------------------------------------------------------------------------
+   Aerial-perspective fog (lib/fog.glsl, composite1). NOT uniform density: an
+   exponential height falloff whose in-scatter is sampled from the atmosphere
+   sky LUT, so distance shifts bluer + desaturated with a warm hazy horizon and
+   tracks time of day, weather and biome. One cheap pass — kept on in every
+   profile (POTATO included). Internal density/height tunables live in
+   lib/fog.glsl.
+   ========================================================================= */
+
+// Master aerial-fog toggle. Also gates the pass itself via
+// `program.composite1.enabled = AERIAL_FOG` in shaders.properties, so turning
+// it off genuinely skips the pass (colortex0 passes straight through to final).
+#define AERIAL_FOG // [AERIAL_FOG]
+
+// Overall fog density multiplier on top of the tuned sea-level baseline.
+// 1.00 is the intended look; lower for crisp long views, higher for a soupier,
+// moodier haze.
+#define FOG_DENSITY 1.00 // [0.50 0.75 1.00 1.25 1.50 2.00]
 
 
 /* =========================================================================

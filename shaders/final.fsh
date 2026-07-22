@@ -34,6 +34,15 @@
    colortex5    RGBA16F  AO history: r = AO, g = confidence, b = linear depth.
                          `clear.colortex5 = false` (persists across frames for
                          temporal accumulation — set in shaders.properties).
+   colortex6    RGBA16F  Sky-view LUT: top-left 256x128 tile = analytic
+                         atmosphere radiance (azimuth x horizon-biased
+                         elevation, mapping documented in lib/atmosphere_common
+                         .glsl). Rest of the buffer unused. Baked once per frame
+                         by the prepare pass. `clear.colortex6 = false` (set in
+                         shaders.properties) -> reads are NaN-proof range-
+                         validated with an analytic fallback.
+   colortex7    RGBA16F  Cloud history (CLOUDS agent): rgb = in-scattered
+                         radiance, a = transmittance. `clear.colortex7 = false`.
    shadowcolor0 RGBA8    reserved for Phase 2 (coloured/translucent shadows);
                          Phase 1's shadow pass is depth-only, so nothing is
                          allocated yet — this only reserves the format.
@@ -47,6 +56,8 @@ const int colortex2Format = RGBA16;
 const int colortex3Format = RGBA8;
 const int colortex4Format = RG16F;
 const int colortex5Format = RGBA16F;
+const int colortex6Format = RGBA16F;
+const int colortex7Format = RGBA16F;
 const int shadowcolor0Format = RGBA8;
 */
 

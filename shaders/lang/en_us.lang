@@ -74,12 +74,18 @@ value.AO_STRENGTH.1.25 = 1.25
 value.AO_STRENGTH.1.5 = 1.5
 
 # ---- Sky -------------------------------------------------------------------
-option.VANILLA_CLOUDS = Vanilla Clouds
-option.VANILLA_CLOUDS.comment = Draw Minecraft's clouds. Replaced by volumetric clouds in a later update.
 option.SKY_BRIGHTNESS = Sky Brightness
-option.SKY_BRIGHTNESS.comment = Overall brightness of the sky gradient.
-option.SUNMOON_BRIGHTNESS = Sun / Moon Glow
-option.SUNMOON_BRIGHTNESS.comment = HDR boost on the sun and moon discs so they shine through the tonemap.
+option.SKY_BRIGHTNESS.comment = Overall brightness of the physically based atmosphere sky.
+option.SUNMOON_BRIGHTNESS = Moon Glow
+option.SUNMOON_BRIGHTNESS.comment = HDR boost on the moon (and custom sky textures) so it shines through the tonemap. The sun now uses its own procedural disc glow below.
+option.MIE_STRENGTH = Haze (Mie)
+option.MIE_STRENGTH.comment = Aerosol haze scattering. Higher gives a brighter, milkier glow around the sun and a hazier horizon.
+option.TURBIDITY = Turbidity
+option.TURBIDITY.comment = How dusty the air is. Higher makes the sun warmer and redder and thickens the washed-out horizon band.
+option.SUN_DISC_SIZE = Sun Size
+option.SUN_DISC_SIZE.comment = Angular size of the procedural sun disc. Lower is a tight, sharp sun; higher is a big, soft, dreamy one.
+option.SUN_DISC_BRIGHTNESS = Sun Glow
+option.SUN_DISC_BRIGHTNESS.comment = HDR brightness of the procedural sun disc. Higher blooms harder once bloom lands in a later update.
 option.NIGHT_SKY = Night Sky
 option.NIGHT_SKY.comment = Procedural stars, a tilted galaxy band and rare shooting stars, fading in after dusk. Kept dim and dreamy, below the moon's brightness.
 option.STARS_DENSITY = Star Density
@@ -89,6 +95,42 @@ value.STARS_DENSITY.0.75 = Light
 value.STARS_DENSITY.1.00 = Default
 value.STARS_DENSITY.1.50 = Dense
 value.STARS_DENSITY.2.00 = Very Dense
+
+# ---- Clouds ----------------------------------------------------------------
+screen.CLOUDS = Clouds
+option.VOLUMETRIC_CLOUDS = Volumetric Clouds
+option.VOLUMETRIC_CLOUDS.comment = Genuinely 3D raymarched clouds with dark shadowed undersides, soft edges and weather-driven coverage. Temporally accumulated for a clean, grain-free result. Off falls back to Minecraft's flat clouds.
+option.VC_QUALITY = Cloud Quality
+option.VC_QUALITY.comment = Raymarch step count. 1 = 12 steps (fastest), 2 = 20, 3 = 32 (sharpest silhouettes). Light steps and multiple-scattering octaves scale with it too.
+value.VC_QUALITY.1 = Low
+value.VC_QUALITY.2 = Medium
+value.VC_QUALITY.3 = High
+option.VC_COVERAGE = Cloud Coverage
+option.VC_COVERAGE.comment = How much of the clear-weather sky the clouds fill. Rain automatically pushes this higher. Lower is sparse fair-weather cumulus; higher is a brooding overcast.
+value.VC_COVERAGE.0.30 = 30%
+value.VC_COVERAGE.0.35 = 35%
+value.VC_COVERAGE.0.40 = 40%
+value.VC_COVERAGE.0.45 = 45%
+value.VC_COVERAGE.0.50 = 50%
+value.VC_COVERAGE.0.55 = 55%
+value.VC_COVERAGE.0.60 = 60%
+value.VC_COVERAGE.0.65 = 65%
+value.VC_COVERAGE.0.70 = 70%
+option.VANILLA_CLOUDS = Vanilla Clouds
+option.VANILLA_CLOUDS.comment = Draw Minecraft's flat forward-lit clouds instead of the volumetric layer. Used as the cheap fallback on the Potato and Low presets.
+
+# ---- Fog -------------------------------------------------------------------
+screen.FOG = Fog
+option.AERIAL_FOG = Aerial Fog
+option.AERIAL_FOG.comment = Distance haze that shifts the view bluer and more desaturated, with a warm hazy horizon. Colour and density follow the time of day, weather and biome. Off skips the pass entirely.
+option.FOG_DENSITY = Fog Density
+option.FOG_DENSITY.comment = Overall thickness of the aerial fog. Lower gives crisp long views; higher gives a soupier, moodier haze.
+value.FOG_DENSITY.0.50 = Thin
+value.FOG_DENSITY.0.75 = Light
+value.FOG_DENSITY.1.00 = Default
+value.FOG_DENSITY.1.25 = Hazy
+value.FOG_DENSITY.1.50 = Thick
+value.FOG_DENSITY.2.00 = Soup
 
 # ---- Post ------------------------------------------------------------------
 option.EXPOSURE = Exposure
