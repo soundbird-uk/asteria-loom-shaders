@@ -89,6 +89,16 @@
 // cool-blue minimum so nothing goes pitch black under the night sky.
 #define NIGHT_BRIGHTNESS 1.0 // [0.25 0.50 0.75 1.00 1.25 1.50 2.00]
 
+// Night ambient re-lift (internal, not GUI). The Phase-3 atmosphere-driven
+// ambient (alAmbientColor) bottoms out at 0.18x its day value after dark; the
+// 0.1.1 model that the field confirmed as "correct night" held open-sky ambient
+// at ~0.35x. lib/lighting.glsl multiplies the sky ambient by mix(this, 1.0,
+// dayFactor) so NIGHT rises back to the 0.1.1 level (open snow within ~5% of
+// 0.1.1) while NOON is provably unchanged (dayFactor==1 -> factor 1.0). Lives
+// here (not the atmosphere core, which this fix must not touch) as the single
+// scoped knob. 1.9 ~= 0.35/0.18. Edit + hot-reload.
+#define AL_NIGHT_AMBIENT_LIFT 1.9
+
 // Fake indirect-bounce floor. A tiny lift so unlit coloured faces are never
 // pure black (real GI arrives in a later phase).
 #define BOUNCE_INTENSITY 1.0 // [0.00 0.25 0.50 0.75 1.00 1.50 2.00]
@@ -118,10 +128,11 @@ const int shadowMapResolution = 2048; // [1024 1536 2048 3072 4096]
 const float shadowDistance = 128.0; // [64.0 96.0 128.0 192.0 256.0]
 
 // Percentage-Closer Soft Shadows: penumbrae widen with distance from the
-// occluder (contact-hardening) instead of a fixed blur. Needs a raw shadow
-// depth read for the blocker search, so it is active only on the hardware-
-// sampler path (SEPARATE_HARDWARE_SAMPLERS); the fallback uses a fixed-radius
-// soft filter with the same tap budget. Off (LOW) = plain fixed-radius Vogel.
+// occluder (contact-hardening) instead of a fixed blur. The default (robust)
+// path reads RAW shadow depth (shadowHardwareFiltering=false) and does the
+// blocker search + soft manual-compare PCF entirely in-shader, so PCSS works on
+// EVERY platform (no hardware-sampler dependency). Off (LOW) = plain
+// fixed-radius Vogel. See lib/shadow.glsl and AL_SHADOW_HW below.
 #define SHADOW_PCSS // [SHADOW_PCSS]
 
 // Shadow filter tap count (Vogel disc). More = smoother penumbrae, more cost.
@@ -132,7 +143,22 @@ const float shadowDistance = 128.0; // [64.0 96.0 128.0 192.0 256.0]
 // gaps). Multiplies the shadow term. Off by default; on for HIGH/ULTRA.
 //#define CONTACT_SHADOWS // [CONTACT_SHADOWS]
 
-// --- Shadow shaping (internal, not GUI) -----------------------------------
+// --- Shadow path (internal, not GUI) --------------------------------------
+// EXPERIMENTAL hardware-shadow-sampler path. OFF by default. The shipping path
+// is the software manual-compare (raw depth + step) shadow, which is the code
+// the 0.1.1 build used and the field confirmed as correct — it produces visible
+// soft shadows identically on Windows and macOS, keeping distortion + PCSS.
+//
+// The hardware path (sampler2DShadow + GL_LEQUAL hardware PCF, gated by
+// IRIS_FEATURE_SEPARATE_HARDWARE_SAMPLERS for the PCSS blocker search) shipped
+// in 0.2.x and was field-confirmed BROKEN in opposite directions per platform:
+// zero shadows on Windows (the separate-sampler blocker search's
+// `if (blockers < 0.5) return 1.0` early-out turns any raw-read discrepancy into
+// fully-lit EVERYWHERE) and over-shadowing on macOS. It cannot be proven correct
+// in CI (no Mac GL driver), so it is quarantined here. Enabling it ALSO requires
+// setting `shadowHardwareFiltering = true` in shaders.properties.
+//#define AL_SHADOW_HW
+
 // Distortion warp strength k in (0,1): factor = (1-k) + k*length(ndc.xy).
 // Higher = more texels concentrated near the camera. 0.85 gives ~6.7x linear
 // centre density (~3x useful average). See lib/shadow.glsl for the full maths
@@ -384,8 +410,13 @@ const float sunPathRotation = -35.0;
 
 // Visualise raw G-buffer channels. 0 = normal render.
 //   1 albedo | 2 world normal | 3 lightmap (block=R, sky=G) | 4 depth |
-//   5 matID | 6 ambient occlusion (white = unoccluded)
-#define DEBUG_VIEW 0 // [0 1 2 3 4 5 6]
+//   5 matID | 6 ambient occlusion (white = unoccluded) |
+//   7 pipeline probe A (deferred1 texcoord.xy + sampled depth, raw) |
+//   8 pipeline probe B (deferred1 branch: red = sky, green = lit geometry)
+// Probes 7/8 bypass ALL grading + the fog/cloud composite passes so they show
+// exactly what deferred1 wrote — a decisive check that the opaque shading pass
+// (not a later fullscreen pass) is producing correct per-pixel output.
+#define DEBUG_VIEW 0 // [0 1 2 3 4 5 6 7 8]
 
 
 /* =========================================================================
@@ -419,7 +450,16 @@ const vec3 AL_AMBIENT_GROUND = vec3(0.30, 0.27, 0.28);
 // Minecraft". This 0.05-0.30 window keeps the signature cool tint for anything
 // with sky-lm >= 0.30 (all ordinary daylight shade) and only greys the genuinely
 // sky-starved: caves and deep/dark water.
-#define AL_AMBIENT_DESAT_LO 0.05
+// BAND FIX (0.3.x): the sky lightmap is quantised (~16 levels), so a smoothstep
+// whose ACTIVE range spans only a few of them shows a hard contour where the
+// transition lands — visible as banding/contours on submerged terrain. Lowering
+// LO from 0.05 to 0.00 widens the active range across MORE quantised levels,
+// cutting the worst per-level jump ~21% (0.389 -> 0.307), while HI stays 0.30 so
+// above-ground shade (sky-lm >= 0.30) keeps its FULL cool tint (no vibrancy
+// regression). The aerial-fog sky gate (lib/fog.glsl) is aligned to this SAME
+// window so the two no longer place offset contours at different depths (that
+// double band was half the visible artifact).
+#define AL_AMBIENT_DESAT_LO 0.00
 #define AL_AMBIENT_DESAT_HI 0.30
 
 // Warm torch / block-light colour (used when BLOCKLIGHT_TINT is OFF — a single

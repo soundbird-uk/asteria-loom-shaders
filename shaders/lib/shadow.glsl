@@ -86,31 +86,39 @@ uniform sampler2D noisetex;        // 256x256 blue-ish noise, for per-pixel rota
 #if defined SHADOWS && !defined AL_SHADOW_VSH
 
 // --- Shadow samplers ------------------------------------------------------
-// shadowHardwareFiltering = true (shaders.properties). Verified against Iris
-// ShaderDoc (iris-features.md, "Separate Hardware Shadow Samplers"):
-//   * WITH the SEPARATE_HARDWARE_SAMPLERS feature flag, plain shadowtex0/1
-//     "no longer function as hardware samplers" -> shadowtex0 gives RAW depth
-//     for the PCSS blocker search, and shadowtex1HW is a sampler2DShadow that
-//     does hardware PCF for the filter taps. Full PCSS on this path.
-//   * WITHOUT the flag, hardware filtering turns plain shadowtex1 INTO a
-//     compare (sampler2DShadow) sampler, so a raw `.r` read is invalid and no
-//     blocker search is possible. We compare-sample shadowtex1 and fall back
-//     to a fixed-radius Vogel PCF (no PCSS). This is the documented worst case
-//     and it still gives soft, distorted shadows. The macOS GL4.1 compile
-//     target exercises exactly this branch.
-#ifdef IRIS_FEATURE_SEPARATE_HARDWARE_SAMPLERS
-uniform sampler2D       shadowtex0;    // raw depth of everything (blocker search)
-uniform sampler2DShadow shadowtex1HW;  // hardware-PCF opaque depth (filter taps)
+// DEFAULT (robust, shipping) PATH — shadowHardwareFiltering = false: shadowtex0
+// and shadowtex1 are PLAIN depth textures. We read RAW opaque depth and do the
+// compare + soft PCF in-shader (`step(ref, stored)`), exactly the manual compare
+// the field-correct 0.1.1 build used. This is IDENTICAL on Windows and macOS —
+// no platform-divergent sampler semantics, no hardware-compare early-out — and
+// PCSS's blocker search is just extra raw reads of the SAME texture, so
+// contact-hardening still works. shadowtex1 is the OPAQUE depth (no translucent
+// self-casting), matching 0.1.1.
+//
+// EXPERIMENTAL hardware path (AL_SHADOW_HW, OFF by default; see settings.glsl):
+// compare samplers + hardware PCF. QUARANTINED — this path produced the 0.2.x
+// field regressions (zero shadows on Windows via the blocker-search early-out;
+// over-shadowing on macOS) and cannot be proven correct in CI. Enabling it also
+// requires shadowHardwareFiltering = true in shaders.properties.
+#ifdef AL_SHADOW_HW
+    #ifdef IRIS_FEATURE_SEPARATE_HARDWARE_SAMPLERS
+    uniform sampler2D       shadowtex0;    // raw depth of everything (blocker search)
+    uniform sampler2DShadow shadowtex1HW;  // hardware-PCF opaque depth (filter taps)
+    #else
+    uniform sampler2DShadow shadowtex1;    // HWF=true makes this a compare sampler
+    #endif
 #else
-uniform sampler2DShadow shadowtex1;    // HWF=true makes this a compare sampler
+    uniform sampler2D shadowtex1;          // RAW opaque depth: manual compare + PCSS blocker search
 #endif
 
 uniform mat4 shadowModelView;
 uniform mat4 shadowProjection;
 uniform int  frameCounter;
 
-// PCSS is only possible where a raw depth read exists (blocker search).
-#if defined SHADOW_PCSS && defined IRIS_FEATURE_SEPARATE_HARDWARE_SAMPLERS
+// PCSS needs a raw depth read for the blocker search.
+//  * software path (default): shadowtex1 is raw -> always available.
+//  * hardware path: only where SEPARATE_HARDWARE_SAMPLERS exposes raw shadowtex0.
+#if defined SHADOW_PCSS && (!defined AL_SHADOW_HW || defined IRIS_FEATURE_SEPARATE_HARDWARE_SAMPLERS)
     #define AL_SHADOW_PCSS_ACTIVE
 #endif
 
@@ -132,15 +140,34 @@ float alShadowRotation() {
     return (nz.x + r2) * AL_TAU;
 }
 
-// Compare-sample the opaque shadow depth with hardware PCF. Returns fraction
-// (0 = fully occluded .. 1 = fully lit) at `uv` against reference depth `refD`.
+// One shadow tap. Returns 1.0 = lit, 0.0 = occluded, at `uv` vs reference depth
+// `refD` (the biased receiver depth). The default path does the compare manually
+// on RAW depth: step(refD, stored) == (stored >= refD) == lit — the field-proven
+// 0.1.1 convention. Averaged over the Vogel disc this gives the soft edge.
 float alShadowCompare(vec2 uv, float refD) {
-#ifdef IRIS_FEATURE_SEPARATE_HARDWARE_SAMPLERS
+#ifdef AL_SHADOW_HW
+    #ifdef IRIS_FEATURE_SEPARATE_HARDWARE_SAMPLERS
     return texture(shadowtex1HW, vec3(uv, refD));
-#else
+    #else
     return texture(shadowtex1,   vec3(uv, refD));
+    #endif
+#else
+    return step(refD, texture(shadowtex1, uv).r);
 #endif
 }
+
+// Raw opaque depth read for the PCSS blocker search (only compiled when PCSS is
+// active). Software path reads shadowtex1; the hardware separate-sampler path
+// reads shadowtex0 (its raw-depth alias).
+#ifdef AL_SHADOW_PCSS_ACTIVE
+float alShadowRawDepth(vec2 uv) {
+    #if defined AL_SHADOW_HW && defined IRIS_FEATURE_SEPARATE_HARDWARE_SAMPLERS
+    return texture(shadowtex0, uv).r;
+    #else
+    return texture(shadowtex1, uv).r;
+    #endif
+}
+#endif
 
 // Maximum penumbra softness as a WORLD constant (metres), NOT texels. A texel
 // cap would shrink the max world softness as shadowMapResolution rises, making
@@ -242,34 +269,41 @@ float alShadowVisibility(vec3 playerPos, vec3 worldN, float NdotL) {
     // --- Penumbra radius (distorted UV) ----------------------------------
     float radiusUV;
 #ifdef AL_SHADOW_PCSS_ACTIVE
-    // Blocker search: 4 Vogel taps on RAW depth (shadowtex0). Average the depth
-    // of taps that are closer to the light than the receiver.
+    // Blocker search: 4 Vogel taps on RAW depth (alShadowRawDepth -> shadowtex1
+    // on the software path, shadowtex0 on the HW path). Average the depth of taps
+    // that are closer to the light than the receiver.
     float searchUV = clamp(alWorldToShadowUV(AL_SHADOW_SEARCH_WORLD, localScale),
                            1.5 * texel, 24.0 * texel);
     float avgBlocker = 0.0;
     float blockers   = 0.0;
     for (int i = 0; i < 4; i++) {
         vec2 o = alVogel(i, 4, phi) * searchUV;
-        float sd = texture(shadowtex0, uvz.xy + o).r;
+        float sd = alShadowRawDepth(uvz.xy + o);
         if (sd < refD) { avgBlocker += sd; blockers += 1.0; }
     }
-    if (blockers < 0.5) return 1.0;             // nothing occluding -> fully lit
-    avgBlocker /= blockers;
-
-    // Penumbra from occluder distance: contact-hardening. depthDiff is in NDC
-    // depth; * (2*shadowDistance) -> world metres along the light axis. The sun
-    // angular radius (+ artistic softness) sets how fast it widens.
-    float depthDiff = max(uvz.z - avgBlocker, 0.0);
-    float penWorld  = depthDiff * (2.0 * shadowDistance)
-                    * tan(AL_SUN_ANGULAR_RADIUS) * AL_SHADOW_SOFTNESS;
-    // MAX in WORLD units (resolution-independent softness); MIN in texels (hides
-    // sampling noise at the map's actual resolution).
-    penWorld = min(penWorld, AL_SHADOW_MAX_PEN_WORLD);
-    // MIN radius floored at the acne floor (>= the settings min): a wider rotated
-    // Vogel disc turns flat-surface moiré into fine noise (BUG B). Cheap near
-    // camera (a few tiny texels), negligible on crispness.
     float minRadius = max(AL_SHADOW_MIN_PEN_TEXELS, AL_SHADOW_ACNE_FLOOR_TEXELS) * texel;
-    radiusUV = max(alWorldToShadowUV(penWorld, localScale), minRadius);
+    if (blockers < 0.5) {
+        // ROBUSTNESS: the coarse 4-tap search found no blocker. Do NOT early-return
+        // "fully lit" — that is exactly what turned a single unreliable raw read into
+        // ZERO SHADOWS everywhere on the old hardware path. Instead fall through with
+        // the tightest penumbra and let the full SHADOW_SAMPLES-tap PCF below make the
+        // actual lit/shadowed decision (a genuinely unoccluded point simply reads all
+        // taps lit -> ~1.0, at no visual cost).
+        radiusUV = minRadius;
+    } else {
+        avgBlocker /= blockers;
+
+        // Penumbra from occluder distance: contact-hardening. depthDiff is in NDC
+        // depth; * (2*shadowDistance) -> world metres along the light axis. The sun
+        // angular radius (+ artistic softness) sets how fast it widens.
+        float depthDiff = max(uvz.z - avgBlocker, 0.0);
+        float penWorld  = depthDiff * (2.0 * shadowDistance)
+                        * tan(AL_SUN_ANGULAR_RADIUS) * AL_SHADOW_SOFTNESS;
+        // MAX in WORLD units (resolution-independent softness); MIN in texels (hides
+        // sampling noise at the map's actual resolution).
+        penWorld = min(penWorld, AL_SHADOW_MAX_PEN_WORLD);
+        radiusUV = max(alWorldToShadowUV(penWorld, localScale), minRadius);
+    }
 #else
     // Non-PCSS (LOW profile) and the no-hardware-flag Mac fallback: a fixed
     // world-radius soft edge, shared PCF loop below. World-based (resolution-

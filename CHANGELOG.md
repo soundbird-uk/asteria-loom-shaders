@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-07-22
+
+Forensic hotfix for field regressions reported on Windows and macOS across
+0.2.x-0.3.0. Every root cause was reproduced in a numerical simulation of the
+shader math before being fixed.
+
+### Fixed
+
+- **Shadows missing on Windows / over-dark on macOS.** The shadow math itself was
+  proven correct; the failure was the platform-split hardware-sampler path. The
+  default is now a single software compare path (identical on all platforms) with
+  PCSS blocker search on the same raw depth texture, and the fragile
+  "no blockers means fully lit" early-out is gone. The hardware path remains
+  available behind an off-by-default internal toggle.
+- **World-erasing wash on macOS.** Aerial fog could flood the entire frame with
+  sky colour when a non-finite optical depth was clamped to maximum on Apple's
+  GL. Fog now fails toward clear: non-finite values produce zero fog and a
+  reconstruction guard passes the scene through untouched.
+- **Night ~30% too dark after the atmosphere refactor** — night ambient re-lifted
+  to within ~5% of the 0.1.1 reference the user validated; noon provably
+  unchanged.
+- **Purple banding on submerged terrain** — the ambient-desaturation and fog
+  skylight windows were misaligned, creating a double contour on the quantised
+  lightmap; both now share one gentler window.
+- **Dark "shadowy" particles** — particles use non-directional lightmap lighting
+  (camera-facing quads no longer go black against the sun).
+- New Debug Views 7 (lighting-pass coordinate/depth probe) and 8 (sky-vs-lit
+  branch probe) for on-device pipeline diagnosis.
+
 ## [0.3.0] - 2026-07-22
 
 Phase 3 — sky, clouds, fog. The vanilla sky is gone: the pack now computes its own

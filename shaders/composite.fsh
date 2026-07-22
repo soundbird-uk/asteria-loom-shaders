@@ -145,7 +145,13 @@ void main() {
     // Composite over the scene: background shows through by transmittance, plus
     // the cloud's in-scattered radiance.
     vec3 composited = scene * outTrans + outScatter;
+#if DEBUG_VIEW == 0
     outColor = vec4(max(composited, vec3(0.0)), 1.0);
+#else
+    // Debug: leave colortex0 = raw scene so the deferred1 pipeline probes
+    // (DEBUG_VIEW 7/8) survive to final unmodified.
+    outColor = vec4(scene, 1.0);
+#endif
 #endif
 
     // ---- AO history copy (PRESERVED verbatim — see original header) -------

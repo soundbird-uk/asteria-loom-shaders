@@ -69,9 +69,14 @@
 // it needs open sky to scatter into the view. Optical depth is scaled by
 // smoothstep(LO, HI, skyLightmap) so caves and interiors (sky-lm ~0) get ZERO
 // fog while open valleys (sky-lm >= HI) get the full amount — preserving Phase
-// 2's cave darkness. Window mirrors the lighting ambient-desat window.
-#define AL_FOG_SKY_GATE_LO 0.05
-#define AL_FOG_SKY_GATE_HI 0.35
+// 2's cave darkness.
+// BAND FIX (0.3.x): ALIGNED to the lighting ambient-desat window
+// (AL_AMBIENT_DESAT_LO/HI, 0.00-0.30). The two used to differ (0.05-0.35 here vs
+// 0.05-0.30 there), so on the quantised sky lightmap they placed their contour
+// steps at DIFFERENT depths underwater — a visible double band. Identical windows
+// collapse that to a single, gentler transition.
+#define AL_FOG_SKY_GATE_LO 0.00
+#define AL_FOG_SKY_GATE_HI 0.30
 
 // Biome-modulation master switch. All biome_category / temperature / rainfall
 // reads (verified Iris uniforms — see composite1.fsh header for evidence) are
@@ -256,7 +261,14 @@ float alFogOpticalDepth(float camY, vec3 worldDir, float dist, float beta0) {
     } else {
         tau = beta0 * alFogUnitDensity(y0) * dist;      // near-horizontal ray
     }
-    return clamp(tau, 0.0, AL_FOG_MAX_TAU);
+    // FAIL-SAFE DIRECTION (Mac world-wash fix): a bad tau must mean NO fog (the
+    // scene shows through), NEVER full fog (the scene erased by sky in-scatter).
+    // `clamp(NaN, 0, MAX)` returns MAX on some drivers (Apple GL) -> ext=exp(-MAX)
+    // ~= 0 -> every pixel becomes uniform sky colour: the reported blinding-white
+    // (day) / blue-grey (dusk) wash. A comparison rejects NaN AND Inf (neither
+    // satisfies `>= 0.0`), collapsing them to tau = 0 (extinction 1, fog absent).
+    if (!(tau >= 0.0)) return 0.0;
+    return min(tau, AL_FOG_MAX_TAU);
 }
 
 /* -------------------------------------------------------------------------

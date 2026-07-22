@@ -96,6 +96,14 @@ void main() {
     vec3  scene = texture(colortex0, texcoord).rgb;
     float depth = texture(depthtex0, texcoord).r;
 
+#if DEBUG_VIEW != 0
+    // Debug views inspect earlier buffers / the deferred1 probes — never fog the
+    // probe output. Pass colortex0 straight through so DEBUG_VIEW 7/8 (and any
+    // grading debug) see exactly what the upstream pass wrote.
+    outColor = vec4(scene, 1.0);
+    return;
+#endif
+
     // Sky (clouds carry their own transmittance) and underwater -> passthrough.
     if (depth >= 1.0 || isEyeInWater != 0) {
         outColor = vec4(scene, 1.0);
@@ -106,6 +114,16 @@ void main() {
     vec3  viewPos   = alScreenToView(texcoord, depth);
     vec3  playerPos = alViewToPlayer(viewPos);          // world pos rel. camera
     float dist      = length(playerPos);
+
+    // FAIL-SAFE (Mac world-wash fix): a degenerate reconstruction (NaN from a
+    // near-zero clip.w on Apple GL, or an absurd distance) must PASS THE SCENE
+    // THROUGH, never feed a huge/NaN distance into the fog integral where it
+    // saturates optical depth and replaces the whole world with sky in-scatter.
+    // Comparisons reject NaN/Inf (neither is >= 0.0).
+    if (!(dist >= 0.0) || dist > 1.0e7) {
+        outColor = vec4(scene, 1.0);
+        return;
+    }
     vec3  worldDir  = (dist > 1.0e-4) ? playerPos / dist : vec3(0.0, 1.0, 0.0);
 
     // Sky-exposure gate input: raw sky lightmap (colortex2.a). Range-clamped so

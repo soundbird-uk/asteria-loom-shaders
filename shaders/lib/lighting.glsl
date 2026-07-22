@@ -84,9 +84,15 @@ vec3 alLightPhase1(vec3 albedoLin, vec3 worldN, vec2 lm,
 
     float wrap    = 0.6 + 0.4 * up;                       // soft wrap term
     float skyLm   = lm.y * lm.y;                          // sky lightmap, eased
-    // Day scaling now lives inside alAmbientColor (0.18 at night .. 1.0 by day),
-    // so the ambient here is just hemisphere x sky-exposure x intensity.
-    vec3  ambient = hemiCol * (skyLm * wrap) * AMBIENT_INTENSITY;
+    // Day scaling lives inside alAmbientColor (0.18 at night .. 1.0 by day). That
+    // 0.18 night floor left open terrain ~30% darker than the 0.1.1 build the
+    // field confirmed as "correct night" (which held ~0.35x). Re-lift the NIGHT
+    // ambient here — the shared model, and NOT the atmosphere core this fix must
+    // not touch — by mix(AL_NIGHT_AMBIENT_LIFT, 1.0, dayFactor): night rises to
+    // the 0.1.1 level (open snow within ~5%) while NOON is provably unchanged
+    // (dayFactor == 1 -> factor 1.0).
+    float nightLift = mix(AL_NIGHT_AMBIENT_LIFT, 1.0, dayFactor);
+    vec3  ambient = hemiCol * (skyLm * wrap) * AMBIENT_INTENSITY * nightLift;
 
     // --- Night floor ------------------------------------------------------
     // A cool-blue minimum, gated by sky exposure so caves stay dark but open

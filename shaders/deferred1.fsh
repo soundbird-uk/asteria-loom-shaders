@@ -33,8 +33,8 @@
    colortex0,1,2,3 + depthtex0                                   = 5
    + colortex4 (AO)                                              = 1  (AO on)
    + shadow samplers via lib/shadow.glsl (SHADOWS):
-       hardware-flag path : shadowtex0 + shadowtex1HW + noisetex = 3  -> 9 total
-       Mac fallback path  : shadowtex1 + noisetex               = 2  -> 8 total
+       default software path : shadowtex1 (raw) + noisetex       = 2  -> 8 total
+       experimental AL_SHADOW_HW : shadowtex0 + shadowtex1HW + noisetex = 3 -> 9 total
    contact shadows (CONTACT_SHADOWS) reuse depthtex0/noisetex (no new sampler).
  Well within the 16-sampler Mac limit and the contract's <=14 budget.
 */
@@ -58,6 +58,24 @@ layout(location = 0) out vec4 outColor;
 
 void main() {
     float depth = texture(depthtex0, texcoord).r;
+
+#if DEBUG_VIEW == 7
+    // Pipeline probe A (bypasses ALL lighting): raw fullscreen interpolants +
+    // this pass's own depth sample. Healthy = a smooth red(x)/green(y) screen
+    // gradient with scene distance in blue. A flat/constant colour means
+    // deferred1's texcoord interpolant or depth read collapsed (would explain a
+    // uniform wash). composite/composite1 pass this straight through in debug.
+    outColor = vec4(texcoord.x, texcoord.y, depth, 1.0);
+    return;
+#elif DEBUG_VIEW == 8
+    // Pipeline probe B (bypasses ALL lighting): which branch each pixel takes.
+    // Healthy = GREEN world, RED sky. If geometry shows RED, the sky branch
+    // (depth >= 1.0) is being wrongly taken for solid pixels (a uniform sky wash
+    // would then originate HERE); if geometry is GREEN, deferred1 is fine and any
+    // wash is produced by a later fullscreen pass (fog/clouds/final).
+    outColor = (depth >= 1.0) ? vec4(1.0, 0.0, 0.0, 1.0) : vec4(0.0, 1.0, 0.0, 1.0);
+    return;
+#endif
 
     // Sky: pass through whatever the sky passes already wrote.
     if (depth >= 1.0) {
