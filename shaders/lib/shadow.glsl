@@ -154,6 +154,33 @@ float alShadowCompare(vec2 uv, float refD) {
 #define AL_SHADOW_MAX_PEN_WORLD 1.8
 #endif
 
+// --- Distant-shadow + flat-grazing acne fixes (field bugs from 0.2.0) ------
+// (Local to lib/shadow.glsl; guarded so a future settings.glsl value wins.)
+//
+// BUG A: the distortion's ~6.7x edge magnification made localScale huge at
+// range, so a LINEAR offset/bias scaling pushed distant sample points ~1-2.5m
+// off their occluders/receivers and deleted far shadows. We (1) hard-cap the
+// world-space normal offset, (2) scale depth bias by sqrt(localScale) instead
+// of localScale, and (3) cap the absolute depth bias. Together these keep far
+// bias/offset near the pre-distortion (0.1.1) magnitudes that behaved.
+#ifndef AL_SHADOW_OFFSET_MAX_WORLD
+#define AL_SHADOW_OFFSET_MAX_WORLD 0.30   // metres — absolute normal-offset cap
+#endif
+#ifndef AL_SHADOW_BIAS_MAX_NDC
+#define AL_SHADOW_BIAS_MAX_NDC 0.0025     // absolute depth-bias cap (shadow NDC)
+#endif
+// BUG B: flat translucent surfaces (ice) shade through the forward water path
+// with only vertex normals; at grazing sun that is classic acne/moiré. Two
+// universal levers (no per-pass detection needed): a quadratic grazing bias
+// term, and a minimum PCF radius floor so the per-pixel-rotated Vogel disc
+// smears any residual coherent moiré into fine (temporally-averaged) noise.
+#ifndef AL_SHADOW_GRAZE_BIAS
+#define AL_SHADOW_GRAZE_BIAS 0.0006       // extra bias * (1-NdotL)^2
+#endif
+#ifndef AL_SHADOW_ACNE_FLOOR_TEXELS
+#define AL_SHADOW_ACNE_FLOOR_TEXELS 2.5   // min PCF radius (texels) vs flat moiré
+#endif
+
 // World radius (metres) -> distorted-UV radius at local warp scale. The shadow
 // ortho spans 2*shadowDistance world units across the [0,1] UV range; the
 // distortion then magnifies by 1/localScale (see header).
@@ -179,6 +206,10 @@ float alShadowVisibility(vec3 playerPos, vec3 worldN, float NdotL) {
     float baseTexelWorld = 2.0 * shadowDistance / float(shadowMapResolution);
     float offsetWorld = baseTexelWorld * localScale
                       * (AL_SHADOW_NOFFSET_BASE + (1.0 - NdotL) * AL_SHADOW_NOFFSET_SLOPE);
+    // Cap the ABSOLUTE offset: near-camera localScale<1 keeps it tiny/crisp, but
+    // at the map edge (localScale ~6.7) the uncapped value reaches ~1.75m and
+    // shoves distant samples clean off their occluders (BUG A: far shadows gone).
+    offsetWorld = min(offsetWorld, AL_SHADOW_OFFSET_MAX_WORLD);
     vec3 samplePos = playerPos + worldN * offsetWorld;
 
     // Re-project the offset point and warp it.
@@ -193,9 +224,16 @@ float alShadowVisibility(vec3 playerPos, vec3 worldN, float NdotL) {
         return 1.0;
     }
 
-    // Slope-scaled depth bias, itself scaled by the local (coarser-at-edge)
-    // texel size. Tiny near camera (crisp), larger near the map edge.
-    float depthBias = (AL_SHADOW_BIAS + AL_SHADOW_SLOPE_BIAS * (1.0 - NdotL)) * localScale;
+    // Depth bias: slope-scaled, plus a quadratic grazing term (flat-surface /
+    // ice acne), scaled by SQRT(localScale) not localScale. Linear localScale
+    // made the far bias 0.3-0.7m and vanished distant shadows (BUG A); sqrt
+    // keeps the edge bias ~0.15-0.28m while staying tiny near camera. A hard
+    // absolute cap bounds the very-grazing + low-res worst case.
+    float graze = 1.0 - NdotL;
+    float depthBias = (AL_SHADOW_BIAS
+                     + AL_SHADOW_SLOPE_BIAS * graze
+                     + AL_SHADOW_GRAZE_BIAS * graze * graze) * sqrt(localScale);
+    depthBias = min(depthBias, AL_SHADOW_BIAS_MAX_NDC);
     float refD  = uvz.z - depthBias;
 
     float texel = 1.0 / float(shadowMapResolution);
@@ -227,14 +265,18 @@ float alShadowVisibility(vec3 playerPos, vec3 worldN, float NdotL) {
     // MAX in WORLD units (resolution-independent softness); MIN in texels (hides
     // sampling noise at the map's actual resolution).
     penWorld = min(penWorld, AL_SHADOW_MAX_PEN_WORLD);
-    radiusUV = max(alWorldToShadowUV(penWorld, localScale),
-                   AL_SHADOW_MIN_PEN_TEXELS * texel);
+    // MIN radius floored at the acne floor (>= the settings min): a wider rotated
+    // Vogel disc turns flat-surface moiré into fine noise (BUG B). Cheap near
+    // camera (a few tiny texels), negligible on crispness.
+    float minRadius = max(AL_SHADOW_MIN_PEN_TEXELS, AL_SHADOW_ACNE_FLOOR_TEXELS) * texel;
+    radiusUV = max(alWorldToShadowUV(penWorld, localScale), minRadius);
 #else
     // Non-PCSS (LOW profile) and the no-hardware-flag Mac fallback: a fixed
     // world-radius soft edge, shared PCF loop below. World-based (resolution-
     // independent), floored at one texel to hide sampling noise.
     float penWorld = min(AL_SHADOW_FIXED_PEN_WORLD, AL_SHADOW_MAX_PEN_WORLD);
-    radiusUV = max(alWorldToShadowUV(penWorld, localScale), 1.0 * texel);
+    radiusUV = max(alWorldToShadowUV(penWorld, localScale),
+                   AL_SHADOW_ACNE_FLOOR_TEXELS * texel);
 #endif
 
     // --- Vogel-disc PCF (shared by all paths) ----------------------------
