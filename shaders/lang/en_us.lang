@@ -1,0 +1,69 @@
+# ============================================================================
+# Asteria Loom — English (US) localization
+# Keys: screen.*  option.*  option.*.comment  value.*.N  profile.*
+# Tone: short, friendly, descriptive.
+# ============================================================================
+
+# ---- Profiles --------------------------------------------------------------
+profile.comment = Presets from integrated-graphics friendly to maxed out. Potato disables shadows entirely.
+profile.POTATO = Potato
+profile.LOW = Low
+profile.MEDIUM = Medium
+profile.HIGH = High
+profile.ULTRA = Ultra
+
+# ---- Screen titles ---------------------------------------------------------
+screen.LIGHTING = Lighting
+screen.SHADOWS = Shadows
+screen.SKY = Sky
+screen.POST = Post-Processing
+screen.DEBUG = Debug
+
+# ---- Lighting --------------------------------------------------------------
+option.SUN_INTENSITY = Sun Intensity
+option.SUN_INTENSITY.comment = Strength of the warm amber sun and cool moon key light.
+option.AMBIENT_INTENSITY = Sky Ambient
+option.AMBIENT_INTENSITY.comment = Strength of the cool blue-purple sky fill in shadowed areas. The cool half of the pack's signature contrast.
+option.BLOCKLIGHT_INTENSITY = Block Light
+option.BLOCKLIGHT_INTENSITY.comment = Strength of warm torch and lantern light.
+option.NIGHT_BRIGHTNESS = Night Brightness
+option.NIGHT_BRIGHTNESS.comment = Cool-blue floor that keeps open terrain readable after dark.
+option.BOUNCE_INTENSITY = Bounce Floor
+option.BOUNCE_INTENSITY.comment = Faint fake indirect light so shaded coloured faces are never pure black.
+
+# ---- Shadows ---------------------------------------------------------------
+option.SHADOWS = Shadows
+option.SHADOWS.comment = Master toggle. Off skips the shadow pass entirely (Potato preset).
+option.SHADOW_RESOLUTION = Shadow Resolution
+option.SHADOW_RESOLUTION.comment = Shadow map size. Higher is crisper but costs more VRAM and fill rate.
+value.SHADOW_RESOLUTION.1024 = 1024
+value.SHADOW_RESOLUTION.1536 = 1536
+value.SHADOW_RESOLUTION.2048 = 2048
+value.SHADOW_RESOLUTION.3072 = 3072
+value.SHADOW_RESOLUTION.4096 = 4096
+option.SHADOW_DISTANCE = Shadow Distance
+option.SHADOW_DISTANCE.comment = How far from the camera shadows are cast, in blocks.
+option.SHADOW_FILTER = Soft Filter
+option.SHADOW_FILTER.comment = Cheap 2x2 softening of shadow edges. Off gives a single hard tap.
+
+# ---- Sky -------------------------------------------------------------------
+option.VANILLA_CLOUDS = Vanilla Clouds
+option.VANILLA_CLOUDS.comment = Draw Minecraft's clouds. Replaced by volumetric clouds in a later update.
+option.SKY_BRIGHTNESS = Sky Brightness
+option.SKY_BRIGHTNESS.comment = Overall brightness of the sky gradient.
+option.SUNMOON_BRIGHTNESS = Sun / Moon Glow
+option.SUNMOON_BRIGHTNESS.comment = HDR boost on the sun and moon discs so they shine through the tonemap.
+
+# ---- Post ------------------------------------------------------------------
+option.EXPOSURE = Exposure
+option.EXPOSURE.comment = Manual brightness multiplier before tone mapping. Auto exposure arrives later.
+
+# ---- Debug -----------------------------------------------------------------
+option.DEBUG_VIEW = Debug View
+option.DEBUG_VIEW.comment = Inspect raw G-buffer channels. Leave at Off for normal rendering.
+value.DEBUG_VIEW.0 = Off
+value.DEBUG_VIEW.1 = Albedo
+value.DEBUG_VIEW.2 = World Normal
+value.DEBUG_VIEW.3 = Lightmap
+value.DEBUG_VIEW.4 = Depth
+value.DEBUG_VIEW.5 = Material ID
