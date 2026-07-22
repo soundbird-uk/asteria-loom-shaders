@@ -219,6 +219,17 @@ const float shadowDistance = 128.0; // [64.0 96.0 128.0 192.0 256.0]
 // tonemap and blooms in later phases.
 #define SUNMOON_BRIGHTNESS 3.0 // [1.0 2.0 3.0 4.0 6.0]
 
+// Procedural night sky: hash-cell twinkling stars, a tilted galaxy band and
+// rare shooting stars, faded in through dusk and kept below the moon's
+// brightness (lib/nightsky.glsl). Off removes all three and the sky pass adds
+// nothing after dark. Additive over the atmosphere.
+#define NIGHT_SKY // [NIGHT_SKY]
+
+// Star field density. Scales how many cells spawn a star (many faint, few
+// bright regardless). 1.00 is the tuned baseline; lower for a sparse minimalist
+// sky, higher for a dense field.
+#define STARS_DENSITY 1.00 // [0.50 0.75 1.00 1.50 2.00]
+
 
 /* =========================================================================
    POST

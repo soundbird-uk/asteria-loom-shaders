@@ -80,6 +80,15 @@ option.SKY_BRIGHTNESS = Sky Brightness
 option.SKY_BRIGHTNESS.comment = Overall brightness of the sky gradient.
 option.SUNMOON_BRIGHTNESS = Sun / Moon Glow
 option.SUNMOON_BRIGHTNESS.comment = HDR boost on the sun and moon discs so they shine through the tonemap.
+option.NIGHT_SKY = Night Sky
+option.NIGHT_SKY.comment = Procedural stars, a tilted galaxy band and rare shooting stars, fading in after dusk. Kept dim and dreamy, below the moon's brightness.
+option.STARS_DENSITY = Star Density
+option.STARS_DENSITY.comment = How many stars fill the night sky. Lower is sparse and minimal; higher is a dense field. Brightness distribution stays the same.
+value.STARS_DENSITY.0.50 = Sparse
+value.STARS_DENSITY.0.75 = Light
+value.STARS_DENSITY.1.00 = Default
+value.STARS_DENSITY.1.50 = Dense
+value.STARS_DENSITY.2.00 = Very Dense
 
 # ---- Post ------------------------------------------------------------------
 option.EXPOSURE = Exposure
