@@ -31,7 +31,8 @@
 #include "/lib/common.glsl"
 #include "/lib/color.glsl"
 #include "/lib/clouds_common.glsl"
-#include "/lib/atmosphere.glsl"     // alSkySample(dir), alDirectColor()
+// lib/atmosphere.glsl exposes alSkySample(dir) and alDirectColor().
+#include "/lib/atmosphere.glsl"
 
 // --- Quality tiers ----------------------------------------------------------
 #if VC_QUALITY == 1
