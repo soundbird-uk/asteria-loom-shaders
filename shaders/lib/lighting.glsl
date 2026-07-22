@@ -49,7 +49,8 @@ vec3 alDirectLightColor(float dayFactor) {
    dayFactor : 0 night .. 1 day (from alDayFactor)
 */
 vec3 alLightPhase1(vec3 albedoLin, vec3 worldN, vec2 lm,
-                   float shadowVis, vec3 worldLDir, float dayFactor) {
+                   float shadowVis, vec3 worldLDir, float dayFactor,
+                   float ao) {
 
     // --- Direct sun / moon ------------------------------------------------
     float NdotL   = max(dot(worldN, worldLDir), 0.0);
@@ -109,9 +110,23 @@ vec3 alLightPhase1(vec3 albedoLin, vec3 worldN, vec2 lm,
     // --- Fake indirect bounce floor --------------------------------------
     vec3 bounce = AL_BOUNCE * BOUNCE_INTENSITY;
 
+    // Ambient occlusion multiplies the INDIRECT terms only (sky ambient, night
+    // floor, warm blocklight, bounce). The direct sun/moon key is untouched —
+    // GTAO is a hemispherical-visibility estimate for ambient light, and
+    // occluding the sharp direct light would double up with the shadow map.
+    vec3 indirect = (ambient + nightFloor + block + bounce) * ao;
+
     // Sum light, then modulate by surface albedo.
-    vec3 lightSum = direct + ambient + nightFloor + block + bounce;
+    vec3 lightSum = direct + indirect;
     return albedoLin * lightSum;
+}
+
+// Backwards-compatible overload (no AO) for the forward translucent passes
+// (water, hand_water, particles, entities_translucent, weather). They have no
+// screen-space AO buffer to sample, so they light with full ambient (ao = 1).
+vec3 alLightPhase1(vec3 albedoLin, vec3 worldN, vec2 lm,
+                   float shadowVis, vec3 worldLDir, float dayFactor) {
+    return alLightPhase1(albedoLin, worldN, lm, shadowVis, worldLDir, dayFactor, 1.0);
 }
 
 #endif // AL_LIB_LIGHTING

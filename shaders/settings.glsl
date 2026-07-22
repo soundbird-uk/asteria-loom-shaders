@@ -42,7 +42,9 @@
      - SHADOW_PCSS      (LOW off -> plain Vogel; MEDIUM+ on -> contact-hardening)
      - SHADOW_SAMPLES   (8 / 12 / 16 / 24)
      - CONTACT_SHADOWS  (HIGH/ULTRA on)
-   Later phases add SSAO / TAA / clouds / SSR quality knobs here.
+     - AO               (POTATO/LOW off; MEDIUM+ on)
+     - AO_QUALITY       (MEDIUM 2, HIGH/ULTRA 3)
+   Later phases add TAA / clouds / SSR quality knobs here.
    ========================================================================= */
 
 
@@ -161,6 +163,45 @@ const float shadowDistance = 128.0; // [64.0 96.0 128.0 192.0 256.0]
 
 
 /* =========================================================================
+   AMBIENT OCCLUSION  (GTAO — horizon-based, temporally accumulated)
+   -------------------------------------------------------------------------
+   Runs in the `deferred` pass (before lighting) and writes colortex4; the
+   lighting pass multiplies it onto the AMBIENT / bounce / blocklight terms
+   only (never the direct sun/moon). Gated as a whole pass via
+   `program.deferred.enabled = AO` so POTATO/LOW skip it entirely.
+   ========================================================================= */
+
+// Master AO toggle. Also gates the AO pass itself (program.deferred.enabled).
+// deferred1 reads colortex4 only behind `#ifdef AO` (cleared buffer = black).
+#define AO // [AO]
+
+// AO quality: slices x horizon steps per pixel. 1 = 2x3, 2 = 2x4, 3 = 3x4.
+// More slices/steps = smoother, less noisy AO (temporal accumulation cleans up
+// the rest) at higher cost.
+#define AO_QUALITY 2 // [1 2 3]
+
+// AO strength. Applied as pow(ao, AO_STRENGTH): >1 deepens crevices, <1 softens.
+#define AO_STRENGTH 1.0 // [0.5 0.75 1.0 1.25 1.5]
+
+// --- AO shaping (internal, not GUI) ---------------------------------------
+// Effect radius in world metres — how far a crease reaches for occluders.
+#define AL_AO_RADIUS 1.2
+// Clamp on the projected search radius (UV) so near-camera pixels don't march
+// the whole screen (and blow the cache) when AL_AO_RADIUS/depth explodes.
+#define AL_AO_MAX_RADIUS_UV 0.15
+// Temporal blend ceiling: max fraction of the accumulated history kept per
+// frame (confidence-scaled up to this). 0.9 = strong smoothing, still reactive.
+#define AL_AO_MAX_BLEND 0.9
+// Confidence ramp: added each accepted frame, capped at MAX. A freshly
+// disoccluded pixel starts at STEP and converges over ~1/STEP frames.
+#define AL_AO_CONF_STEP 0.1
+#define AL_AO_CONF_MAX  0.9
+// History rejection: relative linear-depth mismatch above this discards the
+// reprojected sample (disocclusion / a different surface). ~5%.
+#define AL_AO_DEPTH_REJECT 0.05
+
+
+/* =========================================================================
    SKY
    ========================================================================= */
 
@@ -190,8 +231,9 @@ const float shadowDistance = 128.0; // [64.0 96.0 128.0 192.0 256.0]
    ========================================================================= */
 
 // Visualise raw G-buffer channels. 0 = normal render.
-//   1 albedo | 2 world normal | 3 lightmap (block=R, sky=G) | 4 depth | 5 matID
-#define DEBUG_VIEW 0 // [0 1 2 3 4 5]
+//   1 albedo | 2 world normal | 3 lightmap (block=R, sky=G) | 4 depth |
+//   5 matID | 6 ambient occlusion (white = unoccluded)
+#define DEBUG_VIEW 0 // [0 1 2 3 4 5 6]
 
 
 /* =========================================================================

@@ -2,11 +2,8 @@
 #include "/settings.glsl"
 
 /*
- deferred (vertex) — fullscreen GTAO pass. Iris supplies the fullscreen quad;
+ deferred (vertex) — fullscreen pass. Iris supplies the fullscreen quad;
  ftransform() places it and gl_MultiTexCoord0 carries 0..1 screen uv.
-
- (Phase 1's deferred lighting pass is now deferred1; this deferred slot holds
- the horizon-based AO + temporal-accumulation pass — see deferred.fsh.)
 */
 
 out vec2 texcoord;

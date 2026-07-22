@@ -15,6 +15,7 @@ profile.ULTRA = Ultra
 # ---- Screen titles ---------------------------------------------------------
 screen.LIGHTING = Lighting
 screen.SHADOWS = Shadows
+screen.AO = Ambient Occlusion
 screen.SKY = Sky
 screen.POST = Post-Processing
 screen.DEBUG = Debug
@@ -56,6 +57,22 @@ value.SHADOW_SAMPLES.24 = 24
 option.CONTACT_SHADOWS = Contact Shadows
 option.CONTACT_SHADOWS.comment = Screen-space raymarch for fine contact detail the shadow map misses (block bases, tight gaps).
 
+# ---- Ambient Occlusion -----------------------------------------------------
+option.AO = Ambient Occlusion
+option.AO.comment = Horizon-based (GTAO) contact shadows in corners, crevices and under objects. Temporally accumulated for a clean, stable result. Off skips the pass entirely (Potato/Low).
+option.AO_QUALITY = AO Quality
+option.AO_QUALITY.comment = Slices and steps sampled per pixel. Higher is smoother and less noisy but costlier.
+value.AO_QUALITY.1 = Low
+value.AO_QUALITY.2 = Medium
+value.AO_QUALITY.3 = High
+option.AO_STRENGTH = AO Strength
+option.AO_STRENGTH.comment = How deeply AO darkens shaded corners. Higher digs the creases in; lower keeps it subtle.
+value.AO_STRENGTH.0.5 = 0.5
+value.AO_STRENGTH.0.75 = 0.75
+value.AO_STRENGTH.1.0 = 1.0
+value.AO_STRENGTH.1.25 = 1.25
+value.AO_STRENGTH.1.5 = 1.5
+
 # ---- Sky -------------------------------------------------------------------
 option.VANILLA_CLOUDS = Vanilla Clouds
 option.VANILLA_CLOUDS.comment = Draw Minecraft's clouds. Replaced by volumetric clouds in a later update.
@@ -77,3 +94,4 @@ value.DEBUG_VIEW.2 = World Normal
 value.DEBUG_VIEW.3 = Lightmap
 value.DEBUG_VIEW.4 = Depth
 value.DEBUG_VIEW.5 = Material ID
+value.DEBUG_VIEW.6 = Ambient Occlusion

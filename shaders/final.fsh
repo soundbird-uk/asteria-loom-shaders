@@ -12,7 +12,8 @@
  final writes to the default framebuffer, so it carries NO RENDERTARGETS
  directive (it is the documented exception, alongside the shadow pass).
 
- Sampler count: 5 (colortex0, colortex1, colortex2, colortex3, depthtex0)
+ Sampler count: 6 (colortex0, colortex1, colortex2, colortex3, colortex4,
+ depthtex0). colortex4 is read only by DEBUG_VIEW 6 (AO).
 
  ==========================================================================
  CANONICAL BUFFER-FORMAT DECLARATIONS
@@ -29,6 +30,10 @@
    colortex1    RGBA8    albedo.rgb, a = vanilla AO / spare
    colortex2    RGBA16   octahedral normal .rg, lightmap (block,sky) .ba
    colortex3    RGBA8    matID/255 .r, flags/255 .g, ba spare
+   colortex4    RG16F    GTAO: r = AO (1 = unoccluded), g = confidence. Cleared.
+   colortex5    RGBA16F  AO history: r = AO, g = confidence, b = linear depth.
+                         `clear.colortex5 = false` (persists across frames for
+                         temporal accumulation — set in shaders.properties).
    shadowcolor0 RGBA8    reserved for Phase 2 (coloured/translucent shadows);
                          Phase 1's shadow pass is depth-only, so nothing is
                          allocated yet — this only reserves the format.
@@ -40,6 +45,8 @@ const int colortex0Format = RGBA16F;
 const int colortex1Format = RGBA8;
 const int colortex2Format = RGBA16;
 const int colortex3Format = RGBA8;
+const int colortex4Format = RG16F;
+const int colortex5Format = RGBA16F;
 const int shadowcolor0Format = RGBA8;
 */
 
@@ -53,6 +60,7 @@ uniform sampler2D colortex0;
 uniform sampler2D colortex1;
 uniform sampler2D colortex2;
 uniform sampler2D colortex3;
+uniform sampler2D colortex4;   // GTAO term (DEBUG_VIEW 6)
 uniform sampler2D depthtex0;
 
 uniform float near;
@@ -94,6 +102,12 @@ void main() {
     // Material ID scaled into a visible grey ramp.
     int id = alDecodeMatID(texture(colortex3, texcoord).r);
     fragColor = vec4(vec3(float(id) / 8.0), 1.0);
+    return;
+#elif DEBUG_VIEW == 6
+    // Ambient occlusion term as greyscale (white = unoccluded). With AO off the
+    // pass doesn't run and colortex4 is cleared to 0 (shows black).
+    float ao = texture(colortex4, texcoord).r;
+    fragColor = vec4(vec3(ao), 1.0);
     return;
 #else
     // ---- Normal path: exposure -> tonemap -> sRGB -----------------------
