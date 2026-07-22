@@ -26,7 +26,7 @@
  Everything pack-internal is prefixed AL_ (e.g. AL_SUN_TINT).
 
  Defaults below are the MEDIUM-profile values. shaders.properties profiles
- override a small subset (SHADOWS, shadowMapResolution, SHADOW_FILTER).
+ override a small subset (SHADOWS, shadowMapResolution, SHADOW_PCSS, ...).
 ============================================================================
 */
 
