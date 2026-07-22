@@ -34,15 +34,15 @@ option.BOUNCE_INTENSITY.comment = Faint fake indirect light so shaded coloured f
 # ---- Shadows ---------------------------------------------------------------
 option.SHADOWS = Shadows
 option.SHADOWS.comment = Master toggle. Off skips the shadow pass entirely (Potato preset).
-option.SHADOW_RESOLUTION = Shadow Resolution
-option.SHADOW_RESOLUTION.comment = Shadow map size. Higher is crisper but costs more VRAM and fill rate.
-value.SHADOW_RESOLUTION.1024 = 1024
-value.SHADOW_RESOLUTION.1536 = 1536
-value.SHADOW_RESOLUTION.2048 = 2048
-value.SHADOW_RESOLUTION.3072 = 3072
-value.SHADOW_RESOLUTION.4096 = 4096
-option.SHADOW_DISTANCE = Shadow Distance
-option.SHADOW_DISTANCE.comment = How far from the camera shadows are cast, in blocks.
+option.shadowMapResolution = Shadow Resolution
+option.shadowMapResolution.comment = Shadow map size. Higher is crisper but costs more VRAM and fill rate.
+value.shadowMapResolution.1024 = 1024
+value.shadowMapResolution.1536 = 1536
+value.shadowMapResolution.2048 = 2048
+value.shadowMapResolution.3072 = 3072
+value.shadowMapResolution.4096 = 4096
+option.shadowDistance = Shadow Distance
+option.shadowDistance.comment = How far from the camera shadows are cast, in blocks.
 option.SHADOW_FILTER = Soft Filter
 option.SHADOW_FILTER.comment = Cheap 2x2 softening of shadow edges. Off gives a single hard tap.
 

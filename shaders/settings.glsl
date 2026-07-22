@@ -26,7 +26,7 @@
  Everything pack-internal is prefixed AL_ (e.g. AL_SUN_TINT).
 
  Defaults below are the MEDIUM-profile values. shaders.properties profiles
- override a small subset (SHADOWS, SHADOW_RESOLUTION, SHADOW_FILTER).
+ override a small subset (SHADOWS, shadowMapResolution, SHADOW_FILTER).
 ============================================================================
 */
 
@@ -38,7 +38,7 @@
    shaders.properties via `profile.*`. They only flip options declared in
    THIS file. Phase-1 differentiators:
      - SHADOWS          (POTATO off; everyone else on)
-     - SHADOW_RESOLUTION(1024 / 1536 / 2048 / 2048 / 3072)
+     - shadowMapResolution(1024 / 1536 / 2048 / 2048 / 3072)
      - SHADOW_FILTER    (POTATO/LOW off; MEDIUM+ on)
    Later phases add SSAO / TAA / clouds / SSR quality knobs here.
    ========================================================================= */
@@ -81,10 +81,18 @@
 #define SHADOWS // [SHADOWS]
 
 // Shadow map resolution (square). Higher = crisper, more VRAM/fill.
-#define SHADOW_RESOLUTION 2048 // [1024 1536 2048 3072 4096]
+// NOTE: this is a `const int` GUI option, NOT a #define. Iris' shadow-map
+// sizing reads the buffer-directive constant `shadowMapResolution` by its
+// literal value (its ConstDirectiveParser scans raw text and does NOT expand
+// macros), so the option must BE that constant. Declared here (settings.glsl
+// is included everywhere) it is simultaneously the GUI slider, the value Iris
+// sizes the shadow map from, and a compile-time constant for lib/shadow.glsl.
+const int shadowMapResolution = 2048; // [1024 1536 2048 3072 4096]
 
 // Max distance (blocks) shadows are cast. Larger = more coverage, softer.
-#define SHADOW_DISTANCE 128 // [64 96 128 192 256]
+// Same const-option rationale as shadowMapResolution above (Iris reads the
+// literal `shadowDistance` directive value directly).
+const float shadowDistance = 128.0; // [64.0 96.0 128.0 192.0 256.0]
 
 // Soften shadow edges with a cheap 2x2 tap. Off = single hard tap (cheapest).
 #define SHADOW_FILTER // [SHADOW_FILTER]

@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-07-22
+
+Hotfix for a real-device failure found testing 0.1.0 on an M4 Mac (Iris, OpenGL 4.1).
+
+### Fixed
+
+- **`final.fsh` failed to compile on macOS** — the buffer-format directives
+  (`const int colortexNFormat = RGBA16F;` etc.) were declared as live GLSL, but the
+  format names are Iris-only tokens, not GLSL identifiers. They are now inside a
+  comment block, which is where Iris' `ConstDirectiveParser` reads them from.
+- **Shadow map sizing silently ignored.** `shadowMapResolution`/`shadowDistance` were
+  driven by `#define`s, but Iris extracts const directives from raw text without macro
+  expansion, so every preset would have fallen back to the default shadow map size.
+  Both are now literal-valued const GUI options in `settings.glsl` (profiles, screens,
+  sliders, and lang rewired accordingly).
+- **Validator could mask the format bug.** `tools/validate.py` no longer stubs
+  buffer-format identifiers; an uncommented format declaration is now a hard failure,
+  format directives are located inside comments for the single-source check, and
+  const-style GUI options are parsed and cross-checked like `#define` options.
+
 ## [0.1.0] - 2026-07-22
 
 Phase 1 — scaffold and foundation. The pack loads and renders correctly under Iris on

@@ -39,9 +39,9 @@ float alShadowVisibility(vec3 playerPos, vec3 worldN, float NdotL) {
     // Normal offset: push the sample point along the surface normal to fight
     // acne. Scale by one shadow texel in world units and grow at grazing
     // angles where the projected footprint is largest. The ortho shadow
-    // projection spans ±shadowDistance, so the map covers 2*SHADOW_DISTANCE
-    // world units across SHADOW_RESOLUTION texels -> the factor 2 matters.
-    float texelWorld = 2.0 * float(SHADOW_DISTANCE) / float(SHADOW_RESOLUTION);
+    // projection spans ±shadowDistance, so the map covers 2*shadowDistance
+    // world units across shadowMapResolution texels -> the factor 2 matters.
+    float texelWorld = 2.0 * shadowDistance / float(shadowMapResolution);
     float offset = texelWorld * (0.85 + (1.0 - NdotL) * 2.5);
     vec3 samplePos = playerPos + worldN * offset;
 
@@ -62,7 +62,7 @@ float alShadowVisibility(vec3 playerPos, vec3 worldN, float NdotL) {
 
     #ifdef SHADOW_FILTER
         // Cheap 2x2 tap (4 samples) for softened edges.
-        float texel = 1.0 / float(SHADOW_RESOLUTION);
+        float texel = 1.0 / float(shadowMapResolution);
         float sum = 0.0;
         for (int x = 0; x < 2; x++) {
             for (int y = 0; y < 2; y++) {

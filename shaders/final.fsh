@@ -43,14 +43,11 @@ const int colortex3Format = RGBA8;
 const int shadowcolor0Format = RGBA8;
 */
 
-// Shadow map sizing. Unlike the format tokens above, these ARE live code:
-// SHADOW_RESOLUTION / SHADOW_DISTANCE are numeric #defines (settings.glsl),
-// so the initializers expand to plain int/float literals — valid GLSL that
-// compiles cleanly (verified on the Mac; the field error was ONLY the format
-// lines). Iris resolves the active option value before reading the const, so
-// the map is sized to whatever profile the player selected. See lib/shadow.glsl.
-const int   shadowMapResolution = SHADOW_RESOLUTION;
-const float shadowDistance       = float(SHADOW_DISTANCE);
+// Shadow-map sizing (shadowMapResolution / shadowDistance) is declared in
+// settings.glsl as literal-valued const GUI options — Iris' ConstDirectiveParser
+// reads their literal text with no macro expansion, so the option must BE the
+// constant. They are NOT redeclared here (settings.glsl is already included
+// above) to avoid a duplicate directive.
 
 uniform sampler2D colortex0;
 uniform sampler2D colortex1;
