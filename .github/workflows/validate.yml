@@ -1,0 +1,31 @@
+name: validate
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  validate:
+    name: Compile gate (glslang, all profiles)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install glslang + zip
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y glslang-tools zip
+
+      - name: Validate shaders (all profiles x all programs)
+        run: python3 tools/validate.py
+
+      - name: Package installable zip
+        run: python3 tools/package.py --version ci
+
+      - name: Upload pack artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: asteria-loom-pack
+          path: dist/*.zip
+          if-no-files-found: error
