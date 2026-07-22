@@ -23,12 +23,24 @@ What it does, for every (profile x program-stage) combination:
      immediately after the #version line, alongside the small set of macros /
      uniforms that Iris injects at runtime (see IRIS_MACRO_STUBS /
      IRIS_SYMBOL_STUBS below).
-  5. Runs glslangValidator on the patched source (-S vert / -S frag).
-  6. Runs a set of static lint checks (RENDERTARGETS presence, sampler budget,
+  5. Runs glslangValidator on the patched source (-S vert / -S frag), once per
+     compile *target* (see below).
+  6. Runs a set of static lint checks (unresolved includes, RENDERTARGETS
+     count/index integrity, sampler budget, unknown render-stage macros,
      buffer-format single-source-of-truth, option/screen/lang consistency).
 
+Compile targets (`--target`): the same source is compiled under different
+Iris-macro environments so both platform code paths get syntax coverage.
+  * `mac`      — MC_OS_MAC, GL/GLSL 410, IRIS_FEATURE_* undefined => every
+                 AL_ADVANCED_TIER gate compiles OUT (the M4 path; the one that
+                 must never false-PASS).
+  * `advanced` — MC_OS_WINDOWS, GL/GLSL 460, all four IRIS_FEATURE_* defined =>
+                 AL_ADVANCED_TIER branches compile IN (Windows path; gives the
+                 advanced tier syntax coverage from Phase 6 on).
+Default is `mac`; CI runs `both`.
+
 It collects *all* failures before exiting non-zero and prints a compact
-profile x program result table plus full glslang output for every failure.
+target/profile x program result table plus full glslang output for every failure.
 
 stdlib only. Python 3.8+.
 """
@@ -47,26 +59,47 @@ import tempfile
 # Iris-injected stubs.
 #
 # Iris injects a number of macros and uniforms into every program at runtime
-# that are not visible to a plain glslang invocation. We reproduce a minimal,
-# Mac-path version of them here. These tables are intentionally at the top of
-# the file and easy to extend as later phases use more Iris features.
+# that are not visible to a plain glslang invocation. We reproduce them here.
+# These tables are intentionally at the top of the file and easy to extend as
+# later phases use more Iris features.
 #
-# Design decision: we validate the *Mac path* only, so MC_OS_MAC is defined and
-# the IRIS_FEATURE_* flags are left UNdefined. That makes every AL_ADVANCED_TIER
-# gate compile out, exactly as it will on the user's M4. If a later phase wants
-# to also validate the Windows/advanced path, add a second macro set and a CLI
-# flag to select it.
+# There are two macro environments (compile "targets"). Both are guarded with
+# #ifndef so a real definition in the shader always wins.
+#   * mac      — the M4 path: MC_OS_MAC defined, GL/GLSL 410, and NO
+#                IRIS_FEATURE_* flags, so every AL_ADVANCED_TIER gate compiles
+#                out exactly as on macOS. This is the path that must never
+#                false-PASS.
+#   * advanced — the Windows path: MC_OS_WINDOWS, GL/GLSL 460, and all four
+#                IRIS_FEATURE_* flags defined, so AL_ADVANCED_TIER branches get
+#                syntax coverage (inert in Phase 1; correct from Phase 6 on).
 # ---------------------------------------------------------------------------
 
-# Macros always injected (guarded with #ifndef so a real definition wins).
-# name -> value string ('' => object-like define with no value, i.e. just
-# `#define NAME`).
-IRIS_MACRO_STUBS = {
+# name -> value string ('' => object-like define with no value).
+IRIS_MACRO_STUBS_MAC = {
     "MC_VERSION": "12100",       # a recent MC release, format YYVVV-ish
     "MC_GL_VERSION": "410",      # macOS caps at GL 4.1
     "MC_GLSL_VERSION": "410",
-    "MC_OS_MAC": "1",            # we validate the Mac path
+    "MC_OS_MAC": "1",            # the Mac path
     "IS_IRIS": "1",
+}
+
+IRIS_MACRO_STUBS_ADVANCED = {
+    "MC_VERSION": "12100",
+    "MC_GL_VERSION": "460",
+    "MC_GLSL_VERSION": "460",
+    "MC_OS_WINDOWS": "1",        # the Windows/advanced path
+    "IS_IRIS": "1",
+    # The four optional feature flags Iris emits when the machine supports them
+    # (see brief §4). Defining all four unlocks AL_ADVANCED_TIER.
+    "IRIS_FEATURE_COMPUTE_SHADERS": "1",
+    "IRIS_FEATURE_SSBO": "1",
+    "IRIS_FEATURE_CUSTOM_IMAGES": "1",
+    "IRIS_FEATURE_SEPARATE_HARDWARE_SAMPLERS": "1",
+}
+
+TARGET_MACROS = {
+    "mac": IRIS_MACRO_STUBS_MAC,
+    "advanced": IRIS_MACRO_STUBS_ADVANCED,
 }
 
 # Uniforms/attributes Iris provides. We only inject the declaration if the
@@ -109,9 +142,11 @@ IRIS_FORMAT_STUBS = [
     "SRGB8", "SRGB8_ALPHA8",
 ]
 
-# Iris render-stage macros (MC_RENDER_STAGE_*). Any that are referenced but not
-# defined get auto-assigned a unique int. This known list keeps values stable
-# and readable; unknown ones are assigned dynamically after these.
+# Iris render-stage macros (MC_RENDER_STAGE_*). Only names on THIS list get
+# stubbed. Any MC_RENDER_STAGE_* token referenced in a program but not on this
+# list is treated as a typo and hard-fails the lint (matching real Iris, which
+# would error) — we never invent a value for an unknown stage, because that
+# would silently mask a misspelling like MC_RENDER_STAGE_VOIDD.
 KNOWN_RENDER_STAGES = [
     "MC_RENDER_STAGE_NONE",
     "MC_RENDER_STAGE_SKY",
@@ -388,7 +423,7 @@ def parse_screens(entries):
 INCLUDE_RE = re.compile(r'^\s*#include\s+"([^"]+)"\s*$')
 
 
-def resolve_includes(entry_path, shaders_root):
+def resolve_includes(entry_path, shaders_root, missing=None):
     """Return the fully-inlined source for entry_path.
 
     Iris rules: an include path starting with '/' is relative to the shaders/
@@ -397,6 +432,11 @@ def resolve_includes(entry_path, shaders_root):
     re-entered (a comment marker is emitted instead). Non-cyclic repeat
     includes ARE inlined again — the shader's own #ifndef guards (evaluated by
     glslang) collapse them, exactly as in a real compile.
+
+    If `missing` is a list, every unresolved #include is appended to it as
+    (includer_path, line_no, include_string, resolved_target). Iris hard-fails
+    the whole pack on a missing include, so callers turn a non-empty `missing`
+    into a hard failure (see lint_includes).
     """
     out_lines = []
 
@@ -406,11 +446,11 @@ def resolve_includes(entry_path, shaders_root):
             out_lines.append("// [validate.py] include cycle skipped: %s" % path)
             return
         if not os.path.isfile(path):
-            out_lines.append('// [validate.py] MISSING INCLUDE: %s' % path)
+            out_lines.append('// [validate.py] MISSING FILE: %s' % path)
             return
         stack = stack + [real]
         text = read_text(path)
-        for line in text.splitlines():
+        for i, line in enumerate(text.splitlines()):
             m = INCLUDE_RE.match(line)
             if not m:
                 out_lines.append(line)
@@ -420,6 +460,12 @@ def resolve_includes(entry_path, shaders_root):
                 target = os.path.join(shaders_root, inc.lstrip("/"))
             else:
                 target = os.path.join(os.path.dirname(path), inc)
+            if not os.path.isfile(target):
+                if missing is not None:
+                    missing.append((path, i + 1, inc, target))
+                out_lines.append('// [validate.py] MISSING INCLUDE "%s" (from %s:%d)'
+                                 % (inc, path, i + 1))
+                continue
             _inline(target, stack)
 
     _inline(entry_path, [])
@@ -461,15 +507,16 @@ def strip_option_defines(source, option_names):
     return "\n".join(keep)
 
 
-def build_injection(state, assembled_source):
+def build_injection(state, assembled_source, macro_stubs):
     """Build the block injected right after #version.
     state: dict optname -> (enabled, value)
+    macro_stubs: the target's Iris macro environment (TARGET_MACROS[target]).
     """
     out = []
-    out.append("// ==== injected by validate.py (Mac path) ====")
+    out.append("// ==== injected by validate.py ====")
 
-    # Iris macros, guarded so real defs win.
-    for name, value in IRIS_MACRO_STUBS.items():
+    # Iris macros for this target, guarded so real defs win.
+    for name, value in macro_stubs.items():
         out.append("#ifndef %s" % name)
         if value == "":
             out.append("#define %s" % name)
@@ -478,9 +525,12 @@ def build_injection(state, assembled_source):
         out.append("#endif")
 
     # Iris buffer-format identifiers (harmless placeholder ints, guarded).
-    out.append("// Iris buffer-format identifier stubs")
-    for i, fmt in enumerate(IRIS_FORMAT_STUBS):
-        out.append("#ifndef %s\n#define %s %d\n#endif" % (fmt, fmt, 33000 + i))
+    # F6: only inject these into files that actually declare a colortexNFormat
+    # const, so they don't mask a stray format identifier used elsewhere.
+    if COLORTEX_FORMAT_RE.search(assembled_source):
+        out.append("// Iris buffer-format identifier stubs")
+        for i, fmt in enumerate(IRIS_FORMAT_STUBS):
+            out.append("#ifndef %s\n#define %s %d\n#endif" % (fmt, fmt, 33000 + i))
 
     # Resolved option state.
     out.append("// options (resolved profile state)")
@@ -499,21 +549,13 @@ def build_injection(state, assembled_source):
         if references_symbol(assembled_source, sym) and not declares_uniform(assembled_source, sym):
             stub_lines.append(decl)
 
-    # Render-stage macros referenced but not defined.
+    # Render-stage macros: stub ONLY known ones (F3). Unknown MC_RENDER_STAGE_*
+    # tokens are deliberately left undefined here and caught by lint_render_stages
+    # so a typo surfaces as a clear failure instead of being masked.
     referenced_stages = set(re.findall(r"\bMC_RENDER_STAGE_[A-Z0-9_]+\b", assembled_source))
-    if referenced_stages:
-        assigned = 0
-        emitted = []
-        for name in KNOWN_RENDER_STAGES:
-            if name in referenced_stages and not defines_macro(assembled_source, name):
-                emitted.append("#ifndef %s\n#define %s %d\n#endif" % (name, name, assigned))
-            assigned += 1
-        # any unknown stages
-        for name in sorted(referenced_stages):
-            if name not in KNOWN_RENDER_STAGES and not defines_macro(assembled_source, name):
-                emitted.append("#ifndef %s\n#define %s %d\n#endif" % (name, name, assigned))
-                assigned += 1
-        stub_lines.extend(emitted)
+    for idx, name in enumerate(KNOWN_RENDER_STAGES):
+        if name in referenced_stages and not defines_macro(assembled_source, name):
+            stub_lines.append("#ifndef %s\n#define %s %d\n#endif" % (name, name, idx))
 
     if stub_lines:
         out.append("// Iris symbol stubs (only injected when missing)")
@@ -523,12 +565,12 @@ def build_injection(state, assembled_source):
     return "\n".join(out)
 
 
-def patch_source(program_source, shaders_root, program_path, state, option_names):
+def patch_source(program_path, shaders_root, state, option_names, macro_stubs):
     """Return the fully patched, glslang-ready source for one program under one
-    profile."""
+    profile and compile target."""
     assembled = resolve_includes(program_path, shaders_root)
     assembled = strip_option_defines(assembled, option_names)
-    injection = build_injection(state, assembled)
+    injection = build_injection(state, assembled, macro_stubs)
 
     lines = assembled.splitlines()
     # find the #version line (should be the first non-empty line)
@@ -604,13 +646,64 @@ def run_glslang(glslang_path, glslang_name, patched_path, stage):
 # Static lint checks
 # ---------------------------------------------------------------------------
 
-RENDERTARGETS_RE = re.compile(r"/\*\s*RENDERTARGETS\s*:", re.I)
 COLORTEX_FORMAT_RE = re.compile(r"const\s+int\s+colortex\d+Format\b")
-UNIFORM_SAMPLER_RE = re.compile(r"\buniform\s+[A-Za-z0-9_]*sampler[A-Za-z0-9_]*\b")
+
+# A `uniform <...>samplerXXX <declarator-list>;` statement. The declarator list
+# is captured so we can count comma-separated names (F1).
+UNIFORM_SAMPLER_STMT_RE = re.compile(
+    r"\buniform\s+(?:(?:lowp|mediump|highp)\s+)?"
+    r"[A-Za-z0-9_]*sampler[A-Za-z0-9_]*\s+([^;{}]*?);", re.S)
+
+# The RENDERTARGETS index list inside the directive comment (F4).
+RENDERTARGETS_LIST_RE = re.compile(r"/\*\s*RENDERTARGETS\s*:\s*([0-9,\s]+?)\*/", re.I)
+
+# A global fragment `out` declaration (optionally with an explicit location and
+# an array size). Function out-params don't match (they end in ')' not ';').
+FRAG_OUT_RE = re.compile(
+    r"(?:layout\s*\(\s*location\s*=\s*(\d+)\s*\)\s*)?"
+    r"\bout\s+(?:(?:lowp|mediump|highp|flat)\s+)*\w+\s+(\w+)\s*"
+    r"(?:\[\s*(\d+)\s*\])?\s*;")
 
 
-def lint_rendertargets(programs):
-    """Every .fsh except shadow/final must carry a RENDERTARGETS comment."""
+def strip_comments(text):
+    """Remove block and line comments (so commented-out code doesn't count)."""
+    text = re.sub(r"/\*.*?\*/", "", text, flags=re.S)
+    text = re.sub(r"//[^\n]*", "", text)
+    return text
+
+
+def count_samplers(code):
+    """Count sampler *declarators*, handling comma-separated lists and sampler
+    arrays. `uniform sampler2D a, b, c[4];` => 1 + 1 + 4 = 6."""
+    total = 0
+    for m in UNIFORM_SAMPLER_STMT_RE.finditer(code):
+        for decl in m.group(1).split(","):
+            decl = decl.strip()
+            if not decl:
+                continue
+            am = re.search(r"\[\s*(\d+)\s*\]", decl)
+            total += int(am.group(1)) if am else 1
+    return total
+
+
+def lint_includes(programs, shaders_root):
+    """Iris hard-fails on a missing #include; so do we (F2)."""
+    errs = []
+    for rel, path, stage in programs:
+        missing = []
+        resolve_includes(path, shaders_root, missing=missing)
+        for includer, line_no, inc, target in missing:
+            inc_rel = os.path.relpath(includer, shaders_root)
+            tgt_rel = os.path.relpath(target, shaders_root)
+            errs.append('%s: unresolved #include "%s" at %s:%d (looked for %s)'
+                        % (rel, inc, inc_rel, line_no, tgt_rel))
+    return errs
+
+
+def lint_rendertargets(programs, shaders_root):
+    """Every .fsh except shadow/final must carry a RENDERTARGETS comment, and
+    its index list must be internally consistent with the fragment's outputs
+    (F4): same count as `out` declarations, every index in 0..15, no dupes."""
     errs = []
     for rel, path, stage in programs:
         if stage != "frag":
@@ -618,25 +711,71 @@ def lint_rendertargets(programs):
         stem = os.path.splitext(os.path.basename(rel))[0]
         if stem in RENDERTARGETS_EXEMPT_STEMS:
             continue
-        if not RENDERTARGETS_RE.search(read_text(path)):
+        raw = read_text(path)
+        m = RENDERTARGETS_LIST_RE.search(raw)
+        if not m:
             errs.append("%s: missing /* RENDERTARGETS: ... */ comment" % rel)
+            continue
+        tokens = [t for t in re.split(r"[,\s]+", m.group(1).strip()) if t]
+        try:
+            idxs = [int(t) for t in tokens]
+        except ValueError:
+            errs.append("%s: malformed RENDERTARGETS list: %r" % (rel, m.group(1).strip()))
+            continue
+        if not idxs:
+            errs.append("%s: empty RENDERTARGETS list" % rel)
+            continue
+        for ix in idxs:
+            if ix < 0 or ix > 15:
+                errs.append("%s: RENDERTARGETS index %d out of range 0..15" % (rel, ix))
+        if len(set(idxs)) != len(idxs):
+            errs.append("%s: RENDERTARGETS has duplicate index(es): %s"
+                        % (rel, ", ".join(str(i) for i in idxs)))
+
+        # Count fragment outputs in the assembled source.
+        code = strip_comments(resolve_includes(path, shaders_root))
+        out_count = 0
+        out_locs = []
+        for om in FRAG_OUT_RE.finditer(code):
+            size = int(om.group(3)) if om.group(3) else 1
+            out_count += size
+            if om.group(1) is not None:
+                out_locs.append(int(om.group(1)))
+        if out_count != len(idxs):
+            errs.append("%s: %d fragment `out` target(s) but %d RENDERTARGETS entry(ies)"
+                        % (rel, out_count, len(idxs)))
+        if out_locs and sorted(out_locs) != list(range(len(out_locs))):
+            errs.append("%s: explicit `out` locations %s are not a contiguous 0..N-1 set"
+                        % (rel, sorted(out_locs)))
     return errs
 
 
 def lint_sampler_budget(programs, shaders_root):
     """No fragment program may declare > MAX_FRAGMENT_SAMPLERS samplers
-    (post-include)."""
+    (post-include). Counts declarators, not statements (F1)."""
     errs = []
     for rel, path, stage in programs:
         if stage != "frag":
             continue
-        assembled = resolve_includes(path, shaders_root)
-        # strip block comments so commented-out samplers don't count
-        code = re.sub(r"/\*.*?\*/", "", assembled, flags=re.S)
-        code = re.sub(r"//[^\n]*", "", code)
-        n = len(UNIFORM_SAMPLER_RE.findall(code))
+        code = strip_comments(resolve_includes(path, shaders_root))
+        n = count_samplers(code)
         if n > MAX_FRAGMENT_SAMPLERS:
             errs.append("%s: %d fragment samplers (max %d)" % (rel, n, MAX_FRAGMENT_SAMPLERS))
+    return errs
+
+
+def lint_render_stages(programs, shaders_root):
+    """Any referenced MC_RENDER_STAGE_* not on KNOWN_RENDER_STAGES is a typo /
+    invalid stage and fails (F3). A shader may define its own as an escape
+    hatch (then it isn't 'unknown')."""
+    errs = []
+    known = set(KNOWN_RENDER_STAGES)
+    for rel, path, stage in programs:
+        code = strip_comments(resolve_includes(path, shaders_root))
+        for tok in sorted(set(re.findall(r"\bMC_RENDER_STAGE_[A-Z0-9_]+\b", code))):
+            if tok not in known and not defines_macro(code, tok):
+                errs.append("%s: unknown render-stage macro %s "
+                            "(typo? not a valid Iris MC_RENDER_STAGE_*)" % (rel, tok))
     return errs
 
 
