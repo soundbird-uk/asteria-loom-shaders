@@ -185,6 +185,10 @@ void main() {
     // Normalize by Σ(projLen). Guard against zero (all slices skipped: normal
     // parallel to every slice plane, or degenerate) -> treat as unoccluded.
     float rawAO = (projLenSum > 1e-4) ? alSaturate(visibility / projLenSum) : 1.0;
+    // Belt & braces: strip any non-finite result before it can enter history.
+    // A range test (NOT clamp) is used because NaN fails every comparison, so
+    // garbage falls through to the safe default even under fast-math builds.
+    rawAO = (rawAO >= 0.0 && rawAO <= 1.0) ? rawAO : 1.0;
 
     // --- Temporal accumulation --------------------------------------------
     vec3  playerPos = alViewToPlayer(viewPos);
@@ -194,19 +198,38 @@ void main() {
     float ao   = rawAO;
     float conf = AL_AO_CONF_STEP;   // fresh sample (no accepted history yet)
 
+    // NaN-proof, self-healing history. colortex5 has clear=false, so its
+    // FIRST-frame contents are UNDEFINED (Apple GL does not reliably zero-init —
+    // garbage/NaN). If a NaN reached the blend it would be written back into
+    // colortex4 and (via composite) back into colortex5, self-reinfecting the
+    // history forever and blacking out the world on macOS. Every gate below is a
+    // comparison that NaN CANNOT pass, so any poison falls through to the reset
+    // branch (ao = rawAO); accepted values are additionally clamped.
     if (prevScr.x > 0.0 && prevScr.x < 1.0 &&
         prevScr.y > 0.0 && prevScr.y < 1.0) {
-        vec4  hist    = texture(colortex5, prevScr.xy);
-        float histZ   = hist.b;
+        vec4  hist    = texture(colortex5, prevScr.xy);   // r=AO, g=conf, b=linZ
         float expectZ = alLinearEyeDepth(prevView);
-        float relErr  = abs(expectZ - histZ) / max(histZ, 0.001);
-        if (histZ > 0.0 && relErr < AL_AO_DEPTH_REJECT) {
-            float prevConf = hist.g;
-            float blend    = min(AL_AO_MAX_BLEND, prevConf);
-            ao   = mix(rawAO, hist.r, blend);
-            conf = min(prevConf + AL_AO_CONF_STEP, AL_AO_CONF_MAX);
+
+        // Range validation — rejects NaN AND out-of-range garbage alike.
+        bool histValid = (hist.r >= 0.0) && (hist.r <= 1.0) &&
+                         (hist.g >= 0.0) && (hist.g <= 1.0) &&
+                         (hist.b >  0.0) && (hist.b <  65000.0) &&
+                         (expectZ > 0.0) && (expectZ < 65000.0);
+        if (histValid) {
+            float relErr = abs(expectZ - hist.b) / max(hist.b, 0.001);
+            if (relErr < AL_AO_DEPTH_REJECT) {
+                float prevConf = clamp(hist.g, 0.0, AL_AO_CONF_MAX);
+                float histAO   = clamp(hist.r, 0.0, 1.0);
+                float blend    = min(AL_AO_MAX_BLEND, prevConf);
+                ao   = mix(rawAO, histAO, blend);
+                conf = min(prevConf + AL_AO_CONF_STEP, AL_AO_CONF_MAX);
+            }
         }
     }
 
+    // Final sanitize so NO non-finite value can EVER be emitted into colortex4
+    // (and thence colortex5). Range tests, not clamp — see rawAO note above.
+    ao   = (ao   >= 0.0 && ao   <= 1.0)            ? ao   : 1.0;
+    conf = (conf >= 0.0 && conf <= AL_AO_CONF_MAX) ? conf : AL_AO_CONF_STEP;
     outAO = vec2(ao, conf);
 }

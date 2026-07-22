@@ -45,9 +45,16 @@ void main() {
     outColor = texture(colortex0, texcoord);
 
     // AO history: r = AO, g = confidence, b = linear eye depth of this sample.
+    // Clamp everything copied here (range tests, not clamp() — NaN fails every
+    // comparison and falls through to the safe default) so the persistent
+    // colortex5 can never carry a non-finite value forward, even if a stray NaN
+    // slipped into colortex4.
     vec2  ao    = texture(colortex4, texcoord).rg;
     float depth = texture(depthtex1, texcoord).r;
+    float aoR   = (ao.r >= 0.0 && ao.r <= 1.0) ? ao.r : 1.0;
+    float aoG   = (ao.g >= 0.0 && ao.g <= 1.0) ? ao.g : 0.0;
     float linZ  = (depth >= 1.0) ? 0.0
                                  : alLinearEyeDepth(alScreenToView(texcoord, depth));
-    outHistory = vec4(ao.r, ao.g, linZ, 1.0);
+    linZ = (linZ >= 0.0 && linZ < 65000.0) ? linZ : 0.0;
+    outHistory = vec4(aoR, aoG, linZ, 1.0);
 }

@@ -117,8 +117,12 @@ void main() {
     // time: with AO off, colortex4 is cleared and must not be read.
     float ao = 1.0;
 #ifdef AO
-    ao = texture(colortex4, texcoord).r;
-    ao = pow(alSaturate(ao), AO_STRENGTH);
+    // Range-test the AO read (NaN fails the comparison and falls back to 1.0 =
+    // fully lit, so a poisoned history frame can never blacken the scene) before
+    // the pow — pow(NaN,..) would propagate NaN through all indirect light.
+    float aoRaw = texture(colortex4, texcoord).r;
+    aoRaw = (aoRaw >= 0.0 && aoRaw <= 1.0) ? aoRaw : 1.0;
+    ao = pow(aoRaw, AO_STRENGTH);
 #endif
 
     vec3 color = alLightPhase1(albedoLin, N, lm, shadowVis, wLightDir, dayFactor, ao);
