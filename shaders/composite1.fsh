@@ -49,9 +49,9 @@
    (lib/fog.glsl) so the pack degrades gracefully if they ever change.
  --------------------------------------------------------------------------
 
- Sampler count: 3 (colortex0, depthtex0, + colortex6 via the atmosphere
- include). Budget ≤5. No loops; a couple of exp() only — trivially cheap, kept
- on in every profile.
+ Sampler count: 4 (colortex0, colortex2, depthtex0, + colortex6 via the
+ atmosphere include). Budget ≤5. No loops; a couple of exp() only — trivially
+ cheap, kept on in every profile.
 */
 
 // colortex6 (sky-view LUT tile) is declared and OWNED by lib/atmosphere.glsl
@@ -60,6 +60,7 @@
 // The LUT read is range-validated NaN-proof there AND again around the result
 // in lib/fog.glsl (clear=false buffer, analytic-sky fallback).
 uniform sampler2D colortex0;   // scene HDR (sky + lit scene + translucents + clouds)
+uniform sampler2D colortex2;   // G-buffer: normal.rg (octahedral), lightmap.ba (block, sky)
 uniform sampler2D depthtex0;   // translucent-inclusive depth
 
 // Weather (verified). rainStrength/wetness/thunderStrength drive density/tint.
@@ -107,10 +108,14 @@ void main() {
     float dist      = length(playerPos);
     vec3  worldDir  = (dist > 1.0e-4) ? playerPos / dist : vec3(0.0, 1.0, 0.0);
 
+    // Sky-exposure gate input: raw sky lightmap (colortex2.a). Range-clamped so
+    // a stray value can't push the smoothstep out of [0,1].
+    float skyLm = alSaturate(texture(colortex2, texcoord).a);
+
     vec3 fogged = alApplyAerialFog(scene, cameraPosition.y, worldDir, dist,
-                                   FOG_DENSITY, biome_category, temperature,
-                                   rainfall, rainStrength, wetness,
-                                   thunderStrength);
+                                   FOG_DENSITY, skyLm, biome_category,
+                                   temperature, rainfall, rainStrength,
+                                   wetness, thunderStrength);
 
     // Clamp the output (NaN-safe: a non-finite result falls back to the raw
     // scene rather than propagating).
