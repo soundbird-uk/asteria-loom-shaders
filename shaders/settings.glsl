@@ -74,13 +74,16 @@
 
 // --- Blocklight shaping (internal, not GUI) -------------------------------
 // These scalars tune the falloff so a campfire warms a ~6-block radius at night
-// while its peak stays just under the warm-sun luminance. Edit + hot-reload.
-//   BASE     overall lift of the whole block-light term (the 0.1.1 fix's punch)
-//   FALLOFF  perceptual power on the lightmap (higher = tighter to the source)
+// while its peak stays at ~0.1.1's adjacent-torch brightness (the 0.2.0 field
+// test found 0.2.0 too bright at night — the fix is to LIFT the mid/far reach
+// without raising the peak). Edit + hot-reload.
+//   BASE     overall lift; tuned so bl==1 luminance matches the old 0.1.1 peak
+//   FALLOFF  perceptual power on the lightmap; lowered from 2.2 so the mid range
+//            (grass a few blocks from the fire) reads instead of dying out
 //   TAIL     blend toward a gentler quadratic so distant grass keeps a glow
-#define AL_BLOCKLIGHT_BASE    1.10
-#define AL_BLOCKLIGHT_FALLOFF 2.20
-#define AL_BLOCKLIGHT_TAIL    0.30
+#define AL_BLOCKLIGHT_BASE    0.92
+#define AL_BLOCKLIGHT_FALLOFF 1.70
+#define AL_BLOCKLIGHT_TAIL    0.35
 
 // Night ambient floor — how readable open terrain stays after dark. Keeps a
 // cool-blue minimum so nothing goes pitch black under the night sky.
@@ -260,11 +263,15 @@ const vec3 AL_AMBIENT_SKY = vec3(0.34, 0.46, 0.82);
 const vec3 AL_AMBIENT_GROUND = vec3(0.30, 0.27, 0.28);
 
 // Sky-lightmap window over which the cool ambient desaturates toward neutral
-// grey. Below LO the tint is fully greyed (caves / deep underwater — no purple
-// cast); above HI the full cool blue-purple identity is kept (open shade). The
-// midpoint sits near sky-lightmap ~0.3 per the 0.1.1 field feedback.
-#define AL_AMBIENT_DESAT_LO 0.15
-#define AL_AMBIENT_DESAT_HI 0.45
+// grey. Below LO the tint is fully greyed (caves / deep dark water — no purple
+// cast); above HI the full cool blue-purple identity is kept. Narrowed for the
+// 0.2.0 field test: the old 0.15-0.45 window greyed out normal above-ground
+// shade (under trees / overhangs, sky-lm ~0.3-0.5), which read as "just normal
+// Minecraft". This 0.05-0.30 window keeps the signature cool tint for anything
+// with sky-lm >= 0.30 (all ordinary daylight shade) and only greys the genuinely
+// sky-starved: caves and deep/dark water.
+#define AL_AMBIENT_DESAT_LO 0.05
+#define AL_AMBIENT_DESAT_HI 0.30
 
 // Warm torch / block-light colour (used when BLOCKLIGHT_TINT is OFF — a single
 // flat tint).

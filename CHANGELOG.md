@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-07-22
+
+Hotfix for regressions found testing 0.2.0 on real hardware (M4 Mac + Windows).
+
+### Fixed
+
+- **World invisible on macOS.** The never-cleared AO history buffer starts with
+  undefined contents; on Apple's GL that could be NaN, which self-reinfected the
+  temporal history and blackened all lighting from the first frame. History reads
+  are now range-validated (NaN cannot pass a comparison), the GTAO math is
+  domain-clamped throughout, and non-finite values can no longer be written.
+- **Distant shadows disappeared.** Shadow bias and normal offset scaled linearly
+  with the distortion warp's local texel size, reaching metre-plus magnitudes at
+  range and deleting far shadows. Normal offset is now hard-capped at 0.30 m and
+  depth bias uses a square-root curve with an absolute cap.
+- **Moiré artifacts on ice** (and other flat translucents at grazing sun): added a
+  quadratic grazing-angle bias term and a 2.5-texel minimum PCF radius that turns
+  residual coherent acne into frame-averaged noise.
+- **Profile selector missing from the settings GUI** — the main screen was missing
+  the `<profile>` element; Potato–Ultra can now be selected in-game.
+- **Night too bright / identity washed out.** Blocklight peak returned to the
+  0.1.x level while keeping the extended 6-block warm reach, and the cave/water
+  ambient desaturation window was narrowed so ordinary daylight shade keeps the
+  full cool blue-purple identity.
+
 ## [0.2.0] - 2026-07-22
 
 Phase 2 — lighting & shadows. PCSS soft shadows, GTAO, and the field-feedback
