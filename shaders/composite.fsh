@@ -19,12 +19,21 @@
  With AO off the AO pass is not dispatched and colortex4 is a cleared (0,0)
  buffer; copying it here is harmless (nothing reads colortex5 in that case).
 
- Sampler count: 3 (colortex0, colortex4, depthtex0)
+ DEPTH SOURCE: history depth is read from depthtex1 (NO translucents), NOT
+ depthtex0. The AO pass (deferred) runs pre-translucents and reconstructs from
+ opaque-only depth; composite runs POST-translucents, so depthtex0 here is
+ translucent-inclusive. Stamping history with a translucent surface's depth
+ would make next frame's reproject test mismatch the opaque surface behind
+ water/glass/particles every frame (5% depth-reject always fires) — AO never
+ accumulates and shimmers on submerged terrain. depthtex1 matches what the AO
+ pass actually sampled.
+
+ Sampler count: 3 (colortex0, colortex4, depthtex1)
 */
 
 uniform sampler2D colortex0;   // scene HDR
 uniform sampler2D colortex4;   // this frame's AO (r), confidence (g)
-uniform sampler2D depthtex0;
+uniform sampler2D depthtex1;   // opaque-only depth (matches the AO pass)
 
 in vec2 texcoord;
 

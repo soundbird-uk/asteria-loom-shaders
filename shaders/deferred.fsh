@@ -44,7 +44,8 @@ uniform sampler2D noisetex;    // 256x256 blue-ish noise, per-pixel rotation
 uniform mat4 gbufferProjection;   // view -> clip (screen search radius)
 uniform mat4 gbufferModelView;    // world -> view (normal transform)
 
-uniform int frameCounter;
+uniform int   frameCounter;
+uniform float viewHeight;         // framebuffer height in pixels (NOT a sampler)
 
 in vec2 texcoord;
 
@@ -85,7 +86,11 @@ void main() {
     // screen. gbufferProjection[0][0]/[1][1] carry the fov/aspect scale.
     vec2 radiusUV = 0.5 * vec2(gbufferProjection[0][0], gbufferProjection[1][1])
                         * (AL_AO_RADIUS / max(linZ, 0.05));
-    radiusUV = clamp(radiusUV, vec2(1.5 / 1080.0), vec2(AL_AO_MAX_RADIUS_UV));
+    // Floor at ~1.5 px (in UV) so the search never collapses sub-pixel; ceil so
+    // near geometry doesn't march the whole screen. Uses the real framebuffer
+    // height (viewHeight) rather than a hard-coded resolution.
+    float minRadiusUV = 1.5 / max(viewHeight, 1.0);
+    radiusUV = clamp(radiusUV, vec2(minRadiusUV), vec2(AL_AO_MAX_RADIUS_UV));
 
     // --- Per-pixel rotation + per-frame R2 advance ------------------------
     vec2  nz = texture(noisetex, gl_FragCoord.xy / 256.0).xy;
@@ -94,7 +99,11 @@ void main() {
     float stepJitter  = fract(nz.y + float(frameCounter) * 0.56984029099805327);
 
     // --- GTAO slice loop --------------------------------------------------
+    // Jimenez normalizes the accumulated visibility by the sum of the
+    // projected-normal lengths (NOT the slice count): projLen <= 1, so dividing
+    // by the count over-darkens view-grazing surfaces. Track the sum instead.
     float visibility = 0.0;
+    float projLenSum = 0.0;
 
     for (int s = 0; s < AL_AO_SLICES; s++) {
         float phi = (float(s) + sliceJitter) * (AL_PI / float(AL_AO_SLICES));
@@ -170,9 +179,12 @@ void main() {
         float slice = 0.25 * ( (-cos(2.0 * H1 - n) + cosN + 2.0 * H1 * sinN)
                              + (-cos(2.0 * H2 - n) + cosN + 2.0 * H2 * sinN) );
         visibility += projLen * slice;
+        projLenSum += projLen;
     }
 
-    float rawAO = alSaturate(visibility / float(AL_AO_SLICES));
+    // Normalize by Σ(projLen). Guard against zero (all slices skipped: normal
+    // parallel to every slice plane, or degenerate) -> treat as unoccluded.
+    float rawAO = (projLenSum > 1e-4) ? alSaturate(visibility / projLenSum) : 1.0;
 
     // --- Temporal accumulation --------------------------------------------
     vec3  playerPos = alViewToPlayer(viewPos);
