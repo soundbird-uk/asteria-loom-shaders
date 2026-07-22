@@ -17,8 +17,13 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y glslang-tools zip
 
-      - name: Validate shaders (all profiles x all programs)
-        run: python3 tools/validate.py
+      - name: Validate shaders (all profiles x all programs, both targets)
+        # --target both compiles each program under the mac path (MC_OS_MAC,
+        # GL 4.1, AL_ADVANCED_TIER off) AND the advanced path (MC_OS_WINDOWS,
+        # GL 4.6, IRIS_FEATURE_* on). Inert in Phase 1; gives the advanced tier
+        # syntax coverage from Phase 6 on. Sources stay `#version 330
+        # compatibility`, so this validates branch selection, not GL 4.6 syntax.
+        run: python3 tools/validate.py --target both
 
       - name: Package installable zip
         run: python3 tools/package.py --version ci

@@ -854,6 +854,7 @@ class ValidationResult:
         self.glslang_available = True
         self.profiles = []
         self.programs = []
+        self.targets = []
 
     def any_failures(self):
         if self.setup_errors or self.lint_fails:
@@ -865,9 +866,12 @@ class ValidationResult:
 
 
 def run_validation(shaders_root, out_dir, profile_filter=None, program_glob=None,
-                   keep=False, require_glslang=True, verbose=True):
+                   keep=False, require_glslang=True, verbose=True, targets=None):
     """Core pipeline. Returns a ValidationResult."""
     result = ValidationResult()
+    if targets is None:
+        targets = ["mac"]
+    result.targets = list(targets)
 
     props_path = os.path.join(shaders_root, "shaders.properties")
     settings_path = os.path.join(shaders_root, "settings.glsl")
@@ -897,8 +901,10 @@ def run_validation(shaders_root, out_dir, profile_filter=None, program_glob=None
     all_programs = discover_programs(shaders_root)
     result.programs = [rel for rel, _p, _s in all_programs]
 
-    result.lint_fails += lint_rendertargets(all_programs)
+    result.lint_fails += lint_includes(all_programs, shaders_root)
+    result.lint_fails += lint_rendertargets(all_programs, shaders_root)
     result.lint_fails += lint_sampler_budget(all_programs, shaders_root)
+    result.lint_fails += lint_render_stages(all_programs, shaders_root)
     result.lint_fails += lint_buffer_formats(shaders_root)
     of, ow = lint_option_consistency(options, profile_refs, screen_refs, lang_keys)
     result.lint_fails += of
@@ -936,23 +942,25 @@ def run_validation(shaders_root, out_dir, profile_filter=None, program_glob=None
                 "(cannot run the compile gate)")
             return result
 
-    # --- compile every profile x program ---
+    # --- compile every target x profile x program ---
     if os.path.isdir(out_dir):
         shutil.rmtree(out_dir)
-    for profile in profile_names:
-        state = profiles[profile]
-        prof_out = os.path.join(out_dir, profile)
-        for rel, path, stage in programs:
-            patched = patch_source(path, shaders_root, path, state, option_names)
-            dest = os.path.join(prof_out, rel)
-            os.makedirs(os.path.dirname(dest), exist_ok=True)
-            with open(dest, "w", encoding="utf-8") as f:
-                f.write(patched)
-            if result.glslang_available:
-                ok, output = run_glslang(glslang_path, glslang_name, dest, stage)
-            else:
-                ok, output = True, "(glslang unavailable — compile skipped)"
-            result.compile_results[(profile, rel)] = (ok, output)
+    for target in targets:
+        macro_stubs = TARGET_MACROS[target]
+        for profile in profile_names:
+            state = profiles[profile]
+            prof_out = os.path.join(out_dir, target, profile)
+            for rel, path, stage in programs:
+                patched = patch_source(path, shaders_root, state, option_names, macro_stubs)
+                dest = os.path.join(prof_out, rel)
+                os.makedirs(os.path.dirname(dest), exist_ok=True)
+                with open(dest, "w", encoding="utf-8") as f:
+                    f.write(patched)
+                if result.glslang_available:
+                    ok, output = run_glslang(glslang_path, glslang_name, dest, stage)
+                else:
+                    ok, output = True, "(glslang unavailable — compile skipped)"
+                result.compile_results[(target, profile, rel)] = (ok, output)
 
     if not keep and os.path.isdir(out_dir):
         shutil.rmtree(out_dir)
@@ -972,27 +980,28 @@ def print_report(result, verbose=True):
         for e in result.setup_errors:
             out.write("  - %s\n" % e)
 
-    # Compile summary table.
+    # Compile summary table — one matrix per target.
     if result.compile_results:
         profiles = result.profiles
-        programs = sorted({rel for (_p, rel) in result.compile_results})
+        programs = sorted({rel for (_t, _p, rel) in result.compile_results})
         namew = max([len(p) for p in programs] + [7]) + 2
-        out.write("\nCompile matrix (profile x program):\n\n")
-        header = " " * (namew + 2) + "".join("%-9s" % p for p in profiles)
-        out.write(header + "\n")
-        for rel in programs:
-            row = "  %-*s" % (namew, rel)
-            for prof in profiles:
-                ok, _ = result.compile_results.get((prof, rel), (True, ""))
-                row += "%-9s" % ("OK" if ok else "FAIL")
-            out.write(row + "\n")
+        for target in result.targets:
+            out.write("\nCompile matrix [target=%s] (profile x program):\n\n" % target)
+            header = " " * (namew + 2) + "".join("%-9s" % p for p in profiles)
+            out.write(header + "\n")
+            for rel in programs:
+                row = "  %-*s" % (namew, rel)
+                for prof in profiles:
+                    ok, _ = result.compile_results.get((target, prof, rel), (True, ""))
+                    row += "%-9s" % ("OK" if ok else "FAIL")
+                out.write(row + "\n")
 
     # Full glslang output for failures.
     fails = [(k, v) for k, v in result.compile_results.items() if not v[0]]
     if fails:
         out.write("\nCOMPILE FAILURES:\n")
-        for (prof, rel), (_ok, output) in sorted(fails):
-            out.write("\n--- [%s] %s ---\n" % (prof, rel))
+        for (target, prof, rel), (_ok, output) in sorted(fails):
+            out.write("\n--- [target=%s] [%s] %s ---\n" % (target, prof, rel))
             out.write(output.rstrip() + "\n")
 
     if result.lint_fails:
@@ -1012,8 +1021,9 @@ def print_report(result, verbose=True):
                   % (n_compile_fail, len(result.lint_fails)))
     else:
         note = "" if result.glslang_available else " [glslang unavailable — compile skipped]"
-        out.write("\nRESULT: PASS%s (%d program(s) x %d profile(s), %d warning(s))\n"
-                  % (note, len(result.programs), len(result.profiles), len(result.lint_warns)))
+        out.write("\nRESULT: PASS%s (%d program(s) x %d profile(s) x %d target(s) [%s], %d warning(s))\n"
+                  % (note, len(result.programs), len(result.profiles), len(result.targets),
+                     ",".join(result.targets), len(result.lint_warns)))
 
 
 # ---------------------------------------------------------------------------
@@ -1163,22 +1173,30 @@ def self_test():
 
         if have_glslang:
             # good program compiles under POTATO and HIGH (EXTRA_BROKEN off)
-            check(res.compile_results[("POTATO", "deferred.fsh")][0],
+            check(res.compile_results[("mac", "POTATO", "deferred.fsh")][0],
                   "good .fsh compiles under POTATO (EXTRA_BROKEN disabled)")
-            check(res.compile_results[("HIGH", "deferred.fsh")][0],
+            check(res.compile_results[("mac", "HIGH", "deferred.fsh")][0],
                   "good .fsh compiles under HIGH")
-            check(res.compile_results[("POTATO", "deferred.vsh")][0],
+            check(res.compile_results[("mac", "POTATO", "deferred.vsh")][0],
                   "good .vsh compiles under POTATO")
             # under BROKENON, EXTRA_BROKEN is defined -> broken code compiled in
-            check(not res.compile_results[("BROKENON", "deferred.fsh")][0],
+            check(not res.compile_results[("mac", "BROKENON", "deferred.fsh")][0],
                   "profile define injection works: EXTRA_BROKEN=on breaks the .fsh")
+
+        # good programs pass under --target both (restrict to the profiles that
+        # are meant to compile; BROKENON exists specifically to fail).
+        res_both = run_validation(sh, out_dir, keep=False, require_glslang=False,
+                                  verbose=False, targets=["mac", "advanced"],
+                                  profile_filter={"POTATO", "HIGH"})
+        check(not res_both.any_failures(),
+              "good programs pass under --target both (mac + advanced), POTATO/HIGH")
 
         # --- Part 2: an always-broken program should FAIL ---
         _write(os.path.join(sh, "composite.fsh"), SELFTEST_BROKEN_FSH)
         _write(os.path.join(sh, "composite.vsh"), SELFTEST_GOOD_VSH)
         res2 = run_validation(sh, out_dir, keep=False, require_glslang=False, verbose=False)
         if have_glslang:
-            check(not res2.compile_results[("HIGH", "composite.fsh")][0],
+            check(not res2.compile_results[("mac", "HIGH", "composite.fsh")][0],
                   "always-broken .fsh is caught as a compile FAILURE")
             check(res2.any_failures(), "overall result is FAIL when a program is broken")
         os.remove(os.path.join(sh, "composite.fsh"))
@@ -1210,6 +1228,73 @@ def self_test():
               "profile referencing a non-existent option is caught")
         _write(os.path.join(sh, "shaders.properties"), SELFTEST_PROPERTIES)
 
+        # --- Regression F1: comma-separated sampler list over budget ---
+        samplers = ", ".join("s%d" % i for i in range(17))  # 17 samplers, one stmt
+        _write(os.path.join(sh, "composite.fsh"),
+               "#version 330 compatibility\n/* RENDERTARGETS: 0 */\n"
+               "uniform sampler2D %s;\nout vec4 c;\nvoid main(){ c = texture(s0, vec2(0.0)); }\n"
+               % samplers)
+        _write(os.path.join(sh, "composite.vsh"), SELFTEST_GOOD_VSH)
+        resF1 = run_validation(sh, out_dir, keep=False, require_glslang=False, verbose=False)
+        check(any("composite.fsh" in e and "17 fragment samplers" in e for e in resF1.lint_fails),
+              "F1: comma-separated 17-sampler declaration is counted and fails the 16 budget")
+        os.remove(os.path.join(sh, "composite.fsh"))
+        os.remove(os.path.join(sh, "composite.vsh"))
+
+        # --- Regression F2: unresolved #include hard-fails ---
+        _write(os.path.join(sh, "composite.fsh"),
+               '#version 330 compatibility\n/* RENDERTARGETS: 0 */\n'
+               '#include "/lib/does_not_exist.glsl"\nout vec4 c;\nvoid main(){ c = vec4(1.0); }\n')
+        _write(os.path.join(sh, "composite.vsh"), SELFTEST_GOOD_VSH)
+        resF2 = run_validation(sh, out_dir, keep=False, require_glslang=False, verbose=False)
+        check(any("composite.fsh" in e and "unresolved #include" in e and "does_not_exist" in e
+                  for e in resF2.lint_fails),
+              "F2: an unresolved #include is a hard lint failure (with includer:line)")
+        os.remove(os.path.join(sh, "composite.fsh"))
+        os.remove(os.path.join(sh, "composite.vsh"))
+
+        # --- Regression F3: unknown MC_RENDER_STAGE_* fails (typo) ---
+        _write(os.path.join(sh, "composite.fsh"),
+               "#version 330 compatibility\n/* RENDERTARGETS: 0 */\n"
+               "uniform int renderStage;\nout vec4 c;\n"
+               "void main(){ c = vec4(renderStage == MC_RENDER_STAGE_VOIDD ? 1.0 : 0.0); }\n")
+        _write(os.path.join(sh, "composite.vsh"), SELFTEST_GOOD_VSH)
+        resF3 = run_validation(sh, out_dir, keep=False, require_glslang=False, verbose=False)
+        check(any("composite.fsh" in e and "MC_RENDER_STAGE_VOIDD" in e for e in resF3.lint_fails),
+              "F3: a misspelled MC_RENDER_STAGE_* is caught (not silently stubbed)")
+        # and a correctly-spelled stage does NOT fail
+        _write(os.path.join(sh, "composite.fsh"),
+               "#version 330 compatibility\n/* RENDERTARGETS: 0 */\n"
+               "uniform int renderStage;\nout vec4 c;\n"
+               "void main(){ c = vec4(renderStage == MC_RENDER_STAGE_STARS ? 1.0 : 0.0); }\n")
+        resF3b = run_validation(sh, out_dir, keep=False, require_glslang=False, verbose=False)
+        check(not any("MC_RENDER_STAGE_STARS" in e for e in resF3b.lint_fails),
+              "F3: a valid MC_RENDER_STAGE_* is accepted")
+        if have_glslang:
+            check(resF3b.compile_results[("mac", "HIGH", "composite.fsh")][0],
+                  "F3: valid render-stage program also compiles (stub injected)")
+        os.remove(os.path.join(sh, "composite.fsh"))
+        os.remove(os.path.join(sh, "composite.vsh"))
+
+        # --- Regression F4: out-count vs RENDERTARGETS mismatch fails ---
+        _write(os.path.join(sh, "composite.fsh"),
+               "#version 330 compatibility\n/* RENDERTARGETS: 0 */\n"
+               "out vec4 a;\nout vec4 b;\nvoid main(){ a = vec4(1.0); b = vec4(0.0); }\n")
+        _write(os.path.join(sh, "composite.vsh"), SELFTEST_GOOD_VSH)
+        resF4 = run_validation(sh, out_dir, keep=False, require_glslang=False, verbose=False)
+        check(any("composite.fsh" in e and "RENDERTARGETS" in e and "target(s)" in e
+                  for e in resF4.lint_fails),
+              "F4: 2 outs but 1 RENDERTARGETS entry is caught as a mismatch")
+        # duplicate index is also caught
+        _write(os.path.join(sh, "composite.fsh"),
+               "#version 330 compatibility\n/* RENDERTARGETS: 1,1 */\n"
+               "out vec4 a;\nout vec4 b;\nvoid main(){ a = vec4(1.0); b = vec4(0.0); }\n")
+        resF4b = run_validation(sh, out_dir, keep=False, require_glslang=False, verbose=False)
+        check(any("composite.fsh" in e and "duplicate" in e for e in resF4b.lint_fails),
+              "F4: duplicate RENDERTARGETS index is caught")
+        os.remove(os.path.join(sh, "composite.fsh"))
+        os.remove(os.path.join(sh, "composite.vsh"))
+
         print("")
         if failures:
             print("SELF-TEST FAILED: %d assertion(s) failed" % len(failures))
@@ -1240,6 +1325,9 @@ def main(argv=None):
                     help="restrict to a profile (repeatable)")
     ap.add_argument("--program", default=None,
                     help="restrict to programs matching this glob (e.g. 'gbuffers_*.fsh')")
+    ap.add_argument("--target", choices=["mac", "advanced", "both"], default="mac",
+                    help="compile-macro environment(s): mac (M4 path, default), "
+                         "advanced (Windows/AL_ADVANCED_TIER path), or both")
     ap.add_argument("--keep", action="store_true",
                     help="keep the patched output under --out instead of deleting it")
     ap.add_argument("--self-test", action="store_true",
@@ -1254,12 +1342,15 @@ def main(argv=None):
     repo_root = os.path.dirname(shaders_root)
     out_dir = args.out or os.path.join(repo_root, "out", "patched")
 
+    targets = ["mac", "advanced"] if args.target == "both" else [args.target]
+
     result = run_validation(
         shaders_root, out_dir,
         profile_filter=set(args.profile) if args.profile else None,
         program_glob=args.program,
         keep=args.keep,
         require_glslang=True,
+        targets=targets,
     )
     print_report(result)
 
