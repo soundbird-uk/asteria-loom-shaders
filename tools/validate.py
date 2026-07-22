@@ -1461,6 +1461,40 @@ def self_test():
             check(res.compile_results[("mac", "HIGH", "deferred.fsh")][0],
                   "const(c): const option is NOT #define-injected (program still compiles)")
 
+        # --- Regression F2 (mac-hw target): the SEPARATE_HARDWARE_SAMPLERS flag
+        # must be injected under MC_OS_MAC for the M4's hardware-PCSS branch.
+        # hwtest.fsh: the flag branch is valid; the else branch is broken. So it
+        # compiles under mac-hw (flag ON) and FAILS under plain mac (flag OFF) —
+        # proving the flag genuinely flips per target, not that the code is
+        # always valid. ---
+        _write(os.path.join(sh, "hwtest.fsh"),
+               "#version 330 compatibility\n/* RENDERTARGETS: 0 */\n"
+               "out vec4 c;\n"
+               "#ifdef IRIS_FEATURE_SEPARATE_HARDWARE_SAMPLERS\n"
+               "uniform sampler2DShadow shadowtex0HW;   // only on the HW path\n"
+               "#endif\n"
+               "void main(){\n"
+               "#ifdef IRIS_FEATURE_SEPARATE_HARDWARE_SAMPLERS\n"
+               "    c = vec4(1.0);                       // valid HW-path code\n"
+               "#else\n"
+               "    @@@ not-valid-glsl @@@ ;             // active only when flag OFF\n"
+               "#endif\n"
+               "}\n")
+        _write(os.path.join(sh, "hwtest.vsh"), SELFTEST_GOOD_VSH)
+        resHW = run_validation(sh, out_dir, keep=False, require_glslang=False,
+                               verbose=False, targets=["mac", "mac-hw", "advanced"])
+        check(resHW.targets == ["mac", "mac-hw", "advanced"],
+              "mac-hw: three targets run (mac, mac-hw, advanced)")
+        if have_glslang:
+            check(resHW.compile_results[("mac-hw", "HIGH", "hwtest.fsh")][0],
+                  "mac-hw: SEPARATE_HARDWARE_SAMPLERS injected under MC_OS_MAC (HW branch compiles)")
+            check(not resHW.compile_results[("mac", "HIGH", "hwtest.fsh")][0],
+                  "mac-hw: plain mac does NOT inject the flag (HW branch compiled out, else active)")
+            check(resHW.compile_results[("advanced", "HIGH", "hwtest.fsh")][0],
+                  "mac-hw: advanced also has the flag (HW branch compiles)")
+        os.remove(os.path.join(sh, "hwtest.fsh"))
+        os.remove(os.path.join(sh, "hwtest.vsh"))
+
         print("")
         if failures:
             print("SELF-TEST FAILED: %d assertion(s) failed" % len(failures))
