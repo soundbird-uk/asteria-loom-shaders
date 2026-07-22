@@ -2,14 +2,13 @@
 #include "/settings.glsl"
 
 /*
- gbuffers_particles (vertex) — smoke, flames, redstone dust, crit sparks,
- block-break, etc.
+ gbuffers_entities_translucent (vertex) — the translucent half of entity
+ rendering (slime outer shell, enderman-eye overlay, entity shadow blobs,
+ nametag backgrounds, ...).
 
- Particles render in the POST-deferred phase (we pin them there with
- `particles.ordering = after` in shaders.properties), so the G-buffer is
- already dead. This program is therefore FORWARD-LIT and writes colortex0
- directly — mirroring gbuffers_weather / gbuffers_water. We forward everything
- the shared lighting model needs, plus player-space position for shadows.
+ With `separateEntityDraws = true`, Iris routes these draws to the
+ POST-deferred phase and dispatches THIS program (the *_translucent split).
+ The G-buffer is dead by then, so this is FORWARD-LIT and writes colortex0.
 */
 
 uniform mat4 gbufferModelViewInverse;

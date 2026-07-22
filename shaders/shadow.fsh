@@ -2,9 +2,11 @@
 #include "/settings.glsl"
 
 /*
- shadow (fragment) — depth only. We sample gtexture solely to honour cutout
- alpha (so leaves/grass cast correctly shaped shadows). No colour is written;
- the shadow map stores depth.
+ shadow (fragment) — depth ONLY. We sample gtexture solely to honour cutout
+ alpha (so leaves/grass cast correctly shaped shadows), then either discard or
+ let the fragment through so its depth is recorded. We deliberately declare NO
+ colour output: writing one would force Iris to allocate shadowcolor0 (Phase 2
+ territory). The shadow map stores depth.
  Sampler count: 1 (gtexture)
 */
 
@@ -14,11 +16,10 @@ uniform float alphaTestRef;
 in vec2 texcoord;
 in vec4 glcolor;
 
-/* No RENDERTARGETS: shadow pass writes depth only. */
-layout(location = 0) out vec4 outColor;
+/* No RENDERTARGETS and no colour output: shadow pass writes depth only. */
 
 void main() {
     vec4 albedo = texture(gtexture, texcoord) * glcolor;
-    if (albedo.a < alphaTestRef) discard;   // cutout -> no shadow here
-    outColor = albedo;                       // colour is ignored; depth is what matters
+    if (albedo.a < alphaTestRef) discard;   // cutout -> casts no shadow here
+    // No colour written; the depth buffer is the shadow map.
 }

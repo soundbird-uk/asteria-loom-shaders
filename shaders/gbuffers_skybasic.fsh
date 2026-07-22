@@ -24,9 +24,10 @@ in vec3 worldDir;
 layout(location = 0) out vec4 outColor;
 
 void main() {
-    // Kill vanilla stars/void so the (future) procedural sky owns the night.
-    if (renderStage == MC_RENDER_STAGE_STARS ||
-        renderStage == MC_RENDER_STAGE_VOID) {
+    // Kill ONLY the vanilla stars (the procedural night sky owns them in
+    // Phase 3). The void plane is kept and rendered with the gradient below,
+    // otherwise looking below the horizon shows a pure-black band.
+    if (renderStage == MC_RENDER_STAGE_STARS) {
         discard;
     }
 

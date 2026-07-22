@@ -53,6 +53,15 @@ void main() {
     vec3  N  = alDecodeNormal(nl.rg);
     vec2  lm = nl.ba;                       // block, sky
 
+    int matID = alDecodeMatID(texture(colortex3, texcoord).r);
+
+    // Untextured primitives (selection outline, hitboxes, leads) must NOT be
+    // sun/ambient shaded — pass their stored colour straight through.
+    if (matID == AL_MATID_BASIC) {
+        outColor = vec4(albedoLin, 1.0);
+        return;
+    }
+
     // --- Reconstruct position + light directions --------------------------
     vec3 viewPos   = alScreenToView(texcoord, depth);
     vec3 playerPos = alViewToPlayer(viewPos);
@@ -63,7 +72,13 @@ void main() {
 
     // --- Shadow + shade ---------------------------------------------------
     float NdotL = max(dot(N, wLightDir), 0.0);
-    float shadowVis = alShadowVisibility(playerPos, N, NdotL);
+    // The hand is drawn with a separate (near) projection, so reconstructing
+    // its world position with gbufferProjectionInverse is wrong and makes it
+    // self-shadow flicker. Phase 1: skip shadowing hand pixels entirely.
+    // (Proper fix later: a dedicated hand depth/projection path.)
+    float shadowVis = (matID == AL_MATID_HAND)
+                    ? 1.0
+                    : alShadowVisibility(playerPos, N, NdotL);
 
     vec3 color = alLightPhase1(albedoLin, N, lm, shadowVis, wLightDir, dayFactor);
 

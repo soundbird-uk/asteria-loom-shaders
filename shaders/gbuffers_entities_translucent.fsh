@@ -5,15 +5,18 @@
 #include "/lib/shadow.glsl"
 
 /*
- gbuffers_water (fragment) — forward-lit translucent water, blended over the
- already-lit opaque scene in colortex0. Uses the SAME lighting model as the
- deferred opaque pass so water matches its surroundings.
+ gbuffers_entities_translucent (fragment) — FORWARD-LIT translucent entities,
+ blended into colortex0 with the shared lighting model so they match the
+ opaque entities shaded in the deferred pass. entityColor (hurt flash etc.)
+ is mixed in per the Iris convention.
  Sampler count: 2 (gtexture, shadowtex1[SHADOWS])
 */
 
 uniform sampler2D gtexture;
-uniform vec3 sunPosition;          // view space
-uniform vec3 shadowLightPosition;  // view space, toward dominant light
+uniform float alphaTestRef;
+uniform vec4 entityColor;
+uniform vec3 sunPosition;
+uniform vec3 shadowLightPosition;
 uniform mat4 gbufferModelViewInverse;
 
 in vec2 texcoord;
@@ -27,10 +30,10 @@ layout(location = 0) out vec4 outColor;
 
 void main() {
     vec4 tex = texture(gtexture, texcoord) * glcolor;
+    if (tex.a < alphaTestRef) discard;
 
-    // Cool blue-green tint + a touch of transparency for the Phase-1 look.
-    vec3 albedoLin = alSrgbToLinear(tex.rgb) * vec3(0.55, 0.80, 0.90);
-    float alpha = tex.a * 0.72;
+    tex.rgb = mix(tex.rgb, entityColor.rgb, entityColor.a);
+    vec3 albedoLin = alSrgbToLinear(tex.rgb);
 
     vec3 N = normalize(wnormal);
     vec3 wLightDir = normalize(mat3(gbufferModelViewInverse) * shadowLightPosition);
@@ -42,5 +45,5 @@ void main() {
 
     vec3 color = alLightPhase1(albedoLin, N, lmcoord, shadowVis, wLightDir, dayFactor);
 
-    outColor = vec4(color, alpha);
+    outColor = vec4(color, tex.a);
 }

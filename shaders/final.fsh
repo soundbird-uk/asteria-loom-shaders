@@ -34,6 +34,10 @@ const int colortex3Format = RGBA8;
 // Shadow map sizing, driven by the settings defines (see lib/shadow.glsl).
 const int   shadowMapResolution = SHADOW_RESOLUTION;
 const float shadowDistance       = float(SHADOW_DISTANCE);
+// Declared for Phase 2 (coloured/translucent shadows). Phase 1's shadow pass
+// is depth-only and writes NO colour, so no shadowcolor buffer is allocated
+// yet; this reserves the format so the Phase-2 seam is a one-line change.
+const int   shadowcolor0Format = RGBA8;
 
 uniform sampler2D colortex0;
 uniform sampler2D colortex1;

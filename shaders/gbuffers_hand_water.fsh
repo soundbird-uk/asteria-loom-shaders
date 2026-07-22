@@ -11,7 +11,6 @@
 */
 
 uniform sampler2D gtexture;
-uniform float alphaTestRef;
 uniform vec3 sunPosition;
 uniform vec3 shadowLightPosition;
 uniform mat4 gbufferModelViewInverse;
