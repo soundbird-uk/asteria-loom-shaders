@@ -62,6 +62,22 @@
 // Warm block-light (torches/lanterns) strength.
 #define BLOCKLIGHT_INTENSITY 1.0 // [0.50 0.75 1.00 1.25 1.50 1.75 2.00]
 
+// Colour-temperature ramp on block light: candle-amber near a source fading to
+// deep ember-orange at the dim edge of its reach. This is the Mac-path
+// approximation of coloured light (true per-source colour is a later phase).
+// Off = a single flat warm torch tint.
+#define BLOCKLIGHT_TINT // [BLOCKLIGHT_TINT]
+
+// --- Blocklight shaping (internal, not GUI) -------------------------------
+// These scalars tune the falloff so a campfire warms a ~6-block radius at night
+// while its peak stays just under the warm-sun luminance. Edit + hot-reload.
+//   BASE     overall lift of the whole block-light term (the 0.1.1 fix's punch)
+//   FALLOFF  perceptual power on the lightmap (higher = tighter to the source)
+//   TAIL     blend toward a gentler quadratic so distant grass keeps a glow
+#define AL_BLOCKLIGHT_BASE    1.10
+#define AL_BLOCKLIGHT_FALLOFF 2.20
+#define AL_BLOCKLIGHT_TAIL    0.30
+
 // Night ambient floor — how readable open terrain stays after dark. Keeps a
 // cool-blue minimum so nothing goes pitch black under the night sky.
 #define NIGHT_BRIGHTNESS 1.0 // [0.25 0.50 0.75 1.00 1.25 1.50 2.00]
@@ -155,14 +171,30 @@ const vec3 AL_AMBIENT_SKY = vec3(0.34, 0.46, 0.82);
 // pick up warmer ground bounce).
 const vec3 AL_AMBIENT_GROUND = vec3(0.30, 0.27, 0.28);
 
-// Warm torch / block-light colour.
+// Sky-lightmap window over which the cool ambient desaturates toward neutral
+// grey. Below LO the tint is fully greyed (caves / deep underwater — no purple
+// cast); above HI the full cool blue-purple identity is kept (open shade). The
+// midpoint sits near sky-lightmap ~0.3 per the 0.1.1 field feedback.
+#define AL_AMBIENT_DESAT_LO 0.15
+#define AL_AMBIENT_DESAT_HI 0.45
+
+// Warm torch / block-light colour (used when BLOCKLIGHT_TINT is OFF — a single
+// flat tint).
 const vec3 AL_TORCH_TINT = vec3(1.00, 0.58, 0.26);
+
+// Blocklight colour-temperature ramp (BLOCKLIGHT_TINT on). Candle-amber close to
+// the source, deep ember-orange at the dim edge of its reach. CANDLE luminance
+// is kept a touch under the sun so a torch core never out-punches daylight.
+const vec3 AL_TORCH_CANDLE = vec3(1.00, 0.66, 0.32);
+const vec3 AL_TORCH_EMBER  = vec3(1.00, 0.40, 0.14);
 
 // Cool-blue night minimum. Terrain under open sky never falls below this.
 const vec3 AL_NIGHT_FLOOR = vec3(0.030, 0.045, 0.085);
 
 // Faint indirect-bounce lift added to the light sum so coloured faces never
-// read as pure black. Subtly cool.
-const vec3 AL_BOUNCE = vec3(0.018, 0.021, 0.030);
+// read as pure black. Kept near-neutral (only a whisper cool): this is the ONLY
+// light an unlit cave face receives, so any saturation here would tint the cave.
+// Field fix #2 wants caves free of a colour cast, so this stays essentially grey.
+const vec3 AL_BOUNCE = vec3(0.020, 0.020, 0.022);
 
 #endif // AL_SETTINGS

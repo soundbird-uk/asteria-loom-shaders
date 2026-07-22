@@ -60,6 +60,16 @@ vec3 alLightPhase1(vec3 albedoLin, vec3 worldN, vec2 lm,
     // then wrap it so even faces turned away from the sky pick up some fill.
     float up      = worldN.y * 0.5 + 0.5;                 // 0 down .. 1 up
     vec3  hemiCol = mix(AL_AMBIENT_GROUND, AL_AMBIENT_SKY, up);
+
+    // Field fix #2: the cool blue-purple tint is saturated, which reads as a
+    // strong purple cast wherever the sky lightmap is low (caves, terrain seen
+    // through/under water). Desaturate toward a luminance-preserving grey as the
+    // RAW sky lightmap falls below ~AL_AMBIENT_DESAT_HI, keeping the full cool
+    // tint only in genuinely sky-exposed shade. Luminance-preserving so the
+    // overall brightness (and night-floor readability) is untouched.
+    float skySat  = smoothstep(AL_AMBIENT_DESAT_LO, AL_AMBIENT_DESAT_HI, lm.y);
+    hemiCol       = mix(vec3(alLuminance(hemiCol)), hemiCol, skySat);
+
     float wrap    = 0.6 + 0.4 * up;                       // soft wrap term
     float skyLm   = lm.y * lm.y;                          // sky lightmap, eased
     // Ambient is strongest by day, dimmer (but present) at night.
@@ -73,10 +83,28 @@ vec3 alLightPhase1(vec3 albedoLin, vec3 worldN, vec2 lm,
                     * (skyLm * (1.0 - dayFactor));
 
     // --- Warm block light -------------------------------------------------
-    // Eased curve so torches fall off pleasantly rather than linearly.
-    float bl    = lm.x;
-    float blAmt = bl * bl * (bl * 0.6 + 0.4);
-    vec3  block = AL_TORCH_TINT * (blAmt * BLOCKLIGHT_INTENSITY);
+    // Field fix #1: a night campfire must visibly warm a ~6-block radius while
+    // staying below sun intensity. The old curve (bl*bl*(...)) crushed the mid
+    // range, so torchlight died within ~3 blocks. Replace it with a perceptual
+    // falloff (pow ~AL_BLOCKLIGHT_FALLOFF) blended with a gentler quadratic tail
+    // so distant grass still catches a warm ember glow, then lift the whole term
+    // with AL_BLOCKLIGHT_BASE. Peak (bl==1, adjacent to a level-15 source) is
+    // tuned to sit just under the warm-sun luminance.
+    float bl     = lm.x;
+    float blCore = pow(bl, AL_BLOCKLIGHT_FALLOFF);        // perceptual core shape
+    float blTail = bl * bl;                               // gentler, longer reach
+    float blAmt  = mix(blCore, blTail, AL_BLOCKLIGHT_TAIL);
+
+    // Warm blocklight tint. The Mac path has no per-source colour (that is the
+    // Phase-6 flood-fill tier), so approximate a flame's colour temperature by
+    // ramping the tint with blocklight level: candle-amber near the source,
+    // fading to a deep ember-orange out at the dim edge of its reach.
+#ifdef BLOCKLIGHT_TINT
+    vec3 blTint = mix(AL_TORCH_EMBER, AL_TORCH_CANDLE, bl);
+#else
+    vec3 blTint = AL_TORCH_TINT;
+#endif
+    vec3  block = blTint * (blAmt * AL_BLOCKLIGHT_BASE * BLOCKLIGHT_INTENSITY);
 
     // --- Fake indirect bounce floor --------------------------------------
     vec3 bounce = AL_BOUNCE * BOUNCE_INTENSITY;
