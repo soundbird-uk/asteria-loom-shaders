@@ -78,6 +78,31 @@
 #define AL_FOG_SKY_GATE_LO 0.00
 #define AL_FOG_SKY_GATE_HI 0.30
 
+// --- Ground-haze in-scatter softening (BUG A: sunrise/sunset white-out) ------
+// The near-horizon sky is very bright at sunrise/sunset. Because distant terrain
+// is viewed along rays AT or BELOW the horizon, its in-scatter would blow out to
+// that peak brightness and read as a jarring white wash. We therefore soften the
+// in-scatter for GROUND-WARD rays only (never the sky itself — sky pixels are
+// early-returned in composite1): a soft knee compresses the blown-out (>1) part
+// so noon stays natural while sunset is tamed, plus a gentle desaturation so
+// ground haze reads softer than the sky's own glow. Brief §3: soft & dreamy.
+//   GROUND_HI/LO — worldDir.y window over which softening ramps in (up -> down)
+//   HORIZON_DESAT — how far ground in-scatter pulls toward its own luminance
+#define AL_FOG_GROUND_HI     0.18   // above this elevation: no softening (sky-ward)
+#define AL_FOG_GROUND_LO    -0.08   // at/below this: full softening (ground-ward)
+#define AL_FOG_HORIZON_DESAT 0.30
+
+// --- Far-plane convergence (BUG B: hard terrain/sky seam) --------------------
+// Distant terrain must converge to the SAME sky shown past the far plane, or the
+// render-distance edge shows as a hard cutoff. Over the last band of the view
+// frustum we ramp the fogged result toward the raw sky sample so the boundary is
+// invisible at ANY render distance. Fractions of the `far` uniform (composite1
+// computes the ramp weight and passes it in). START..END span ~20% (reviewer's
+// 15-25%); END just under 1.0 so the farthest fragments (dist ~ far, and screen
+// corners where dist > far) are pure sky.
+#define AL_FOG_FARFADE_START 0.78
+#define AL_FOG_FARFADE_END   0.97
+
 // Biome-modulation master switch. All biome_category / temperature / rainfall
 // reads (verified Iris uniforms — see composite1.fsh header for evidence) are
 // gated behind this. If a future Iris ever drops these uniforms, flip this off
@@ -271,6 +296,17 @@ float alFogOpticalDepth(float camY, vec3 worldDir, float dist, float beta0) {
     return min(tau, AL_FOG_MAX_TAU);
 }
 
+// Soft-knee compression of the blown-out (>1) part of a colour, applied by
+// `amt` in [0,1]. Channels <= 1 pass through unchanged (noon horizon stays
+// natural); channels > 1 are compressed into [1,2) so a very bright sunrise/
+// sunset horizon can't white-out ground haze. min() guarantees it only ever
+// darkens, never brightens.
+vec3 alFogSoftKnee(vec3 c, float amt) {
+    vec3 excess     = max(c - 1.0, 0.0);
+    vec3 compressed = 1.0 + excess / (1.0 + excess);   // [1,inf) -> [1,2)
+    return mix(c, min(c, compressed), amt);
+}
+
 /* -------------------------------------------------------------------------
    Full aerial-perspective evaluation for one pixel.
      sceneColor   — linear HDR colour under the fog (colortex0)
@@ -279,13 +315,15 @@ float alFogOpticalDepth(float camY, vec3 worldDir, float dist, float beta0) {
      dist         — straight-line distance camera -> fragment (metres)
      skyLightmap  — this pixel's raw sky lightmap (colortex2.a); gates fog so
                     caves/interiors (sky-lm ~0) get none. See AL_FOG_SKY_GATE_*.
+     farDist      — the `far` uniform (render distance, blocks); drives the
+                    far-plane convergence ramp that hides the terrain/sky seam.
      (biome/weather uniform values passed through to alFogModulation)
    Returns the fogged linear HDR colour.
    ------------------------------------------------------------------------- */
 vec3 alApplyAerialFog(vec3 sceneColor, float camY, vec3 worldDir, float dist,
-                      float userDensity, float skyLightmap, int biomeCategory,
-                      float temperature, float rainfall, float rainStrength,
-                      float wetness, float thunderStrength) {
+                      float userDensity, float skyLightmap, float farDist,
+                      int biomeCategory, float temperature, float rainfall,
+                      float rainStrength, float wetness, float thunderStrength) {
     float densityMul; vec3 scatterTint; float desat; float darken;
     alFogModulation(biomeCategory, temperature, rainfall,
                     rainStrength, wetness, thunderStrength,
@@ -298,13 +336,35 @@ vec3 alApplyAerialFog(vec3 sceneColor, float camY, vec3 worldDir, float dist,
     float tau   = alFogOpticalDepth(camY, worldDir, dist, beta0);
     float ext   = exp(-tau);                 // 1 = clear, 0 = fully fogged
 
-    // In-scatter = sky radiance in the view direction, biome-tinted, thunder-
-    // darkened, rain-desaturated. This is what makes distance read bluer/hazier
-    // and warm at the horizon — the colour comes straight from the atmosphere.
-    vec3 inscatter = alFogSkyInscatter(worldDir) * scatterTint * darken;
-    inscatter = mix(inscatter, vec3(alLuminance(inscatter)), desat);
+    // Single NaN-safe sky read, reused for the in-scatter AND the far-fade
+    // target (so the seam matches the sky pixels exactly and we read colortex6
+    // once).
+    vec3 sky = alFogSkyInscatter(worldDir);
 
-    vec3 result = sceneColor * ext + inscatter * (1.0 - ext);
+    // --- Aerial in-scatter (BUG A softening for ground-ward rays) ---------
+    // biome-tinted + thunder-darkened, then softened for rays at/below the
+    // horizon so bright sunrise/sunset sky never blows distant terrain to white.
+    // (Sky pixels are early-returned in composite1, so this never dims the sky.)
+    float groundy = 1.0 - smoothstep(AL_FOG_GROUND_LO, AL_FOG_GROUND_HI, worldDir.y);
+    vec3  inscatter = sky * scatterTint * darken;
+    inscatter = alFogSoftKnee(inscatter, groundy);
+    // Rain desaturation + a gentle ground-haze desaturation (softer than the sky).
+    float totalDesat = alSaturate(desat + AL_FOG_HORIZON_DESAT * groundy);
+    inscatter = mix(inscatter, vec3(alLuminance(inscatter)), totalDesat);
+
+    vec3 aerial = sceneColor * ext + inscatter * (1.0 - ext);
+
+    // --- Far-plane convergence (BUG B: hide the terrain/sky seam) ---------
+    // Ramp the result toward the RAW sky (un-softened, un-tinted — exactly what
+    // the sky pixels past the far plane show) over the last band of the frustum.
+    // Works at any render distance because the band scales with `far`. Also
+    // gated by skyGate so it only converges where there IS open sky (the real
+    // terrain/sky horizon seam always has sky above it); a rare distant enclosed
+    // surface is never washed to sky.
+    float f = max(farDist, 1.0);
+    float farFade = smoothstep(f * AL_FOG_FARFADE_START, f * AL_FOG_FARFADE_END, dist) * skyGate;
+    vec3  result  = mix(aerial, sky, farFade);
+
     return max(result, vec3(0.0));
 }
 

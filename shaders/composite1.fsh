@@ -71,6 +71,10 @@ uniform float thunderStrength;
 // Camera state (verified). Skip fog when the eye is submerged (Phase 4 owns it).
 uniform int   isEyeInWater;
 
+// Render distance (blocks). Drives the far-plane convergence ramp that fades
+// distant terrain into the sky so the render-distance edge is seamless.
+uniform float far;
+
 // Biome (verified Iris uniforms — see header). Used only behind
 // AL_FOG_BIOME_UNIFORMS in lib/fog.glsl; declared here unconditionally so the
 // program always compiles (Iris supplies them; unused declarations are legal).
@@ -131,7 +135,7 @@ void main() {
     float skyLm = alSaturate(texture(colortex2, texcoord).a);
 
     vec3 fogged = alApplyAerialFog(scene, cameraPosition.y, worldDir, dist,
-                                   FOG_DENSITY, skyLm, biome_category,
+                                   FOG_DENSITY, skyLm, far, biome_category,
                                    temperature, rainfall, rainStrength,
                                    wetness, thunderStrength);
 
