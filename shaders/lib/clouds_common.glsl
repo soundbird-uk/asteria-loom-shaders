@@ -77,23 +77,36 @@ float alCloudCoverage2D(vec2 worldXZ) {
     return f / max(norm, 1e-4);
 }
 
-// Approximate world-space SUN direction from Minecraft's celestial angle.
-// sunAngle = 0 at sunrise (east), 0.25 at noon (up), 0.5 at sunset (west).
-// => y = sin, x = cos sweep east->up->west; a small +z tilt stands in for the
-// pack's sunPathRotation. This is INDEPENDENT of the shadow-map light matrix
-// (documented approximation) and is used by BOTH the cloud shadow here and the
-// composite raymarch's scattering phase, so the two always agree. It is NOT
-// pixel-registered to terrain shadows; using it avoids re-declaring
-// sunPosition / gbufferModelViewInverse (which lighting consumers already own).
-vec3 alApproxSunDirWorld() {
-    float sa = sunAngle * AL_TAU;
-    return normalize(vec3(cos(sa), sin(sa), 0.30));
+// EXACT world-space SUN direction, pure math from the sunAngle uniform (no
+// samplers, no sunPosition / gbufferModelViewInverse — which lighting consumers
+// already own). Re-derived from Iris' CelestialUniforms: Iris sunAngle =
+// skyAngle + 0.25, so theta = skyAngle*360deg = (sunAngle - 0.25)*TAU, and with
+// the pack's sunPathRotation tilt phi (degrees, from settings.glsl — the SAME
+// const the atmosphere uses):
+//     sun = ( -sin(theta), cos(theta)*cos(phi), -cos(theta)*sin(phi) )
+// The magnitude is identically 1 (sin^2+cos^2), so no normalize is required.
+// Checks: noon  (sunAngle=0.25) -> (0, 0.819, 0.574) for phi=-35deg;
+//         sunrise(sunAngle=0.00) -> (1, 0, 0).
+// This is now EXACT (not an approximation): the raymarch phase, the sun colour
+// and the cloud shadow all match the true sun disc and terrain-shadow azimuth.
+vec3 alSunDirWorld() {
+    float theta = (sunAngle - 0.25) * AL_TAU;
+    float phi   = sunPathRotation * (AL_PI / 180.0);
+    float st = sin(theta);
+    float ct = cos(theta);
+    return vec3(-st, ct * cos(phi), -ct * sin(phi));
 }
 
+// Backwards-compatible alias (gbuffers_skybasic and composite.fsh call this
+// name). Kept so external callers stay valid; now resolves to the EXACT dir.
+vec3 alApproxSunDirWorld() { return alSunDirWorld(); }
+
 // --- Cheap cloud shadow -----------------------------------------------------
+// Uses the EXACT world sun direction, so ground cloud-shadows align with both
+// the visible sun disc and the terrain shadow-map azimuth.
 float alCloudShadow(vec3 worldPos) {
 #ifdef VOLUMETRIC_CLOUDS
-    vec3 sunDir = alApproxSunDirWorld();
+    vec3 sunDir = alSunDirWorld();
 
     // Sun below the horizon -> no sun-cast cloud shadow (moon shadows ignored).
     if (sunDir.y < 0.05) return 1.0;

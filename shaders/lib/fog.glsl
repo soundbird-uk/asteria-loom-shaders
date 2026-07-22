@@ -61,6 +61,14 @@
 // denormal underflow. exp(-40) ≈ 4e-18 (fully fogged), never NaN/inf.
 #define AL_FOG_MAX_TAU 40.0
 
+// Sky-exposure gate window (raw sky lightmap 0..1). Aerial fog is OUTDOOR haze:
+// it needs open sky to scatter into the view. Optical depth is scaled by
+// smoothstep(LO, HI, skyLightmap) so caves and interiors (sky-lm ~0) get ZERO
+// fog while open valleys (sky-lm >= HI) get the full amount — preserving Phase
+// 2's cave darkness. Window mirrors the lighting ambient-desat window.
+#define AL_FOG_SKY_GATE_LO 0.05
+#define AL_FOG_SKY_GATE_HI 0.35
+
 // Biome-modulation master switch. All biome_category / temperature / rainfall
 // reads (verified Iris uniforms — see composite1.fsh header for evidence) are
 // gated behind this. If a future Iris ever drops these uniforms, flip this off
@@ -196,29 +204,53 @@ void alFogModulation(int biomeCategory, float temperature, float rainfall,
 }
 
 /* -------------------------------------------------------------------------
-   Analytic optical depth of exponential height fog along the view ray.
+   Analytic optical depth of SEA-LEVEL-FLOORED exponential height fog.
 
-   Density  rho(y) = beta0 * exp(-(y - sea) / H).
-   Along the ray  y(t) = camY + worldDir.y * t,  t in [0, dist]:
-     tau = integral_0^dist rho dt
-         = (rho(camY) - rho(fragY)) * H / worldDir.y         (worldDir.y != 0)
-   with the horizontal (worldDir.y ≈ 0) trapezoidal limit  0.5*(rho0+rho1)*dist.
-   exp() arguments are clamped so no altitude can produce inf/NaN.
+   The density profile is CONSTANT at/below sea level and only decays ABOVE it:
+       rho(y) = beta0 * exp(-max(y - sea, 0) / H)
+   i.e. rho == beta0 for every y <= sea, and thins with altitude above. This is
+   the fix for the cave/below-sea explosion: the old un-floored exp grew without
+   bound as y dropped (34x sea density at y=-30), replacing cave walls with
+   bright sky haze. Air can't densify below sea level here; it plateaus.
+
+   Along the ray y(t) = camY + dirY*t we integrate exactly via the piecewise
+   antiderivative phi of the UNIT profile (rho/beta0):
+       phi(y) = (y - sea)                        for y <= sea   (constant seg.)
+       phi(y) = H * (1 - exp(-(y - sea)/H))      for y >  sea   (exp segment)
+   phi is continuous (phi(sea)=0) and monotonically increasing (phi' = unit
+   density > 0), so it transparently handles rays that CROSS the y=sea boundary
+   (part constant-density, part exponential) with no explicit split. Then
+       tau = beta0 * (phi(y1) - phi(y0)) / dirY                 (dirY != 0)
+   which is always >= 0 (phi monotone: numerator and dirY share sign). The
+   near-horizontal limit (dirY -> 0) is beta0 * unitDensity(y0) * dist, the
+   consistent limit of the ratio above. exp() args are clamped so no altitude
+   can produce inf/NaN.
    ------------------------------------------------------------------------- */
-float alFogOpticalDepth(float camY, vec3 worldDir, float dist, float beta0) {
-    float y0 = camY;
-    float y1 = camY + worldDir.y * dist;
 
-    float e0 = clamp(-(y0 - AL_FOG_SEA_LEVEL) / AL_FOG_HEIGHT, -AL_FOG_MAX_TAU, AL_FOG_MAX_TAU);
-    float e1 = clamp(-(y1 - AL_FOG_SEA_LEVEL) / AL_FOG_HEIGHT, -AL_FOG_MAX_TAU, AL_FOG_MAX_TAU);
-    float rho0 = beta0 * exp(e0);
-    float rho1 = beta0 * exp(e1);
+// Unit-profile antiderivative phi(y) (density measured in units of beta0).
+float alFogPhiUnit(float y) {
+    float d = y - AL_FOG_SEA_LEVEL;
+    if (d <= 0.0) return d;                              // constant density below sea
+    float e = clamp(-d / AL_FOG_HEIGHT, -AL_FOG_MAX_TAU, AL_FOG_MAX_TAU);
+    return AL_FOG_HEIGHT * (1.0 - exp(e));               // exponential above sea
+}
+
+// Unit density (rho/beta0) at altitude y, floored at sea level.
+float alFogUnitDensity(float y) {
+    float d = max(y - AL_FOG_SEA_LEVEL, 0.0);
+    return exp(clamp(-d / AL_FOG_HEIGHT, -AL_FOG_MAX_TAU, AL_FOG_MAX_TAU));
+}
+
+float alFogOpticalDepth(float camY, vec3 worldDir, float dist, float beta0) {
+    float y0   = camY;
+    float y1   = camY + worldDir.y * dist;
+    float dirY = worldDir.y;
 
     float tau;
-    if (abs(worldDir.y) > 0.02) {
-        tau = (rho0 - rho1) * AL_FOG_HEIGHT / worldDir.y;
+    if (abs(dirY) > 0.02) {
+        tau = beta0 * (alFogPhiUnit(y1) - alFogPhiUnit(y0)) / dirY;
     } else {
-        tau = 0.5 * (rho0 + rho1) * dist;   // near-horizontal ray
+        tau = beta0 * alFogUnitDensity(y0) * dist;      // near-horizontal ray
     }
     return clamp(tau, 0.0, AL_FOG_MAX_TAU);
 }
@@ -229,19 +261,24 @@ float alFogOpticalDepth(float camY, vec3 worldDir, float dist, float beta0) {
      camY         — camera world Y (cameraPosition.y)
      worldDir     — unit world-space view direction (camera -> fragment)
      dist         — straight-line distance camera -> fragment (metres)
+     skyLightmap  — this pixel's raw sky lightmap (colortex2.a); gates fog so
+                    caves/interiors (sky-lm ~0) get none. See AL_FOG_SKY_GATE_*.
      (biome/weather uniform values passed through to alFogModulation)
    Returns the fogged linear HDR colour.
    ------------------------------------------------------------------------- */
 vec3 alApplyAerialFog(vec3 sceneColor, float camY, vec3 worldDir, float dist,
-                      float userDensity, int biomeCategory, float temperature,
-                      float rainfall, float rainStrength, float wetness,
-                      float thunderStrength) {
+                      float userDensity, float skyLightmap, int biomeCategory,
+                      float temperature, float rainfall, float rainStrength,
+                      float wetness, float thunderStrength) {
     float densityMul; vec3 scatterTint; float desat; float darken;
     alFogModulation(biomeCategory, temperature, rainfall,
                     rainStrength, wetness, thunderStrength,
                     densityMul, scatterTint, desat, darken);
 
-    float beta0 = AL_FOG_SEA_DENSITY * max(userDensity, 0.0) * densityMul;
+    // Sky-exposure gate: no open sky above -> no aerial fog (caves/interiors).
+    float skyGate = smoothstep(AL_FOG_SKY_GATE_LO, AL_FOG_SKY_GATE_HI, skyLightmap);
+
+    float beta0 = AL_FOG_SEA_DENSITY * max(userDensity, 0.0) * densityMul * skyGate;
     float tau   = alFogOpticalDepth(camY, worldDir, dist, beta0);
     float ext   = exp(-tau);                 // 1 = clear, 0 = fully fogged
 

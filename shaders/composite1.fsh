@@ -22,6 +22,15 @@
  underwater fog. Biome and weather modulate density + tint (see lib/fog.glsl
  for the full multiplier table).
 
+ SKY-EXPOSURE GATING: aerial fog is outdoor haze, so it is scaled by this
+ pixel's sky lightmap (colortex2.a) — caves and interiors (sky-lm ~0) receive
+ ZERO fog, preserving Phase 2's cave darkness; open valleys keep the full
+ amount. Combined with the sea-level DENSITY FLOOR in lib/fog.glsl this fixes
+ the reviewer's "bright haze fills caves / below-sea space" bug.
+ CAVEAT: colortex2 is the OPAQUE G-buffer. Where depthtex0 is a translucent
+ surface, the sky lightmap sampled belongs to the opaque geometry BEHIND it —
+ an accepted approximation (the translucent layer is thin relative to the fog).
+
  --------------------------------------------------------------------------
  UNIFORM VERIFICATION (exact Iris names) — evidence:
    * rainStrength, wetness, isEyeInWater, frameTimeCounter:
