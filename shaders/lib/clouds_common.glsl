@@ -58,7 +58,8 @@ float alCloudValue2D(vec2 p) {
 // jump. Shared by the raymarch and the shadow => shapes and shadows move
 // together.
 vec2 alCloudWind() {
-    return vec2(1.0, 0.35) * (frameTimeCounter * AL_CLOUD_WIND_SPEED);
+    return vec2(1.0, 0.35)
+         * (frameTimeCounter * AL_CLOUD_WIND_SPEED * CLOUD_SPEED);
 }
 
 // 2D FBM coverage field in [0,1] (amplitude-normalised).

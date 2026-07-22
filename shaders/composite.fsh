@@ -108,39 +108,57 @@ void main() {
     vec3  curScatter = alFiniteRGB(cloud.rgb, vec3(0.0));
     float curTrans   = (cloud.a >= 0.0 && cloud.a <= 1.0) ? cloud.a : 1.0;
 
-    // ---- Temporal reprojection at the cumulus mid-plane -------------------
-    float midAlt = 0.5 * (AL_CLOUD_CUMULUS_BOT + AL_CLOUD_CUMULUS_TOP);
-    float tRep   = AL_CLOUD_MAX_DIST;
-    if (abs(worldDir.y) > 1e-4) {
-        float tm = (midAlt - cameraPosition.y) / worldDir.y;
-        if (tm > 0.0) tRep = min(tm, AL_CLOUD_MAX_DIST);
-    }
-    vec3 cloudPlayer = worldDir * tRep;               // relative to this camera
-    vec3 prevView    = alPlayerToPrevView(cloudPlayer);
-    vec3 prevScr     = alPrevViewToScreen(prevView);
-
+    // ---- Temporal accumulation (BUG-1 hardened) ---------------------------
+    // Clouds live only on SKY pixels. Blending history onto TERRAIN pixels was
+    // the "dark box" veil (a reprojected cloud transmittance < 1 darkening a
+    // pixel that has no cloud), so temporal blend is GATED to sky pixels;
+    // terrain keeps the current, near-identity march. On sky pixels the blend
+    // is admitted only through STRICT gates that garbage/edge reads cannot pass.
     vec3  outScatter = curScatter;
     float outTrans   = curTrans;
+    bool  isSky      = depth1 >= 1.0;
 
-    if (prevScr.x > 0.0 && prevScr.x < 1.0 &&
-        prevScr.y > 0.0 && prevScr.y < 1.0 &&
-        prevView.z < 0.0) {                            // in front of prev camera
-        vec4 hist = texture(colortex7, prevScr.xy);
-        // Range validation rejects NaN AND out-of-range first-frame garbage.
-        bool valid = (hist.r >= 0.0) && (hist.r < AL_CLOUD_HDR_MAX) &&
-                     (hist.g >= 0.0) && (hist.g < AL_CLOUD_HDR_MAX) &&
-                     (hist.b >= 0.0) && (hist.b < AL_CLOUD_HDR_MAX) &&
-                     (hist.a >= 0.0) && (hist.a <= 1.0);
-        if (valid) {
-            outScatter = mix(curScatter, hist.rgb, AL_CLOUD_HISTORY_BLEND);
-            outTrans   = mix(curTrans,   hist.a,   AL_CLOUD_HISTORY_BLEND);
+    if (isSky) {
+        // Planar reprojection at the cumulus mid-plane. Plane sanity: the ray
+        // must meet the plane AHEAD of the camera (not parallel, not behind).
+        float midAlt = 0.5 * (AL_CLOUD_CUMULUS_BOT + AL_CLOUD_CUMULUS_TOP);
+        bool  planeOk = abs(worldDir.y) > 1e-3;
+        float tm      = planeOk ? (midAlt - cameraPosition.y) / worldDir.y : -1.0;
+        if (planeOk && tm > 0.0) {
+            vec3 cloudPlayer = worldDir * min(tm, AL_CLOUD_MAX_DIST);
+            vec3 prevView    = alPlayerToPrevView(cloudPlayer);
+            if (prevView.z < 0.0) {                    // in front of prev camera
+                vec3  prevScr = alPrevViewToScreen(prevView);
+                float m = AL_CLOUD_REPROJ_MARGIN;
+                // STRICT off-screen rejection with margin — NO edge clamping.
+                // Newly revealed regions fall through to the current frame.
+                if (prevScr.x > m && prevScr.x < 1.0 - m &&
+                    prevScr.y > m && prevScr.y < 1.0 - m) {
+                    vec4 hist = texture(colortex7, prevScr.xy);
+                    // Validity: finite range (NaN fails every compare) AND the
+                    // alpha sentinel — real writes are floored to
+                    // AL_CLOUD_TRANS_EPS, so alpha below it is uninitialised
+                    // (Apple-GL clear=false) garbage and is rejected.
+                    bool valid = (hist.r >= 0.0) && (hist.r < AL_CLOUD_HDR_MAX) &&
+                                 (hist.g >= 0.0) && (hist.g < AL_CLOUD_HDR_MAX) &&
+                                 (hist.b >= 0.0) && (hist.b < AL_CLOUD_HDR_MAX) &&
+                                 (hist.a >= AL_CLOUD_TRANS_EPS) && (hist.a <= 1.0);
+                    if (valid) {
+                        outScatter = mix(curScatter, hist.rgb, AL_CLOUD_HISTORY_BLEND);
+                        outTrans   = mix(curTrans,   hist.a,   AL_CLOUD_HISTORY_BLEND);
+                    }
+                }
+            }
         }
     }
 
-    // Sanitise before it enters the persistent buffer / the screen.
-    outScatter = alFiniteRGB(outScatter, vec3(0.0));
+    // FAIL-SAFE: a bad blend reverts to the CURRENT frame (never a dark veil);
+    // garbage transmittance -> 1.0 (transparent, never darker).
+    outScatter = alFiniteRGB(outScatter, curScatter);
     outTrans   = (outTrans >= 0.0 && outTrans <= 1.0) ? outTrans : 1.0;
-    outCloud   = vec4(outScatter, outTrans);
+    // Store with transmittance floored to the validity epsilon so a real write
+    // is never mistaken for the invalid sentinel next frame.
+    outCloud   = vec4(outScatter, max(outTrans, AL_CLOUD_TRANS_EPS));
 
     // Composite over the scene: background shows through by transmittance, plus
     // the cloud's in-scattered radiance.

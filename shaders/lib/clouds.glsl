@@ -33,6 +33,11 @@
 #include "/lib/clouds_common.glsl"
 // lib/atmosphere.glsl exposes alSkySample(dir) and alDirectColor().
 #include "/lib/atmosphere.glsl"
+// lib/fog.glsl (read-only reuse): alFogOpticalDepth + AL_FOG_* constants, so the
+// cloud distance-fade matches terrain fog's RATE exactly (BUG 3 convergence). We
+// do not edit it; we only call alFogOpticalDepth. Included AFTER atmosphere so
+// its alSkySample references resolve.
+#include "/lib/fog.glsl"
 
 // --- Quality tiers ----------------------------------------------------------
 #if VC_QUALITY == 1
@@ -109,12 +114,12 @@ float alCloudDensity(vec3 wpos, float coverageThresh) {
     if (shape <= 0.001) return 0.0;
 
     // 3D erosion at a second frequency, drifting with the wind and slowly
-    // boiling upward so cloud detail evolves over time.
-    vec2 wind = alCloudWind();
+    // boiling upward so cloud detail evolves over time. The boil is scaled by
+    // CLOUD_SPEED (and kept gentle) so it slows together with the drift.
+    vec2  wind = alCloudWind();
+    float boil = frameTimeCounter * 0.006 * CLOUD_SPEED;
     vec3 dp = wpos * AL_CLOUD_DETAIL_SCALE
-            + vec3(wind.x * 0.7 + frameTimeCounter * 0.03,
-                   frameTimeCounter * 0.015,
-                   wind.y * 0.7 + frameTimeCounter * 0.03);
+            + vec3(wind.x * 0.7 + boil, boil * 0.5, wind.y * 0.7 + boil);
     float det = alCloudFbm3D(dp);
 
     float d = alCloudRemap(shape, det * AL_CLOUD_EROSION, 1.0, 0.0, 1.0);
@@ -236,6 +241,27 @@ vec4 alCirrus(vec3 camPos, vec3 worldDir, vec3 sunDir, vec3 sunColor,
 }
 
 /*
+ Aerial perspective on one cloud layer (BUG-3 fix). fog.glsl leaves sky pixels
+ untouched, so the cloud pass must fade itself. We reuse lib/fog.glsl's optical-
+ depth model with the SAME AL_FOG_* constants (so the fade RATE matches terrain
+ fog) and recolour the layer toward `inscatter` = alSkySample(viewDir) — the SAME
+ sky-LUT in-scatter the fog pass adds — so cloud and terrain fog converge to one
+ horizon value with no seam. Opacity is preserved and the in-scatter is recoloured
+ to haze*(1-trans): at the horizon (ext->0) a cloud region equals the surrounding
+ sky, so the cloud melts in with no hard cutoff instead of vanishing abruptly.
+ A layer that wasn't hit ((0,0,0,1)) stays exactly identity.
+*/
+vec4 alCloudAerial(vec4 layer, vec3 camPos, vec3 worldDir, float entryDist,
+                   vec3 inscatter) {
+    float beta0 = AL_FOG_SEA_DENSITY * max(FOG_DENSITY, 0.0)
+                * mix(1.0, AL_CLOUD_AERIAL_RAINBOOST, alSaturate(rainStrength));
+    float tau = alFogOpticalDepth(camPos.y, worldDir, entryDist, beta0);
+    float ext = exp(-tau);                       // 1 near, ->0 toward the horizon
+    layer.rgb = mix(inscatter * (1.0 - layer.a), layer.rgb, ext);
+    return layer;
+}
+
+/*
  Full 2-layer cloud render for one view ray.
    camPos      : world-space camera position (cameraPosition)
    worldDir    : normalised world-space view direction
@@ -245,7 +271,7 @@ vec4 alCirrus(vec3 camPos, vec3 worldDir, vec3 sunDir, vec3 sunColor,
    dither      : [0,1) march-start offset for temporal convergence
  Returns vec4(in-scattered radiance, transmittance). Layers are composited
  front-over-back by their entry distance so camera-above-cloud still orders
- right.
+ right; each layer is aerial-perspective faded by its entry distance first.
 */
 vec4 alCloudsRender(vec3 camPos, vec3 worldDir, vec3 sunDir, vec3 sunColor,
                     float terrainDist, float dither) {
@@ -277,6 +303,11 @@ vec4 alCloudsRender(vec3 camPos, vec3 worldDir, vec3 sunDir, vec3 sunColor,
     // --- Cirrus sheet -----------------------------------------------------
     float tCir;
     vec4  cirrus = alCirrus(camPos, worldDir, sunDir, sunColor, maxDist, tCir);
+
+    // --- Aerial perspective: melt each layer into the horizon haze ---------
+    vec3 inscatter = alSkySample(worldDir);      // SAME LUT read fog in-scatters
+    cumulus = alCloudAerial(cumulus, camPos, worldDir, tCumNear, inscatter);
+    cirrus  = alCloudAerial(cirrus,  camPos, worldDir, tCir,     inscatter);
 
     // --- Composite front-over-back by entry distance ----------------------
     vec4 nearL, farL;

@@ -255,6 +255,12 @@ const float shadowDistance = 128.0; // [64.0 96.0 128.0 192.0 256.0]
 // cumulus; higher = a brooding overcast.
 #define VC_COVERAGE 0.45 // [0.30 0.35 0.40 0.45 0.50 0.55 0.60 0.65 0.70]
 
+// Cloud drift speed. A gentle, dreamy roll at 1.0; the slider scales the wind
+// linearly. At 1.0 the coverage pattern drifts ~29 blocks/second (see
+// AL_CLOUD_WIND_SPEED below), i.e. a soft breeze — 0.25 is nearly becalmed,
+// 4.0 a brisk storm front.
+#define CLOUD_SPEED 1.0 // [0.25 0.5 1.0 2.0 4.0]
+
 // Draw vanilla clouds (forward-lit) as a cheap fallback. Default OFF now that
 // volumetric clouds exist; POTATO/LOW turn volumetric off and this back on.
 // Also gates `program.gbuffers_clouds.enabled` (self-discards otherwise).
@@ -276,7 +282,12 @@ const float shadowDistance = 128.0; // [64.0 96.0 128.0 192.0 256.0]
 // --- Coverage field (2D FBM value noise; shared by render + shadow) ---------
 #define AL_CLOUD_COVERAGE_SCALE   0.00028 // world XZ -> noise domain
 #define AL_CLOUD_COVERAGE_OCTAVES 4       // FBM octaves for the coverage map
-#define AL_CLOUD_WIND_SPEED       0.35    // coverage drift (noise units / sec)
+// Base coverage drift in NOISE units/sec, before the CLOUD_SPEED slider. World
+// drift = AL_CLOUD_WIND_SPEED * CLOUD_SPEED / AL_CLOUD_COVERAGE_SCALE blocks/sec
+// => 0.008 * 1.0 / 0.00028 ≈ 29 blocks/s at the default (a gentle dreamy roll).
+// This is ~44x slower than the 0.3.1 default (0.35) that field-tested "WAY too
+// fast"; the slider restores brisker motion for those who want it.
+#define AL_CLOUD_WIND_SPEED       0.008   // coverage drift (noise units / sec)
 #define AL_CLOUD_STORM_BOOST      0.22    // extra coverage added at full rain
 
 // --- Cumulus 3D shaping -----------------------------------------------------
@@ -313,9 +324,28 @@ const float shadowDistance = 128.0; // [64.0 96.0 128.0 192.0 256.0]
 #define AL_CLOUD_SHADOW_CLEAR 0.50  // ground darkening under clear-sky cloud
 #define AL_CLOUD_SHADOW_STORM 0.80  // stronger under storm cloud
 
+// --- Distance fade / aerial perspective ------------------------------------
+// Clouds must melt into the same horizon haze as terrain fog (fog.glsl leaves
+// sky pixels untouched, so the cloud pass fades itself). We reuse lib/fog.glsl's
+// optical-depth model + AL_FOG_* constants so the fade RATE matches terrain fog
+// exactly, and recolour the cloud toward alSkySample(viewDir) — the SAME sky-LUT
+// in-scatter fog uses — so both converge to one horizon value (no seam).
+#define AL_CLOUD_AERIAL_RAINBOOST 1.8   // matches fog.glsl rain density mult
+
 // --- Temporal accumulation --------------------------------------------------
 #define AL_CLOUD_HISTORY_BLEND 0.85 // fraction of valid history kept per frame
 #define AL_CLOUD_HDR_MAX       65000.0 // range-validation ceiling (NaN-proof)
+// STRICT reprojection margin (fraction of screen). A reprojected history UV must
+// land inside [MARGIN, 1-MARGIN]^2 or the pixel uses the CURRENT frame only —
+// NO edge-clamped read. This is the core fix for the "dark box" veil: newly
+// revealed screen regions (camera rotation/translation) never blend garbage or
+// clamped edge history. Simulated: kills the veil (0.30 -> ~0.05, converges).
+#define AL_CLOUD_REPROJ_MARGIN 0.02
+// Real transmittance writes are floored to this tiny epsilon, reserving exactly
+// 0.0 as the "invalid / uninitialised (Apple-GL clear=false garbage)" marker: a
+// history alpha below it is treated as invalid and rejected. Invisible visually
+// (a 0.2% floor), robust as a validity sentinel.
+#define AL_CLOUD_TRANS_EPS 0.002
 
 
 /* =========================================================================
