@@ -240,6 +240,12 @@ const float shadowDistance = 128.0; // [64.0 96.0 128.0 192.0 256.0]
 #define AL_CLOUD_CUMULUS_TOP 460.0
 #define AL_CLOUD_CIRRUS_ALT  700.0
 #define AL_CLOUD_MAX_DIST    30000.0   // far cap on the cloud march (blocks)
+// Cap the marched span so grazing horizon rays keep a sane step size (a
+// near-horizontal ray otherwise crosses the slab over many km, giving coarse,
+// aliased steps -> a hard-looking horizon). Beyond this the cloud simply thins
+// out into the distance (aerial fog then carries the horizon). Keeps the primary
+// step length bounded to ~AL_CLOUD_MAX_SPAN / primary-steps.
+#define AL_CLOUD_MAX_SPAN    5000.0
 
 // --- Coverage field (2D FBM value noise; shared by render + shadow) ---------
 #define AL_CLOUD_COVERAGE_SCALE   0.00028 // world XZ -> noise domain

@@ -257,20 +257,21 @@ vec4 alCloudsRender(vec3 camPos, vec3 worldDir, vec3 sunDir, vec3 sunColor,
     float dy = worldDir.y;
     float tCumNear = AL_CLOUD_MAX_DIST;
     vec4  cumulus  = vec4(0.0, 0.0, 0.0, 1.0);
-    bool  hitCum   = false;
     if (abs(dy) > 1e-4) {
         float ta = (AL_CLOUD_CUMULUS_BOT - camPos.y) / dy;
         float tb = (AL_CLOUD_CUMULUS_TOP - camPos.y) / dy;
         float tn = max(min(ta, tb), 0.0);
         float tf = min(max(ta, tb), maxDist);
-        if (tf > tn) { tCumNear = tn; hitCum = true;
+        tf = min(tf, tn + AL_CLOUD_MAX_SPAN);        // bound step size at horizon
+        if (tf > tn) { tCumNear = tn;
             cumulus = alCumulus(camPos, worldDir, sunDir, sunColor,
                                 tn, tf, dither, coverageThresh); }
     } else if (camPos.y > AL_CLOUD_CUMULUS_BOT && camPos.y < AL_CLOUD_CUMULUS_TOP) {
         // Inside the slab looking (near-)horizontal.
-        tCumNear = 0.0; hitCum = true;
+        tCumNear = 0.0;
         cumulus = alCumulus(camPos, worldDir, sunDir, sunColor,
-                            0.0, maxDist, dither, coverageThresh);
+                            0.0, min(maxDist, AL_CLOUD_MAX_SPAN), dither,
+                            coverageThresh);
     }
 
     // --- Cirrus sheet -----------------------------------------------------

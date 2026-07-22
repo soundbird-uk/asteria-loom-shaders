@@ -23,6 +23,13 @@
 
 uniform sampler2D colortex6;   // sky-view LUT (top-left tile)
 
+// NOTE on the sun direction: the world-space sun direction helper
+// alApproxSunDirWorld() is owned by lib/clouds_common.glsl (it is sampler-free
+// and shared by the clouds/lighting chain). This file does NOT redeclare it or
+// the sunPosition uniform — passes that need the sun direction and include this
+// file compute it their own way (gbuffers_skybasic from its own sunPosition;
+// composite/composite1 via clouds_common / space helpers).
+
 // Cheap LUT read: direction -> baked sky radiance. colortex6 is clear=false, so
 // the very first frame(s) contain undefined garbage. The read is therefore
 // RANGE-VALIDATED with comparisons (NaN fails every one) and self-heals to the

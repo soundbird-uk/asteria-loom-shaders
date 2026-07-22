@@ -39,7 +39,8 @@
  A noisetex + golden-ratio march-start dither makes the accumulation converge.
 
  Sampler count: 3 base (colortex0, colortex4, depthtex1)
-              + 3 with clouds (colortex7, colortex6 [sky LUT], noisetex) = 6
+              + colortex7 + noisetex here + colortex6 (sky LUT, via the
+                lib/atmosphere.glsl include) = 6 when clouds are on
    (<= 9 budget; <= 16 Mac hard limit.)
 */
 
@@ -49,8 +50,9 @@ uniform sampler2D depthtex1;   // opaque-only depth (matches the AO pass)
 
 #ifdef VOLUMETRIC_CLOUDS
 uniform sampler2D colortex7;   // cloud history: rgb = scatter, a = transmittance
-uniform sampler2D colortex6;   // sky-view LUT (read by alSkySample / alDirectColor)
 uniform sampler2D noisetex;    // 256x256 blue-ish noise (march-start dither)
+// colortex6 (the sky-view LUT) is declared by lib/atmosphere.glsl, pulled in via
+// lib/clouds.glsl above — do NOT redeclare it here (duplicate-uniform error).
 #endif
 
 in vec2 texcoord;
@@ -98,7 +100,7 @@ void main() {
 
     // Dominant-light direction (approx, shared with the cloud shadow) + colour.
     vec3 sunDir   = alApproxSunDirWorld();
-    vec3 sunColor = alDirectColor();
+    vec3 sunColor = alDirectColor(sunDir);   // warm sun by day, cool moon at night
 
     vec4 cloud = alCloudsRender(cameraPosition, worldDir, sunDir, sunColor,
                                 terrainDist, dither);
