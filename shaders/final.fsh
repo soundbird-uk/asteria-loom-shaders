@@ -17,27 +17,40 @@
  ==========================================================================
  CANONICAL BUFFER-FORMAT DECLARATIONS
  --------------------------------------------------------------------------
- Iris scans shaders for these `const` declarations; per the Phase-1 contract
- they live HERE and NOWHERE ELSE. Keep this the single source of truth.
+ Iris reads the colortexNFormat / shadowcolorNFormat declarations as TEXT,
+ and they MUST stay inside a comment: the format tokens (RGBA16F, RGBA8,
+ RGBA16, ...) are NOT valid GLSL identifiers, so a real driver (confirmed on
+ macOS GL 4.1) rejects them as "undeclared identifier" if they appear as live
+ code. Commenting them is the documented Iris idiom — the loader still parses
+ them, the GLSL compiler never sees them. Per the Phase-1 contract these live
+ HERE and nowhere else; this comment block is the single source of truth.
 
-   colortex0  RGBA16F  HDR scene colour (sky + lit scene + translucents)
-   colortex1  RGBA8    albedo.rgb, a = vanilla AO / spare
-   colortex2  RGBA16   octahedral normal .rg, lightmap (block,sky) .ba
-   colortex3  RGBA8    matID/255 .r, flags/255 .g, ba spare
+   colortex0    RGBA16F  HDR scene colour (sky + lit scene + translucents)
+   colortex1    RGBA8    albedo.rgb, a = vanilla AO / spare
+   colortex2    RGBA16   octahedral normal .rg, lightmap (block,sky) .ba
+   colortex3    RGBA8    matID/255 .r, flags/255 .g, ba spare
+   shadowcolor0 RGBA8    reserved for Phase 2 (coloured/translucent shadows);
+                         Phase 1's shadow pass is depth-only, so nothing is
+                         allocated yet — this only reserves the format.
  ==========================================================================
 */
+
+/*
 const int colortex0Format = RGBA16F;
 const int colortex1Format = RGBA8;
 const int colortex2Format = RGBA16;
 const int colortex3Format = RGBA8;
+const int shadowcolor0Format = RGBA8;
+*/
 
-// Shadow map sizing, driven by the settings defines (see lib/shadow.glsl).
+// Shadow map sizing. Unlike the format tokens above, these ARE live code:
+// SHADOW_RESOLUTION / SHADOW_DISTANCE are numeric #defines (settings.glsl),
+// so the initializers expand to plain int/float literals — valid GLSL that
+// compiles cleanly (verified on the Mac; the field error was ONLY the format
+// lines). Iris resolves the active option value before reading the const, so
+// the map is sized to whatever profile the player selected. See lib/shadow.glsl.
 const int   shadowMapResolution = SHADOW_RESOLUTION;
 const float shadowDistance       = float(SHADOW_DISTANCE);
-// Declared for Phase 2 (coloured/translucent shadows). Phase 1's shadow pass
-// is depth-only and writes NO colour, so no shadowcolor buffer is allocated
-// yet; this reserves the format so the Phase-2 seam is a one-line change.
-const int   shadowcolor0Format = RGBA8;
 
 uniform sampler2D colortex0;
 uniform sampler2D colortex1;

@@ -111,36 +111,13 @@ IRIS_SYMBOL_STUBS = {
     "renderStage": "uniform int renderStage;",
 }
 
-# Iris buffer-format identifiers used in `const int colortexNFormat = <FMT>;`
-# declarations. These are NOT GLSL keywords — Iris recognises them when it
-# parses the format directives. glslang has never heard of them, so without
-# stubs the canonical final.fsh format block would always (falsely) fail. We
-# inject each as a placeholder `const`-usable int, guarded with #ifndef.
-IRIS_FORMAT_STUBS = [
-    # 8-bit normalized / snorm
-    "R8", "RG8", "RGB8", "RGBA8",
-    "R8_SNORM", "RG8_SNORM", "RGB8_SNORM", "RGBA8_SNORM",
-    # 16-bit normalized / snorm
-    "R16", "RG16", "RGB16", "RGBA16",
-    "R16_SNORM", "RG16_SNORM", "RGB16_SNORM", "RGBA16_SNORM",
-    # float
-    "R16F", "RG16F", "RGB16F", "RGBA16F",
-    "R32F", "RG32F", "RGB32F", "RGBA32F",
-    # packed float / special
-    "R11F_G11F_B10F", "RGB9_E5",
-    # integer (signed)
-    "R8I", "RG8I", "RGB8I", "RGBA8I",
-    "R16I", "RG16I", "RGB16I", "RGBA16I",
-    "R32I", "RG32I", "RGB32I", "RGBA32I",
-    # integer (unsigned)
-    "R8UI", "RG8UI", "RGB8UI", "RGBA8UI",
-    "R16UI", "RG16UI", "RGB16UI", "RGBA16UI",
-    "R32UI", "RG32UI", "RGB32UI", "RGBA32UI",
-    # packed integer / misc
-    "RGB10_A2", "RGB10_A2UI", "RGB5_A1", "RGBA2", "RGBA4", "RGB565",
-    "R3_G3_B2", "RGB4", "RGB5", "RGB10", "RGB12", "RGBA12",
-    "SRGB8", "SRGB8_ALPHA8",
-]
+# NOTE: there is deliberately NO buffer-format identifier stub table.
+# Buffer-format identifiers (RGBA16F, R11F_G11F_B10F, ...) are NOT GLSL and real
+# GL drivers reject them. Iris reads colortexNFormat/shadowcolorNFormat only
+# from *comments*, so a live `const int colortexNFormat = RGBA16F;` is a bug
+# that must fail on the Mac. A stub table here previously MASKED exactly that
+# error into a false PASS that shipped. If a format identifier reaches glslang,
+# it SHOULD fail — and lint_format_live() catches it with a clear message.
 
 # Iris render-stage macros (MC_RENDER_STAGE_*). Only names on THIS list get
 # stubbed. Any MC_RENDER_STAGE_* token referenced in a program but not on this
@@ -219,10 +196,16 @@ def is_option_name(name):
 class Option:
     """A user-facing settings.glsl option.
 
-    kind: 'toggle' (boolean; value is None) or 'selector' (has a value + a
-    // [allowed values] comment).
+    kind:
+      * 'toggle'   — boolean #define toggle (value is None).
+      * 'selector' — #define with a value + a // [allowed values] comment.
+      * 'const'    — a `const int/float/bool NAME = value; // [..]` declaration.
+                     Iris exposes these as GUI options too (e.g.
+                     shadowMapResolution). Their names may be camelCase. We
+                     never inject a #define for them (that would corrupt the
+                     const declaration); we only track them for the cross-checks.
     enabled: default on/off from settings.glsl.
-    value: default value string for selectors, else None.
+    value: default value string for selectors/consts, else None.
     """
     __slots__ = ("name", "kind", "enabled", "value")
 
@@ -237,41 +220,72 @@ class Option:
 #   groups: (comment_marker, name, rest)
 DEFINE_RE = re.compile(r"^\s*(//)?\s*#define\s+([A-Za-z_][A-Za-z0-9_]*)\b(.*)$")
 
+# Matches an optionally-commented `const <type> NAME = <value>;` declaration.
+#   groups: (comment_marker, name, value, trailing)
+CONST_OPTION_RE = re.compile(
+    r"^\s*(//)?\s*const\s+(?:int|float|bool|uint)\s+([A-Za-z_][A-Za-z0-9_]*)\s*"
+    r"=\s*([^;]+);(.*)$")
+
 
 def parse_settings(settings_text):
     """Parse settings.glsl. Returns dict name -> Option for GUI options only.
 
-    Iris exposes a #define as a GUI option when either:
-      * it has a value AND a trailing `// [a b c]` selector comment, or
-      * it is a bare boolean toggle (`#define NAME` / `//#define NAME`,
-        no value).
-    A `#define NAME value` *without* a bracket comment is an ordinary constant
-    (e.g. a colour identity constant) and is NOT an option; profiles never
-    touch it and it need not appear in a screen.
+    Iris exposes an option in three shapes:
+      * a #define with a value AND a trailing `// [a b c]` selector comment;
+      * a bare boolean #define toggle (`#define NAME` / `//#define NAME`);
+      * a `const int/float/bool NAME = value; // [a b c]` declaration
+        (the idiom Iris uses for shadowMapResolution and friends).
+    A #define or const *with* a value but *without* a bracket comment is an
+    ordinary constant, NOT an option; profiles never touch it and it need not
+    appear in a screen.
     """
     options = {}
     for raw in settings_text.splitlines():
         m = DEFINE_RE.match(raw)
-        if not m:
+        if m:
+            commented = m.group(1) is not None
+            name = m.group(2)
+            rest = m.group(3)
+            if not is_option_name(name):
+                continue
+            code, comment = strip_line_comment(rest)
+            value = code.strip()
+            has_brackets = "[" in comment and "]" in comment
+            if value == "":
+                options[name] = Option(name, "toggle", not commented, None)
+            elif has_brackets:
+                options[name] = Option(name, "selector", not commented, value)
+            # else: valued #define without a bracket list -> plain constant
             continue
-        commented = m.group(1) is not None
-        name = m.group(2)
-        rest = m.group(3)
-        if not is_option_name(name):
-            continue
-        code, comment = strip_line_comment(rest)
-        value = code.strip()
-        has_brackets = "[" in comment and "]" in comment
-        if value == "":
-            # bare toggle
-            options[name] = Option(name, "toggle", not commented, None)
-        elif has_brackets:
-            # selector
-            options[name] = Option(name, "selector", not commented, value)
-        else:
-            # constant with a value but no selector list -> not a GUI option
-            continue
+
+        cm = CONST_OPTION_RE.match(raw)
+        if cm:
+            commented = cm.group(1) is not None
+            name = cm.group(2)
+            value = cm.group(3).strip()
+            trailing = cm.group(4)
+            # const options may be camelCase (shadowMapResolution); accept any
+            # non-internal name, but only when a selector list is present.
+            if name.startswith("AL_"):
+                continue
+            _code, comment = strip_line_comment(trailing)
+            if "[" in comment and "]" in comment:
+                options[name] = Option(name, "const", not commented, value)
     return options
+
+
+def is_option_ref(name, known_options):
+    """True if `name` (a profile/screen token) refers to a pack option.
+
+    A token is an option reference if it is a known option (covers camelCase
+    const options like shadowMapResolution) OR it follows the UPPER_SNAKE
+    #define-option convention (so typos of non-existent UPPER_SNAKE options are
+    still caught by the 'exists' lint). Unknown camelCase tokens (Iris built-in
+    directives such as sunPathRotation that are not GUI options) are ignored.
+    """
+    if name in known_options:
+        return True
+    return is_option_name(name)
 
 
 # ---------------------------------------------------------------------------
@@ -337,6 +351,7 @@ def parse_profiles(entries, options):
             name = key[len("profile."):].strip()
             raw_profiles[name] = tokenize_profile_value(val)
 
+    known = set(options.keys())
     referenced = set()
 
     def default_state():
@@ -372,18 +387,18 @@ def parse_profiles(entries, options):
                 opt_name, opt_val = tok.split("=", 1)
                 opt_name = opt_name.strip()
                 opt_val = opt_val.strip()
-                if is_option_name(opt_name):
+                if is_option_ref(opt_name, known):
                     referenced.add(opt_name)
                     state[opt_name] = (not disable, opt_val)
             else:
                 opt_name = tok.strip()
-                if is_option_name(opt_name):
+                if is_option_ref(opt_name, known):
                     referenced.add(opt_name)
                     if disable:
                         state[opt_name] = (False, _value_of(state, opt_name))
                     else:
                         state[opt_name] = (True, _value_of(state, opt_name))
-                # non-option tokens (camelCase Iris consts, etc.) ignored
+                # non-option tokens (unknown camelCase Iris directives) ignored
         resolving.discard(name)
         resolved[name] = state
         return state
@@ -398,11 +413,12 @@ def parse_profiles(entries, options):
     return resolved, referenced
 
 
-def parse_screens(entries):
-    """Return (screen_option_refs, all_screen_tokens).
-    screen_option_refs: set of option names referenced across all screen/
-    sliders lines (used both for the 'exists' and 'appears in a screen' lints).
-    """
+def parse_screens(entries, options):
+    """Return the set of option names referenced across all screen/sliders
+    lines (used both for the 'exists' and 'appears in a screen' lints).
+    Recognises const-style option names (e.g. shadowMapResolution) via the
+    known-options set, not just the UPPER_SNAKE convention."""
+    known = set(options.keys())
     refs = set()
     for key, val in entries:
         if key == "screen" or key.startswith("screen.") or key == "sliders" or key.startswith("sliders."):
@@ -411,7 +427,7 @@ def parse_screens(entries):
                     continue  # sub-screen ref / placeholder
                 if tok.startswith("profile.") or tok.startswith("program."):
                     continue
-                if is_option_name(tok):
+                if is_option_ref(tok, known):
                     refs.add(tok)
     return refs
 
@@ -507,10 +523,11 @@ def strip_option_defines(source, option_names):
     return "\n".join(keep)
 
 
-def build_injection(state, assembled_source, macro_stubs):
+def build_injection(state, assembled_source, macro_stubs, skip_inject=frozenset()):
     """Build the block injected right after #version.
     state: dict optname -> (enabled, value)
     macro_stubs: the target's Iris macro environment (TARGET_MACROS[target]).
+    skip_inject: option names to NOT emit as #defines (const-style options).
     """
     out = []
     out.append("// ==== injected by validate.py ====")
@@ -524,17 +541,18 @@ def build_injection(state, assembled_source, macro_stubs):
             out.append("#define %s %s" % (name, value))
         out.append("#endif")
 
-    # Iris buffer-format identifiers (harmless placeholder ints, guarded).
-    # F6: only inject these into files that actually declare a colortexNFormat
-    # const, so they don't mask a stray format identifier used elsewhere.
-    if COLORTEX_FORMAT_RE.search(assembled_source):
-        out.append("// Iris buffer-format identifier stubs")
-        for i, fmt in enumerate(IRIS_FORMAT_STUBS):
-            out.append("#ifndef %s\n#define %s %d\n#endif" % (fmt, fmt, 33000 + i))
+    # NB: no buffer-format identifier stubs — see the note by IRIS_MACRO_STUBS.
+    # Format identifiers must never be defined; a live one is meant to fail.
 
-    # Resolved option state.
+    # Resolved option state. const-style options (skip_inject) are NOT emitted
+    # as #defines — that would corrupt their `const NAME = value;` declaration
+    # (`const int 1024 = 2048;`). Their default const value compiles fine and
+    # the profile value never affects preprocessor branching, so leaving the
+    # declaration intact is both safe and correct.
     out.append("// options (resolved profile state)")
     for name in sorted(state):
+        if name in skip_inject:
+            continue
         enabled, value = state[name]
         if not enabled:
             continue  # disabled => intentionally undefined
@@ -565,12 +583,13 @@ def build_injection(state, assembled_source, macro_stubs):
     return "\n".join(out)
 
 
-def patch_source(program_path, shaders_root, state, option_names, macro_stubs):
+def patch_source(program_path, shaders_root, state, option_names, macro_stubs,
+                 skip_inject=frozenset()):
     """Return the fully patched, glslang-ready source for one program under one
     profile and compile target."""
     assembled = resolve_includes(program_path, shaders_root)
     assembled = strip_option_defines(assembled, option_names)
-    injection = build_injection(state, assembled, macro_stubs)
+    injection = build_injection(state, assembled, macro_stubs, skip_inject)
 
     lines = assembled.splitlines()
     # find the #version line (should be the first non-empty line)
@@ -646,7 +665,18 @@ def run_glslang(glslang_path, glslang_name, patched_path, stage):
 # Static lint checks
 # ---------------------------------------------------------------------------
 
-COLORTEX_FORMAT_RE = re.compile(r"const\s+int\s+colortex\d+Format\b")
+# A colortexNFormat / shadowcolorNFormat const declaration and its initializer.
+#   groups: (buffer-name, initializer)
+FORMAT_CONST_DECL_RE = re.compile(
+    r"const\s+int\s+((?:colortex\d+|shadowcolor\d+)Format)\s*=\s*([^;]+);")
+
+# Just the presence of such a declaration (name only), used for the canonical
+# 'declared exactly once' check inside comments.
+FORMAT_CONST_NAME_RE = re.compile(r"const\s+int\s+(?:colortex\d+|shadowcolor\d+)Format\b")
+
+# An integer literal (decimal or hex) — a valid Format initializer if someone
+# hand-codes the GL enum number; a format *identifier* (RGBA16F) is not.
+INT_LITERAL_RE = re.compile(r"^[+-]?(?:0[xX][0-9a-fA-F]+|\d+)[uU]?$")
 
 # A `uniform <...>samplerXXX <declarator-list>;` statement. The declarator list
 # is captured so we can count comma-separated names (F1).
@@ -670,6 +700,18 @@ def strip_comments(text):
     text = re.sub(r"/\*.*?\*/", "", text, flags=re.S)
     text = re.sub(r"//[^\n]*", "", text)
     return text
+
+
+def extract_comments(text):
+    """Return the concatenated *contents* of every block and line comment.
+    This is where Iris reads buffer-format declarations from, so the canonical
+    format block is found here (not in live code)."""
+    parts = []
+    for m in re.finditer(r"/\*.*?\*/", text, flags=re.S):
+        parts.append(m.group(0)[2:-2])
+    for m in re.finditer(r"//([^\n]*)", text):
+        parts.append(m.group(1))
+    return "\n".join(parts)
 
 
 def count_samplers(code):
@@ -779,24 +821,49 @@ def lint_render_stages(programs, shaders_root):
     return errs
 
 
-def lint_buffer_formats(shaders_root):
-    """`const int colortexNFormat` declarations must live in exactly one file."""
+def lint_format_live(programs, shaders_root):
+    """HARD FAIL: an UNCOMMENTED colortexNFormat / shadowcolorNFormat const whose
+    initializer is a format identifier (not an integer literal).
+
+    Iris reads these declarations from *comments*; a live one leaves an
+    identifier like RGBA16F in the GLSL, which real GL drivers reject (this is
+    the field bug that shipped when a stub table masked it). We detect this
+    post include-resolution but on the comment-stripped ('live') source, so a
+    decl inside /* */ or after // is fine.
+    """
+    errs = []
+    for rel, path, stage in programs:
+        live = strip_comments(resolve_includes(path, shaders_root))
+        for m in FORMAT_CONST_DECL_RE.finditer(live):
+            buf, init = m.group(1), m.group(2).strip()
+            if not INT_LITERAL_RE.match(init):
+                errs.append(
+                    "%s: live `const int %s = %s;` — buffer-format identifiers are "
+                    "not GLSL and are rejected by real drivers; Iris parses format "
+                    "declarations from COMMENTS, so wrap the whole format block in "
+                    "/* ... */" % (rel, buf, init))
+    return errs
+
+
+def lint_format_canonical(shaders_root):
+    """The canonical buffer-format block (now living inside comments) must
+    appear in exactly one source file."""
     files_with = []
     for root, _dirs, files in os.walk(shaders_root):
         for fn in files:
             if not (fn.endswith(".fsh") or fn.endswith(".vsh") or fn.endswith(".glsl")):
                 continue
             path = os.path.join(root, fn)
-            text = read_text(path)
-            code = re.sub(r"//[^\n]*", "", re.sub(r"/\*.*?\*/", "", text, flags=re.S))
-            if COLORTEX_FORMAT_RE.search(code):
+            comments = extract_comments(read_text(path))
+            if FORMAT_CONST_NAME_RE.search(comments):
                 files_with.append(os.path.relpath(path, shaders_root))
     errs = []
     if len(files_with) == 0:
-        errs.append("no `const int colortexNFormat` declarations found (expected exactly one file)")
+        errs.append("no commented colortexNFormat/shadowcolorNFormat declarations "
+                    "found (expected the canonical format block in exactly one file)")
     elif len(files_with) > 1:
-        errs.append("`const int colortexNFormat` declared in multiple files: %s"
-                    % ", ".join(sorted(files_with)))
+        errs.append("colortexNFormat/shadowcolorNFormat block declared in multiple "
+                    "files: %s (must be exactly one)" % ", ".join(sorted(files_with)))
     return errs
 
 
@@ -892,10 +959,13 @@ def run_validation(shaders_root, out_dir, profile_filter=None, program_glob=None
 
     entries = load_properties(props_path)
     profiles, profile_refs = parse_profiles(entries, options)
-    screen_refs = parse_screens(entries)
+    screen_refs = parse_screens(entries, options)
     lang_keys = parse_lang_option_keys(lang_path)
 
     option_names = set(options.keys())
+    # const-style options must never be #define-injected (would corrupt the
+    # `const NAME = value;` declaration).
+    const_option_names = {n for n, o in options.items() if o.kind == "const"}
 
     # --- static lints (profile-independent) ---
     all_programs = discover_programs(shaders_root)
@@ -905,7 +975,8 @@ def run_validation(shaders_root, out_dir, profile_filter=None, program_glob=None
     result.lint_fails += lint_rendertargets(all_programs, shaders_root)
     result.lint_fails += lint_sampler_budget(all_programs, shaders_root)
     result.lint_fails += lint_render_stages(all_programs, shaders_root)
-    result.lint_fails += lint_buffer_formats(shaders_root)
+    result.lint_fails += lint_format_live(all_programs, shaders_root)
+    result.lint_fails += lint_format_canonical(shaders_root)
     of, ow = lint_option_consistency(options, profile_refs, screen_refs, lang_keys)
     result.lint_fails += of
     result.lint_warns += ow
@@ -951,7 +1022,8 @@ def run_validation(shaders_root, out_dir, profile_filter=None, program_glob=None
             state = profiles[profile]
             prof_out = os.path.join(out_dir, target, profile)
             for rel, path, stage in programs:
-                patched = patch_source(path, shaders_root, state, option_names, macro_stubs)
+                patched = patch_source(path, shaders_root, state, option_names,
+                                       macro_stubs, const_option_names)
                 dest = os.path.join(prof_out, rel)
                 os.makedirs(os.path.dirname(dest), exist_ok=True)
                 with open(dest, "w", encoding="utf-8") as f:
@@ -1036,6 +1108,8 @@ SELFTEST_SETTINGS = """\
 //#define EXTRA_BROKEN // toggle, off by default -> guards broken code
 #define VC_QUALITY 2 // [1 2 4]
 #define AL_SUN_TINT vec3(1.0, 0.9, 0.8) // internal constant, not an option
+// const-style GUI option (Iris idiom), camelCase name, profile-overridable:
+const int shadowMapResolution = 2048; // [1024 2048 3072]
 """
 
 SELFTEST_PROPERTIES = """\
@@ -1043,18 +1117,19 @@ iris.features.optional = COMPUTE_SHADERS SSBO
 separateEntityDraws = true
 program.shadow.enabled = SHADOWS
 
-profile.POTATO = !SHADOWS !EXTRA_BROKEN VC_QUALITY=1
-profile.HIGH   = profile.POTATO SHADOWS VC_QUALITY=4
+profile.POTATO = !SHADOWS !EXTRA_BROKEN VC_QUALITY=1 shadowMapResolution=1024
+profile.HIGH   = profile.POTATO SHADOWS VC_QUALITY=4 shadowMapResolution=3072
 profile.BROKENON = profile.HIGH EXTRA_BROKEN
 
 screen = <profile> [LIGHTING]
-screen.LIGHTING = SHADOWS EXTRA_BROKEN VC_QUALITY
-sliders = VC_QUALITY
+screen.LIGHTING = SHADOWS EXTRA_BROKEN VC_QUALITY shadowMapResolution
+sliders = VC_QUALITY shadowMapResolution
 """
 
 SELFTEST_LANG = """\
 option.SHADOWS=Shadows
 option.VC_QUALITY=Cloud Quality
+option.shadowMapResolution=Shadow Resolution
 # NB: EXTRA_BROKEN intentionally missing -> should produce a lang WARNING
 """
 
@@ -1144,9 +1219,14 @@ def self_test():
         _write(os.path.join(sh, "lib", "util2.glsl"), SELFTEST_LIB_UTIL2)
         _write(os.path.join(sh, "deferred.fsh"), SELFTEST_GOOD_FSH)
         _write(os.path.join(sh, "deferred.vsh"), SELFTEST_GOOD_VSH)
-        # colortexNFormat single-source-of-truth (in final.fsh only)
+        # Canonical buffer-format block: lives INSIDE a comment (the location
+        # Iris reads it from). final.fsh is the single source of truth.
         _write(os.path.join(sh, "final.fsh"),
-               "#version 330 compatibility\nconst int colortex0Format = RGBA16F;\n"
+               "#version 330 compatibility\n"
+               "/* Buffer formats (Iris reads these from this comment):\n"
+               "const int colortex0Format = RGBA16F;\n"
+               "const int colortex1Format = RGBA8;\n"
+               "*/\n"
                "out vec4 c;\nvoid main(){ c = vec4(1.0); }\n")
 
         failures = []
@@ -1211,13 +1291,18 @@ def self_test():
         os.remove(os.path.join(sh, "prepare.fsh"))
         os.remove(os.path.join(sh, "prepare.vsh"))
 
-        # --- Part 4: duplicate colortexNFormat is a lint failure ---
+        # --- Part 4: duplicate canonical format block (2nd file) is caught ---
+        # A second file with the format block *in a comment* => two canonical
+        # sources => fail. (Commented, so it must NOT trip the live-format lint.)
         _write(os.path.join(sh, "composite.fsh"),
                "#version 330 compatibility\n/* RENDERTARGETS: 0 */\n"
-               "const int colortex1Format = RGBA8;\nout vec4 c;\nvoid main(){c=vec4(1.0);}\n")
+               "// const int colortex2Format = RGBA16F;\n"
+               "out vec4 c;\nvoid main(){c=vec4(1.0);}\n")
         res4 = run_validation(sh, out_dir, keep=False, require_glslang=False, verbose=False)
-        check(any("colortex" in e and "multiple" in e for e in res4.lint_fails),
-              "duplicate colortexNFormat across files is caught")
+        check(any("Format" in e and "multiple" in e for e in res4.lint_fails),
+              "duplicate canonical format block across files is caught")
+        check(not any("live `const int" in e for e in res4.lint_fails),
+              "a commented format decl does NOT trip the live-format lint")
         os.remove(os.path.join(sh, "composite.fsh"))
 
         # --- Part 5: option referenced by profile but absent from settings ---
@@ -1294,6 +1379,60 @@ def self_test():
               "F4: duplicate RENDERTARGETS index is caught")
         os.remove(os.path.join(sh, "composite.fsh"))
         os.remove(os.path.join(sh, "composite.vsh"))
+
+        # --- Regression FIELD BUG (a): live (uncommented) format const with a
+        # format identifier must FAIL the lint AND (now the stub table is gone)
+        # actually fail to compile, instead of the masked false PASS that
+        # shipped to the user's M4 Mac. ---
+        _write(os.path.join(sh, "composite.fsh"),
+               "#version 330 compatibility\n/* RENDERTARGETS: 0 */\n"
+               "const int colortex0Format = RGBA16F;\n"   # LIVE, not commented
+               "out vec4 c;\nvoid main(){ c = vec4(1.0); }\n")
+        _write(os.path.join(sh, "composite.vsh"), SELFTEST_GOOD_VSH)
+        resFB = run_validation(sh, out_dir, keep=False, require_glslang=False, verbose=False)
+        check(any("composite.fsh" in e and "live `const int colortex0Format" in e
+                  for e in resFB.lint_fails),
+              "FIELD(a): uncommented format const with identifier initializer is a hard lint FAIL")
+        if have_glslang:
+            check(not resFB.compile_results[("mac", "HIGH", "composite.fsh")][0],
+                  "FIELD(a): the format identifier now reaches glslang and fails (mask removed)")
+        os.remove(os.path.join(sh, "composite.fsh"))
+        os.remove(os.path.join(sh, "composite.vsh"))
+
+        # a LIVE format const with an INTEGER initializer is NOT flagged (only
+        # format-identifier initializers are).
+        _write(os.path.join(sh, "composite.fsh"),
+               "#version 330 compatibility\n/* RENDERTARGETS: 0 */\n"
+               "const int colortex0Format = 34842;\n"
+               "out vec4 c;\nvoid main(){ c = vec4(1.0); }\n")
+        resFBi = run_validation(sh, out_dir, keep=False, require_glslang=False, verbose=False)
+        check(not any("live `const int" in e for e in resFBi.lint_fails),
+              "FIELD: a live format const with an integer literal is not flagged")
+        os.remove(os.path.join(sh, "composite.fsh"))
+
+        # (b) the comment-wrapped canonical block in the good pack's final.fsh
+        # PASSES the live lint and satisfies the single-source lint (proved by
+        # the good pack being lint-clean in Part 1 -> re-assert explicitly here).
+        check(not any("Format" in e for e in res.lint_fails),
+              "FIELD(b): comment-wrapped format block passes live + single-source lints")
+
+        # (c) const-style slider option: parsed, screen-recognised, and
+        # profile-overridable (shadowMapResolution).
+        _opts = parse_settings(SELFTEST_SETTINGS)
+        check(_opts.get("shadowMapResolution") is not None
+              and _opts["shadowMapResolution"].kind == "const"
+              and _opts["shadowMapResolution"].value == "2048",
+              "const(c): `const int shadowMapResolution ... // [..]` parsed as a const option")
+        _entries = load_properties(os.path.join(sh, "shaders.properties"))
+        _profs, _ = parse_profiles(_entries, _opts)
+        check(_profs["POTATO"]["shadowMapResolution"] == (True, "1024")
+              and _profs["HIGH"]["shadowMapResolution"] == (True, "3072"),
+              "const(c): profiles override the const option value (POTATO=1024, HIGH=3072)")
+        check("shadowMapResolution" in parse_screens(_entries, _opts),
+              "const(c): camelCase const option recognised in screen/sliders lines")
+        if have_glslang:
+            check(res.compile_results[("mac", "HIGH", "deferred.fsh")][0],
+                  "const(c): const option is NOT #define-injected (program still compiles)")
 
         print("")
         if failures:
