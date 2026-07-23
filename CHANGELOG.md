@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.9] - 2026-07-23
+
+### Removed
+
+- **Sun-edge rim glow** — it read as an ugly bright outline; removed entirely.
+
+### Changed
+
+- **Anti-aliasing reworked for less flicker.** A temporal anti-flicker pass now
+  runs in BOTH FXAA and TAA modes (reproject + neighbourhood clamp + blend),
+  quieting specular / emissive / edge shimmer. In FXAA mode there is no jitter, so
+  it's a pure stabiliser and FXAA then smooths edges spatially on the final image;
+  FXAA thresholds were lowered and its reach widened so it visibly smooths more
+  edges. In TAA mode the history rejection was loosened (depth 5%→10%, variance
+  clip 1.0→1.6) so history stops being thrown away every frame — that constant
+  rejection was the "flickers like crazy," as the resolve fell back to the raw
+  jittered frame each time.
+
 ## [0.4.8] - 2026-07-23
 
 ### Changed

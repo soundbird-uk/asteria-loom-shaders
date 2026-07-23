@@ -149,12 +149,7 @@
 // terrain and blocks. Multiplied onto the sun colour, ramped in only at low sun.
 const vec3 AL_SUN_LOW_TINT = vec3(1.30, 0.70, 0.34);
 
-// Sun-edge RIM glow (0.4.8 — "amber glow on the very edges the sun hits"): a
-// Fresnel-like term that lights the grazing silhouette of sun-lit surfaces with a
-// bright warm rim. POWER concentrates it on the VERY edges (higher = thinner rim);
-// STRENGTH is how strongly it glows (HDR — it blooms).
-#define AL_RIM_POWER    4.5
-#define AL_RIM_STRENGTH 3.2
+// (0.4.9: the sun-edge rim glow was removed — it read as an ugly bright outline.)
 
 // Fake indirect-bounce floor. A tiny lift so unlit coloured faces are never
 // pure black (real GI arrives in a later phase).
@@ -828,11 +823,12 @@ const vec3 AL_UW_SNOW_TINT  = vec3(0.82, 0.86, 0.94);
 // Lottes console-FXAA thresholds. EDGE_MIN/EDGE_MUL gate which luma steps count
 // as an edge; REDUCE_* damp the search direction in near-flat areas; SPAN caps
 // the blur reach (texels). Defaults are the widely-used values.
-#define AL_FXAA_EDGE_MIN   0.0312   // ~1/32: ignore edges below this abs luma step
-#define AL_FXAA_EDGE_MUL   0.125    // 1/8:  relative edge threshold vs local max
+// 0.4.9: thresholds lowered + span widened so FXAA visibly smooths more edges.
+#define AL_FXAA_EDGE_MIN   0.0156   // ~1/64: catch fainter edges (more smoothing)
+#define AL_FXAA_EDGE_MUL   0.0625   // 1/16: lower relative threshold vs local max
 #define AL_FXAA_REDUCE_MUL 0.125    // 1/8:  direction reduce (bright-area damping)
 #define AL_FXAA_REDUCE_MIN 0.0078   // ~1/128
-#define AL_FXAA_SPAN       8.0      // max blur span (texels)
+#define AL_FXAA_SPAN       12.0     // max blur span (texels) — longer edge reach
 
 // --- TAA resolve shaping (internal, not GUI — composite3.fsh) --------------
 // Max fraction of the reprojected history kept per frame, scaled by confidence.
@@ -847,15 +843,17 @@ const vec3 AL_UW_SNOW_TINT  = vec3(0.82, 0.86, 0.94);
 #define AL_TAA_CONF_STEP 0.1
 #define AL_TAA_CONF_MAX  1.0
 // History rejection: relative linear-depth mismatch above this discards the
-// reprojected sample (disocclusion / a different surface). ~5%.
-#define AL_TAA_DEPTH_REJECT 0.05
-// Neighbourhood VARIANCE-CLIP width (composite3): the history is clipped to
-// mean +/- this * stddev of the 3x3 YCoCg neighbourhood (intersected with the
-// true min/max). 0.4.3 (ISSUE 1): replaces the old hard min/max box, which let
-// distant high-contrast edges swim. ~1.0 is the standard sweet spot — lower =
-// steadier (more ghost-prone), higher = looser (more crawl). Distant terrain
-// stays stable at 1.0 while near edges keep their AA.
-#define AL_TAA_CLIP_GAMMA 1.0
+// reprojected sample. 0.4.9: loosened 0.05 -> 0.10 so history isn't rejected every
+// frame on tiny reprojection error (that constant rejection was the "flickers like
+// crazy" — the resolve fell back to the raw jittered current each frame).
+#define AL_TAA_DEPTH_REJECT 0.10
+// Neighbourhood VARIANCE-CLIP width (composite3): history clipped to mean +/- this
+// * stddev of the 3x3 YCoCg box (intersected with true min/max). 0.4.9: widened
+// 1.0 -> 1.6 so history is preserved (much less flicker) at a little more ghosting.
+#define AL_TAA_CLIP_GAMMA 1.6
+// Anti-flicker (FXAA / no-jitter) blend ceiling — a touch lower than the TAA
+// ceiling so it quiets shimmer without smearing moving foliage/entities.
+#define AL_TAA_FXAA_MAX_BLEND 0.75
 
 
 /* =========================================================================

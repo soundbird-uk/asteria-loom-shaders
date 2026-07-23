@@ -128,21 +128,27 @@ void main() {
     return;
 #endif
 
-#ifndef AL_TAA
-    // Not in TAA mode (Off or FXAA): cheap passthrough. FXAA (if on) runs later in
-    // final.fsh on the tonemapped image. Still writes both targets (RENDERTARGETS
-    // 0,8) so the buffer chain shape is stable.
+#if AA_MODE == 0
+    // AA off: cheap passthrough. Still writes both targets (RENDERTARGETS 0,8) so
+    // the buffer chain shape is stable.
     outColor   = vec4(current, 1.0);
     outHistory = vec4(current, 0.0);
     return;
 #else
+    // Temporal resolve runs for BOTH FXAA and TAA modes. In FXAA mode there is NO
+    // jitter, so this is a pure temporal ANTI-FLICKER (reproject + neighbourhood
+    // clamp + blend) that quiets specular / emissive / edge shimmer; FXAA then
+    // smooths edges spatially in final.fsh. In TAA mode the camera IS jittered, so
+    // the same resolve additionally accumulates sub-pixel detail — the reprojection
+    // is un-jittered so a world-static point reconstructs to a stable position.
     vec2  texel = 1.0 / vec2(viewWidth, viewHeight);
     float depth = texture(depthtex0, texcoord).r;
 
-    // TAA mode: the camera IS jittered (lib/jitter.glsl). Un-jitter the reprojection
-    // so a world-static distant point reconstructs to a stable position (removing
-    // the frame-varying wobble); the jitter cancels out of the final history UV.
+#ifdef AL_TAA
     vec2 jitterUV = alHaltonOffset(frameCounter % 8) / vec2(viewWidth, viewHeight);
+#else
+    vec2 jitterUV = vec2(0.0);   // FXAA / anti-flicker: reproject from pixel centre
+#endif
 
     // --- 1. 3x3 closest-depth dilation ------------------------------------
     vec2  closestUV    = texcoord;
@@ -212,8 +218,15 @@ void main() {
     int  matID  = alDecodeMatID(texture(colortex3, texcoord).r);
     // Hand AND the block-selection outline (BASIC) use the short blend ceiling so
     // a fast weapon swing / a moving outline re-converges immediately (no ghost).
+    // The base ceiling is lower in FXAA (no-jitter anti-flicker) mode so it quiets
+    // shimmer without smearing moving foliage/entities.
+#ifdef AL_TAA
+    float baseBlend = AL_TAA_MAX_BLEND;
+#else
+    float baseBlend = AL_TAA_FXAA_MAX_BLEND;
+#endif
     bool lowBlend = (matID == AL_MATID_HAND) || (matID == AL_MATID_BASIC);
-    float maxBlend = lowBlend ? AL_TAA_HAND_MAX_BLEND : AL_TAA_MAX_BLEND;
+    float maxBlend = lowBlend ? AL_TAA_HAND_MAX_BLEND : baseBlend;
 
     // --- Sample + validate history (NaN-law) ------------------------------
     vec3  resolved = current;
