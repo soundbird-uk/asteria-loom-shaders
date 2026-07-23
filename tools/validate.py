@@ -1007,24 +1007,57 @@ def lint_format_live(programs, shaders_root):
 
 
 def lint_format_canonical(shaders_root):
-    """The canonical buffer-format block (now living inside comments) must
-    appear in exactly one source file."""
-    files_with = []
+    """The canonical buffer-format block (living inside comments) must appear in
+    exactly one source file PER WORLD (Phase 5 worldN awareness): Iris reads the
+    per-world program set, so each world folder declares the (identical, global)
+    buffer formats once, in its own final.fsh. Flat-root packs keep the single
+    global rule. Files under lib/ (shared includes) count toward every world; a
+    format block placed in lib/ therefore satisfies all worlds at once.
+    """
+    worlds = discover_worlds(shaders_root)
+    # world-key -> list of files declaring the block. '' = shared (root/lib) or flat.
+    by_world = {}
     for root, _dirs, files in os.walk(shaders_root):
         for fn in files:
             if not (fn.endswith(".fsh") or fn.endswith(".vsh") or fn.endswith(".glsl")):
                 continue
             path = os.path.join(root, fn)
             comments = extract_comments(read_text(path))
-            if FORMAT_CONST_NAME_RE.search(comments):
-                files_with.append(os.path.relpath(path, shaders_root))
+            if not FORMAT_CONST_NAME_RE.search(comments):
+                continue
+            rel = os.path.relpath(path, shaders_root)
+            w = rel_world(rel)               # 'world0' / 'world-1' / '(root)'
+            key = w if w in worlds else ""   # lib/ + root collapse to shared ''
+            by_world.setdefault(key, []).append(rel)
+
     errs = []
-    if len(files_with) == 0:
-        errs.append("no commented colortexNFormat/shadowcolorNFormat declarations "
-                    "found (expected the canonical format block in exactly one file)")
-    elif len(files_with) > 1:
+    shared = by_world.get("", [])
+    if len(shared) > 1:
         errs.append("colortexNFormat/shadowcolorNFormat block declared in multiple "
-                    "files: %s (must be exactly one)" % ", ".join(sorted(files_with)))
+                    "SHARED files: %s (must be exactly one)" % ", ".join(sorted(shared)))
+
+    if not worlds:
+        total = sum(len(v) for v in by_world.values())
+        if total == 0:
+            errs.append("no commented colortexNFormat/shadowcolorNFormat declarations "
+                        "found (expected the canonical format block in exactly one file)")
+        elif total > 1:
+            allf = [f for v in by_world.values() for f in v]
+            errs.append("colortexNFormat/shadowcolorNFormat block declared in multiple "
+                        "files: %s (must be exactly one)" % ", ".join(sorted(allf)))
+        return errs
+
+    # World layout: each world must see exactly one block — either its own OR a
+    # single shared (lib/) one, but not both, and not more than one of either.
+    for w in worlds:
+        own = by_world.get(w, [])
+        seen = len(own) + len(shared)
+        if seen == 0:
+            errs.append("world '%s' has no colortexNFormat/shadowcolorNFormat block "
+                        "(needs one in its final.fsh or a single shared lib/ block)" % w)
+        elif seen > 1:
+            errs.append("world '%s' sees the format block in multiple files: %s "
+                        "(must be exactly one)" % (w, ", ".join(sorted(own + shared))))
     return errs
 
 
