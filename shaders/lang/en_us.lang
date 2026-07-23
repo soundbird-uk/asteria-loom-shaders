@@ -180,8 +180,11 @@ value.GODRAY_STRENGTH.3.00 = Extreme
 option.EXPOSURE = Exposure Bias
 option.EXPOSURE.comment = Manual brightness trim on top of auto exposure, applied before the AgX tone map. 1.0 leaves the calibrated levels untouched; nudge it if you want the whole image brighter or darker.
 
-option.TAA = Temporal Anti-Aliasing
-option.TAA.comment = Smooths jagged edges and steadies sub-pixel detail by jittering the camera and blending across frames. Soft, grain-free, and reactive. On everywhere except Potato; off gives raw aliased edges at no cost.
+option.AA_MODE = Anti-Aliasing
+option.AA_MODE.comment = Edge smoothing. FXAA is a fast spatial filter on the final image with no camera jitter (no shimmer) — the recommended default. TAA jitters the camera and accumulates across frames for sharper sub-pixel detail, but can crawl slightly on far edges. Off gives raw aliased edges.
+value.AA_MODE.0 = Off
+value.AA_MODE.1 = FXAA
+value.AA_MODE.2 = TAA
 
 # ---- Debug -----------------------------------------------------------------
 option.DEBUG_VIEW = Debug View

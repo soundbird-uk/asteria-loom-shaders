@@ -144,6 +144,18 @@
 // softly, so noon does not clip. Edit + hot-reload.
 #define AL_DIRECT_BOOST 1.95
 
+// Low-sun warmth (0.4.8): extra warm-orange push on the DIRECT key as the sun
+// nears the horizon, so sunrise/sunset cast a strong golden/orange colour onto
+// terrain and blocks. Multiplied onto the sun colour, ramped in only at low sun.
+const vec3 AL_SUN_LOW_TINT = vec3(1.30, 0.70, 0.34);
+
+// Sun-edge RIM glow (0.4.8 — "amber glow on the very edges the sun hits"): a
+// Fresnel-like term that lights the grazing silhouette of sun-lit surfaces with a
+// bright warm rim. POWER concentrates it on the VERY edges (higher = thinner rim);
+// STRENGTH is how strongly it glows (HDR — it blooms).
+#define AL_RIM_POWER    4.5
+#define AL_RIM_STRENGTH 3.2
+
 // Fake indirect-bounce floor. A tiny lift so unlit coloured faces are never
 // pure black (real GI arrives in a later phase).
 #define BOUNCE_INTENSITY 1.0 // [0.00 0.25 0.50 0.75 1.00 1.50 2.00]
@@ -796,14 +808,21 @@ const vec3 AL_UW_SNOW_TINT  = vec3(0.82, 0.86, 0.94);
 #define AL_EXPOSURE_TAU 1.0
 #define AL_EXPOSURE_ADAPT_MIN 0.35
 
-// Anti-Aliasing. 0.4.4: the camera JITTER is disabled (it visibly shook distant
-// terrain — the reprojection could not track the sub-pixel wobble on far, high-
-// contrast silhouettes). composite3 now does FXAA edge smoothing PLUS an
-// unjittered temporal stabilisation (exact reprojection + variance clip) — smooth
-// edges with no geometry shimmer. This master toggle still gates the whole AA
-// pass; on in every preset except POTATO. Off = raw aliased edges, no cost.
-// (Name kept `TAA` so the profiles / screen / lang stay valid.)
-#define TAA // [TAA]
+// Anti-Aliasing MODE. 0 = Off, 1 = FXAA, 2 = TAA.
+//   FXAA — fast spatial edge smoothing done on the final tonemapped image (where
+//          it actually works); no camera jitter, so NO shimmer. The default.
+//   TAA  — jittered temporal accumulation (sharper sub-pixel detail) resolved in
+//          composite3 with un-jitter + variance clip. Steadier than raw aliasing
+//          but can still crawl slightly on far silhouettes; offered as a choice.
+#define AA_MODE 1 // [0 1 2]
+
+// Derived internal flags (do not set directly — driven by AA_MODE).
+#if AA_MODE == 2
+    #define AL_TAA        // jittered temporal AA path (jitter + composite3 resolve)
+#endif
+#if AA_MODE == 1
+    #define AL_FXAA_ON    // spatial FXAA in final.fsh
+#endif
 
 // --- FXAA shaping (internal, not GUI — composite3.fsh) --------------------
 // Lottes console-FXAA thresholds. EDGE_MIN/EDGE_MUL gate which luma steps count

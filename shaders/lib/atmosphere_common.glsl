@@ -300,6 +300,10 @@ vec3 alDirectColor(vec3 worldSunDir) {
     float h = clamp(normalize(worldSunDir).y, -1.0, 1.0);
     float day = smoothstep(-0.06, 0.16, h);          // matches alDayFactor ramp
     vec3 sun = alSunlightColor(h) * AL_SUN_TINT;
+    // Low-sun warmth: push the key toward a strong warm orange/gold as the sun
+    // nears the horizon, so sunrise/sunset visibly cast that colour on the world.
+    float low = 1.0 - smoothstep(0.02, 0.30, h);     // 1 at horizon .. 0 when high
+    sun *= mix(vec3(1.0), AL_SUN_LOW_TINT, low);
     vec3 moon = AL_MOON_TINT * 0.16;
     return mix(moon, sun, day) * SUN_INTENSITY;
 }

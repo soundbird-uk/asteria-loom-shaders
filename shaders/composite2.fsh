@@ -192,16 +192,16 @@ void main() {
     return;
 #elif DEBUG_VIEW == 10
     // FOG AMOUNT: greyscale fogF on terrain (sky shown blue). How much the far
-    // field is fogged.
+    // field is fogged (0.4.8 distance-based model).
     if (depth >= 1.0) { outColor = vec4(0.0, 0.0, 0.5, 1.0); return; }
-    vec3  vpD = alScreenToView(texcoord, depth);
-    vec3  ppD = alViewToPlayer(vpD);
-    float ddD = length(ppD);
-    vec3  wdD = (ddD > 1.0e-4) ? ppD / ddD : vec3(0.0, 1.0, 0.0);
+    float ddD = length(alViewToPlayer(alScreenToView(texcoord, depth)));
     float sgD = smoothstep(AL_FOG_SKY_GATE_LO, AL_FOG_SKY_GATE_HI,
                            alSaturate(texture(colortex2, texcoord).a));
-    float b0D = AL_FOG_SEA_DENSITY * max(FOG_DENSITY, 0.0) * sgD;
-    float fogFD = 1.0 - exp(-alFogOpticalDepth(cameraPosition.y, wdD, ddD, b0D));
+    float densD  = (0.6931472 / AL_FOG_DIST_HALF) * max(FOG_DENSITY, 0.0);
+    float baseD  = 1.0 - exp(-densD * ddD);
+    float edgeD  = pow(smoothstep(AL_FOG_EDGE_START, AL_FOG_EDGE_END,
+                                  ddD / max(far, 16.0)), AL_FOG_EDGE_CURVE);
+    float fogFD  = max(baseD, edgeD) * sgD;
     outColor = vec4(vec3(fogFD), 1.0);
     return;
 #elif DEBUG_VIEW == 11

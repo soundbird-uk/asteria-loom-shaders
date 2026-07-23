@@ -161,6 +161,17 @@ void main() {
     vec3 color = alLightPhase1(albedoLin, N, lm, shadowVis, wLightDir, wSunDir,
                                worldPos, dayFactor, ao);
 
+    // Sun-edge RIM glow: a Fresnel-like warm rim where the sun grazes the
+    // silhouette of sun-lit surfaces, so lit edges catch a bright amber glow.
+    // Gated to real geometry (not hand/outline/emissive) and to actually-lit,
+    // unshadowed faces so it reads as the sun catching an edge, not a global glow.
+    if (matID != AL_MATID_HAND && matID != AL_MATID_BASIC
+        && matID != AL_MATID_EMISSIVE && NdotL > 0.0) {
+        vec3  Vw    = normalize(-playerPos);                 // surface -> camera
+        float rim   = pow(1.0 - max(dot(N, Vw), 0.0), AL_RIM_POWER);
+        color += alDirectColor(wSunDir) * (rim * NdotL * shadowVis * AL_RIM_STRENGTH);
+    }
+
     // Emissive light sources self-illuminate from their OWN texture colour, so a
     // redstone torch glows red, a torch orange, glowstone yellow, lava orange.
     // The HDR add blooms in composite4/5, spreading that colour as a halo onto the

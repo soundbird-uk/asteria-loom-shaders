@@ -63,18 +63,17 @@ vec2 alHaltonOffset(int i) {
  in clip space is 2/viewSize (NDC spans [-1,1] across viewSize pixels), and the
  perspective divide by w happens after the vertex stage, so we pre-multiply by
  clipPos.w to keep the offset a constant screen-space distance at any depth.
- Behind #ifdef TAA with an exact identity fallback (returns the input unchanged)
- so a TAA-off build renders with no jitter and no cost.
+ Behind #ifdef AL_TAA (AA_MODE == 2) with an exact identity fallback (returns the
+ input unchanged) so FXAA / Off builds render with no jitter and no cost.
 */
 vec4 alJitter(vec4 clipPos) {
-    // 0.4.4: the sub-pixel camera jitter is DISABLED. Field testing found the
-    // jittered-TAA path visibly SHAKING distant terrain (the reprojection could
-    // not track the sub-pixel wobble on far, high-contrast silhouettes), which is
-    // exactly the shimmer the brief calls out. Anti-aliasing is now handled by an
-    // FXAA edge pass plus an (unjittered, therefore exact) temporal stabilisation
-    // in composite3 — smooth edges with NO geometry wobble. This function stays a
-    // no-op wrapper so every gbuffers vsh can keep calling it unchanged; re-enable
-    // the block below only if a fully reworked jitter+reproject lands later.
+    // Jitter is applied ONLY in TAA mode (AA_MODE == 2 -> AL_TAA). In FXAA/Off
+    // modes this is a no-op, so geometry never wobbles (FXAA does spatial AA in
+    // final.fsh instead). composite3 un-jitters the reprojection to match.
+#ifdef AL_TAA
+    vec2 offset = alHaltonOffset(frameCounter % 8);
+    clipPos.xy += offset * vec2(2.0 / viewWidth, 2.0 / viewHeight) * clipPos.w;
+#endif
     return clipPos;
 }
 

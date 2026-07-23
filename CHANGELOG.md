@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.8] - 2026-07-23
+
+### Changed
+
+- **Fog rebuilt on a distance-based system.** Fog is now purely a function of
+  distance from the camera (no height term — it no longer thins on high terrain).
+  A gentle base haze gives mid-field depth; an **edge seal** ramps fog to full
+  near the render distance so the render-distance boundary and the void below the
+  horizon are completely hidden — the last band of terrain melts seamlessly into
+  the sky. The mid-field stays a uniform dark haze (no band); only the extreme edge
+  blends to the real sky. No more banding lines.
+- **Anti-aliasing actually works now.** FXAA was running on the HDR buffer, where
+  compressed edge deltas fell under threshold and it effectively did nothing. It
+  now runs on the final tonemapped image (the correct place). Added an
+  **Anti-Aliasing** setting (Post screen): **Off / FXAA / TAA** — FXAA is the
+  default (no jitter, no shimmer); TAA is the jittered temporal path for those who
+  want sharper sub-pixel detail.
+- **Sunrise/sunset cast warmer light.** The direct key gets a strong warm
+  orange/gold push at low sun, so low-angle light visibly colours terrain and blocks.
+
+### Added
+
+- **Sun-edge rim glow.** Sun-lit surfaces now catch a bright amber Fresnel-like rim
+  on their grazing edges (blooms), so edges the sun hits glow warmly.
+
 ## [0.4.7] - 2026-07-23
 
 ### Fixed

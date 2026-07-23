@@ -128,6 +128,54 @@ float alLinearizeDepth(float d) {
     return alSaturate(lin / far);
 }
 
+// The full display pipeline for ONE pixel: exposure -> AgX -> grade -> sRGB.
+// Factored out so FXAA can evaluate it at neighbour UVs (FXAA must run on the
+// final DISPLAY image, not HDR — that is why the old HDR FXAA "did nothing":
+// Reinhard-compressed HDR edge deltas fell under the threshold).
+vec3 alFinalColor(vec2 uv) {
+    vec3 hdr = texture(colortex0, uv).rgb;
+    float adaptedExp = texelFetch(colortex5, ivec2(0, 0), 0).a;
+    adaptedExp = (adaptedExp >= 0.2 && adaptedExp <= 5.0) ? adaptedExp : 1.0;
+    hdr *= adaptedExp * EXPOSURE;
+    hdr = max(hdr, vec3(0.0));
+    vec3 mapped = alTonemapAgX(hdr);
+    mapped = alGradeBiome(mapped, biome_category, temperature, rainfall);
+    float flash = alSaturate((lightningBoltPosition.w - 0.5) * 2.0);
+    mapped = alGradeWeather(mapped, rainStrength, thunderStrength, wetness, flash);
+    return alLinearToSrgb(mapped);
+}
+
+#ifdef AL_FXAA_ON
+// FXAA (Timothy Lottes console version, reimplemented) on the DISPLAY image.
+float alFxaaLuma(vec3 c) { return sqrt(dot(c, vec3(0.299, 0.587, 0.114))); }
+vec3 alFXAA(vec2 uv, vec2 rcp) {
+    vec3  cM  = alFinalColor(uv);
+    float lM  = alFxaaLuma(cM);
+    float lNW = alFxaaLuma(alFinalColor(uv + vec2(-1.0, -1.0) * rcp));
+    float lNE = alFxaaLuma(alFinalColor(uv + vec2( 1.0, -1.0) * rcp));
+    float lSW = alFxaaLuma(alFinalColor(uv + vec2(-1.0,  1.0) * rcp));
+    float lSE = alFxaaLuma(alFinalColor(uv + vec2( 1.0,  1.0) * rcp));
+
+    float lMin = min(lM, min(min(lNW, lNE), min(lSW, lSE)));
+    float lMax = max(lM, max(max(lNW, lNE), max(lSW, lSE)));
+    if (lMax - lMin < max(AL_FXAA_EDGE_MIN, lMax * AL_FXAA_EDGE_MUL)) return cM;
+
+    vec2 dir = vec2(-((lNW + lNE) - (lSW + lSE)),
+                     ((lNW + lSW) - (lNE + lSE)));
+    float dirReduce = max((lNW + lNE + lSW + lSE) * 0.25 * AL_FXAA_REDUCE_MUL,
+                          AL_FXAA_REDUCE_MIN);
+    float rcpMin = 1.0 / (min(abs(dir.x), abs(dir.y)) + dirReduce);
+    dir = clamp(dir * rcpMin, vec2(-AL_FXAA_SPAN), vec2(AL_FXAA_SPAN)) * rcp;
+
+    vec3 rgbA = 0.5 * (alFinalColor(uv + dir * (1.0 / 3.0 - 0.5))
+                     + alFinalColor(uv + dir * (2.0 / 3.0 - 0.5)));
+    vec3 rgbB = rgbA * 0.5 + 0.25 * (alFinalColor(uv + dir * -0.5)
+                                   + alFinalColor(uv + dir *  0.5));
+    float lB = alFxaaLuma(rgbB);
+    return (lB < lMin || lB > lMax) ? rgbA : rgbB;
+}
+#endif
+
 void main() {
     // ---- Debug views (bypass grading) -----------------------------------
 #if DEBUG_VIEW == 1
@@ -167,29 +215,13 @@ void main() {
     fragColor = vec4(texture(colortex0, texcoord).rgb, 1.0);
     return;
 #else
-    // ---- Normal path: exposure -> AgX -> grade -> sRGB -------------------
-    vec3 hdr = texture(colortex0, texcoord).rgb;
-
-    // Adapted auto-exposure (composite5 wrote it to colortex5.a at texel (0,0)).
-    // NaN-law: range-validate [0.2,5.0] (NaN fails the comparisons) else 1.0.
-    float adaptedExp = texelFetch(colortex5, ivec2(0, 0), 0).a;
-    adaptedExp = (adaptedExp >= 0.2 && adaptedExp <= 5.0) ? adaptedExp : 1.0;
-
-    // exposure = auto-adaptation x EXPOSURE user bias. (The fixed calibration
-    // exposure that carries the field-approved levels lives inside AgX as
-    // AL_AGX_EXPOSURE — see lib/tonemap.glsl.)
-    hdr *= adaptedExp * EXPOSURE;
-    hdr = max(hdr, vec3(0.0));
-
-    // AgX soft-filmic tonemap -> display-linear [0,1].
-    vec3 mapped = alTonemapAgX(hdr);
-
-    // Biome-adaptive grade then weather storytelling (subtle, display-linear).
-    mapped = alGradeBiome(mapped, biome_category, temperature, rainfall);
-    float flash = alSaturate((lightningBoltPosition.w - 0.5) * 2.0);
-    mapped = alGradeWeather(mapped, rainStrength, thunderStrength, wetness, flash);
-
-    vec3 srgb = alLinearToSrgb(mapped);
+    // ---- Normal path: exposure -> AgX -> grade -> sRGB (+ FXAA) ----------
+#ifdef AL_FXAA_ON
+    vec2 texel = 1.0 / vec2(textureSize(colortex0, 0));
+    vec3 srgb  = alFXAA(texcoord, texel);
+#else
+    vec3 srgb  = alFinalColor(texcoord);
+#endif
 
     // Final NaN guard — a non-finite result falls back to mid-grey rather than
     // flashing a black/NaN frame to the screen.

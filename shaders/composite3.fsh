@@ -112,46 +112,6 @@ vec3 alYCoCgToRGB(vec3 y) {
 vec3 alReinhard(vec3 c)    { return c / (1.0 + alLuminance(c)); }
 vec3 alReinhardInv(vec3 c) { return c / max(1.0 - alLuminance(c), 1e-4); }
 
-// --- FXAA (0.4.4 — spatial edge anti-aliasing) ----------------------------
-// Timothy Lottes' console FXAA, reimplemented. Runs on the HDR scene; the edge
-// luma is taken on a Reinhard-compressed sample so the bright HDR sun/torches
-// don't dominate the edge test. This is the primary AA now that the camera
-// jitter is disabled (no more distant shimmer), backed by an unjittered temporal
-// stabilisation below.
-vec3 alFxaaSample(vec2 uv) {
-    return alSanitizeRGB(texture(colortex0, clamp(uv, vec2(0.0), vec2(1.0))).rgb);
-}
-float alFxaaLuma(vec3 c) {
-    vec3 r = c / (1.0 + max(max(c.r, c.g), c.b));   // reinhard -> [0,1)
-    return sqrt(dot(r, vec3(0.299, 0.587, 0.114)));
-}
-vec3 alFXAA(vec2 uv, vec2 rcp) {
-    vec3  cM  = alFxaaSample(uv);
-    float lM  = alFxaaLuma(cM);
-    float lNW = alFxaaLuma(alFxaaSample(uv + vec2(-1.0, -1.0) * rcp));
-    float lNE = alFxaaLuma(alFxaaSample(uv + vec2( 1.0, -1.0) * rcp));
-    float lSW = alFxaaLuma(alFxaaSample(uv + vec2(-1.0,  1.0) * rcp));
-    float lSE = alFxaaLuma(alFxaaSample(uv + vec2( 1.0,  1.0) * rcp));
-
-    float lMin = min(lM, min(min(lNW, lNE), min(lSW, lSE)));
-    float lMax = max(lM, max(max(lNW, lNE), max(lSW, lSE)));
-    if (lMax - lMin < max(AL_FXAA_EDGE_MIN, lMax * AL_FXAA_EDGE_MUL)) return cM;
-
-    vec2 dir = vec2(-((lNW + lNE) - (lSW + lSE)),
-                     ((lNW + lSW) - (lNE + lSE)));
-    float dirReduce = max((lNW + lNE + lSW + lSE) * 0.25 * AL_FXAA_REDUCE_MUL,
-                          AL_FXAA_REDUCE_MIN);
-    float rcpMin = 1.0 / (min(abs(dir.x), abs(dir.y)) + dirReduce);
-    dir = clamp(dir * rcpMin, vec2(-AL_FXAA_SPAN), vec2(AL_FXAA_SPAN)) * rcp;
-
-    vec3 rgbA = 0.5 * (alFxaaSample(uv + dir * (1.0 / 3.0 - 0.5))
-                     + alFxaaSample(uv + dir * (2.0 / 3.0 - 0.5)));
-    vec3 rgbB = rgbA * 0.5 + 0.25 * (alFxaaSample(uv + dir * -0.5)
-                                   + alFxaaSample(uv + dir *  0.5));
-    float lB = alFxaaLuma(rgbB);
-    return (lB < lMin || lB > lMax) ? rgbA : rgbB;
-}
-
 void main() {
     vec3 current = alSanitizeRGB(texture(colortex0, texcoord).rgb);
 
@@ -168,8 +128,10 @@ void main() {
     return;
 #endif
 
-#ifndef TAA
-    // TAA off: cheap passthrough. Still writes both targets (RENDERTARGETS 0,8).
+#ifndef AL_TAA
+    // Not in TAA mode (Off or FXAA): cheap passthrough. FXAA (if on) runs later in
+    // final.fsh on the tonemapped image. Still writes both targets (RENDERTARGETS
+    // 0,8) so the buffer chain shape is stable.
     outColor   = vec4(current, 1.0);
     outHistory = vec4(current, 0.0);
     return;
@@ -177,11 +139,10 @@ void main() {
     vec2  texel = 1.0 / vec2(viewWidth, viewHeight);
     float depth = texture(depthtex0, texcoord).r;
 
-    // FXAA the current frame first (spatial edge smoothing). The temporal pass
-    // below then stabilises it. The camera jitter is DISABLED (lib/jitter.glsl),
-    // so reconstruction/reprojection use the pixel centre directly — no jitter
-    // error, no distant shimmer.
-    current = alFXAA(texcoord, texel);
+    // TAA mode: the camera IS jittered (lib/jitter.glsl). Un-jitter the reprojection
+    // so a world-static distant point reconstructs to a stable position (removing
+    // the frame-varying wobble); the jitter cancels out of the final history UV.
+    vec2 jitterUV = alHaltonOffset(frameCounter % 8) / vec2(viewWidth, viewHeight);
 
     // --- 1. 3x3 closest-depth dilation ------------------------------------
     vec2  closestUV    = texcoord;
@@ -200,17 +161,18 @@ void main() {
     float expectZ = -1.0;   // prev-frame eye depth of this surface (<0 => sky/none)
 
     if (isSky) {
-        // Reconstruct the view ray from the pixel centre (no jitter) so the sky/
+        // Reconstruct the view ray from the UN-jittered pixel centre so the sky/
         // cloud silhouette reprojects stably (rotation-only, infinite distance).
-        vec3 viewDir     = normalize(alScreenToView(texcoord, 1.0));
+        vec3 viewDir     = normalize(alScreenToView(texcoord - jitterUV, 1.0));
         vec3 worldDir    = mat3(gbufferModelViewInverse) * viewDir;
         vec3 prevViewDir = mat3(gbufferPreviousModelView) * worldDir;
         vec4 prevClip    = gbufferPreviousProjection * vec4(prevViewDir, 0.0);
         if (prevClip.w <= 0.0) histUV = vec2(-1.0);   // behind camera -> reject
         else                   histUV = (prevClip.xy / prevClip.w) * 0.5 + 0.5;
     } else {
-        // Reconstruct the closest surface from its pixel centre (no jitter).
-        vec3 viewPos   = alScreenToView(closestUV, closestDepth);
+        // Reconstruct the closest surface from its UN-jittered screen position;
+        // the jitter cancels in histUV = texcoord + (prevScr - closestUV).
+        vec3 viewPos   = alScreenToView(closestUV - jitterUV, closestDepth);
         vec3 playerPos = alViewToPlayer(viewPos);
         vec3 prevView  = alPlayerToPrevView(playerPos);
         vec3 prevScr   = alPrevViewToScreen(prevView);

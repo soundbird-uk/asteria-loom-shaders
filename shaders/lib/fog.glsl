@@ -65,6 +65,20 @@
 // fogs less (height falloff). GUI FOG_DENSITY scales this.
 #define AL_FOG_SEA_DENSITY 0.0030
 
+// 0.4.8 DISTANCE-BASED FOG (rebuild). Pure distance from the camera — NO height
+// dependence, so fog no longer thins on high terrain (the user's report). A gentle
+// base aerial haze gives mid-field depth; an EDGE SEAL then ramps fog to FULL near
+// the render distance so the render-distance boundary + the void below the horizon
+// are completely hidden — the last band of terrain melts seamlessly into the sky.
+//   DIST_HALF   — distance (blocks) at which the base haze reaches ~50%
+//   EDGE_START  — fraction of `far` where the edge seal begins (mid-field stays clear)
+//   EDGE_END    — fraction of `far` where fog is FULL (boundary fully hidden)
+//   EDGE_CURVE  — >1 keeps the mid-field clear, then ramps hard near the edge
+#define AL_FOG_DIST_HALF   340.0
+#define AL_FOG_EDGE_START  0.60
+#define AL_FOG_EDGE_END    0.985
+#define AL_FOG_EDGE_CURVE  2.2
+
 // Scale height (metres): altitude over which density falls by 1/e. Larger =
 // fog climbs higher up mountains before thinning.
 #define AL_FOG_HEIGHT 26.0
@@ -411,10 +425,20 @@ vec3 alApplyAerialFog(vec3 sceneColor, float camY, vec3 worldDir, float dist,
     // Sky-exposure gate: no open sky above -> no aerial fog (caves/interiors).
     float skyGate = smoothstep(AL_FOG_SKY_GATE_LO, AL_FOG_SKY_GATE_HI, skyLightmap);
 
-    float beta0 = AL_FOG_SEA_DENSITY * max(userDensity, 0.0) * densityMul * skyGate;
-    float tau   = alFogOpticalDepth(camY, worldDir, dist, beta0);
-    float ext   = exp(-tau);                 // 1 = clear, 0 = fully fogged
-    float fogF  = 1.0 - ext;                 // how fogged this pixel is (0..1)
+    float farD = max(farDist, 16.0);
+
+    // --- DISTANCE-BASED fog amount (0.4.8) --------------------------------
+    // Base aerial haze: DISTANCE only (no height term), so it never thins on high
+    // terrain. userDensity (GUI FOG_DENSITY) + biome scale it.
+    float density = (0.6931472 / AL_FOG_DIST_HALF) * max(userDensity, 0.0) * densityMul;
+    float baseFog = 1.0 - exp(-density * max(dist, 0.0));
+
+    // Edge seal: ramps to FULL fog near the render distance so the boundary/void
+    // is completely hidden and the last terrain melts into the sky.
+    float edge = pow(smoothstep(AL_FOG_EDGE_START, AL_FOG_EDGE_END, dist / farD),
+                     AL_FOG_EDGE_CURVE);
+
+    float fogF = max(baseFog, edge) * skyGate;
 
     // --- Time-of-day factors ---------------------------------------------
     // SOURCE OF TRUTH: lib/lighting.glsl `alDayFactor` (the pack's canonical
@@ -446,10 +470,18 @@ vec3 alApplyAerialFog(vec3 sceneColor, float camY, vec3 worldDir, float dist,
     // moonlit silhouettes, not pale mist. mix(...,1.0,dayF) leaves noon untouched.
     vec3 nightHaze = mix(vec3(0.60, 0.70, 1.00), vec3(1.0), dayF)
                    * mix(AL_FOG_NIGHT_DIM, 1.0, dayF);
+    haze *= nightHaze;
 
-    vec3 inscatter = haze * nightHaze;
-    vec3 result    = sceneColor * ext + inscatter * fogF;
+    // Mid-field uses the uniform dark haze (NO band). Only the very edge blends to
+    // the ACTUAL sky in the view direction so the fully-fogged far terrain melts
+    // SEAMLESSLY into the sky/horizon behind it (hides render distance). skyBlend =
+    // edge^2 lags the fog ramp, so the sky colour appears ONLY at the extreme edge
+    // — never in the mid-field, so no horizon band can form.
+    float skyBlend = edge * edge;
+    vec3  skyInView = alFogSkyInscatter(worldDir) * nightHaze;
+    vec3  inscatter = mix(haze, skyInView, skyBlend);
 
+    vec3 result = sceneColor * (1.0 - fogF) + inscatter * fogF;
     return max(result, vec3(0.0));
 }
 
