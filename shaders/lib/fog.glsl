@@ -383,6 +383,21 @@ vec3 alApplyAerialFog(vec3 sceneColor, float camY, vec3 worldDir, float dist,
                     rainStrength, wetness, thunderStrength,
                     densityMul, scatterTint, desat, darken);
 
+#if defined AL_DIM_NETHER
+    // Nether: dense, short-range ember fog EVERYWHERE (no sky gate — Nether sky-
+    // lightmap is 0, so a gate would remove all fog). Pure distance; ember tint.
+    float ndens = (0.6931472 / AL_NETHER_FOG_HALF) * max(userDensity, 0.0) * densityMul;
+    float nFogF = 1.0 - exp(-ndens * max(dist, 0.0));
+    vec3  nInsc = AL_NETHER_FOG * scatterTint * darken;
+    return max(sceneColor * (1.0 - nFogF) + nInsc * nFogF, vec3(0.0));
+#elif defined AL_DIM_END
+    // End: purple haze, no sky gate, medium range; distant terrain fades into the
+    // purple, the black-hole sky shows through where terrain is absent.
+    float edens = (0.6931472 / AL_END_FOG_HALF) * max(userDensity, 0.0) * densityMul;
+    float eFogF = 1.0 - exp(-edens * max(dist, 0.0));
+    vec3  eInsc = AL_END_FOG * scatterTint * darken;
+    return max(sceneColor * (1.0 - eFogF) + eInsc * eFogF, vec3(0.0));
+#else
     // Sky-exposure gate: no open sky above -> no aerial fog (caves/interiors).
     float skyGate = smoothstep(AL_FOG_SKY_GATE_LO, AL_FOG_SKY_GATE_HI, skyLightmap);
 
@@ -444,6 +459,7 @@ vec3 alApplyAerialFog(vec3 sceneColor, float camY, vec3 worldDir, float dist,
 
     vec3 result = sceneColor * (1.0 - fogF) + inscatter * fogF;
     return max(result, vec3(0.0));
+#endif  // dimension branch
 }
 
 #endif // AL_LIB_FOG

@@ -1,5 +1,6 @@
 #version 330 compatibility
 #include "/settings.glsl"
+#define AL_DIM_NETHER   // Nether lighting branch in lib/lighting.glsl (no sun; ember ambient)
 #include "/lib/common.glsl"
 #include "/lib/color.glsl"
 #include "/lib/encoding.glsl"

@@ -32,10 +32,12 @@ in vec3 worldDir;
 layout(location = 0) out vec4 outColor;
 
 void main() {
-    // Kill ONLY the vanilla stars — the procedural night sky replaces them.
-    if (renderStage == MC_RENDER_STAGE_STARS) {
-        discard;
-    }
+    // NETHER (world-1): no atmosphere sky — the dimension is a warm ember void.
+    // Any "sky" pixel (rare in the Nether) is the ember fog colour so it matches
+    // the fog seamlessly. Vanilla stars/sun are suppressed.
+    if (renderStage == MC_RENDER_STAGE_STARS) discard;
+    outColor = vec4(AL_NETHER_FOG, 1.0);
+    return;
 
     vec3 dir    = normalize(worldDir);
     vec3 sunDir = normalize(mat3(gbufferModelViewInverse) * sunPosition);

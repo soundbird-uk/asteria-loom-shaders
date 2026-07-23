@@ -1,5 +1,11 @@
 #version 330 compatibility
 #include "/settings.glsl"
+// NETHER (world-1): no volumetric clouds. Undefining the option here compiles the
+// whole cloud path out of THIS file while leaving the AO-history copy (outside the
+// guard) running, keeping the temporal chain intact. Other files are unaffected.
+#ifdef VOLUMETRIC_CLOUDS
+#undef VOLUMETRIC_CLOUDS
+#endif
 #include "/lib/common.glsl"
 #include "/lib/space.glsl"
 #ifdef VOLUMETRIC_CLOUDS

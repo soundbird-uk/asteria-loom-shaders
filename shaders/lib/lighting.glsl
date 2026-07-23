@@ -69,6 +69,15 @@ vec3 alLightPhase1(vec3 albedoLin, vec3 worldN, vec2 lm,
     // AL_NIGHT_DIRECT_SCALE: part of the 0.3.2 darker-night retune. NOON is
     // untouched (dayFactor==1 -> scale 1.0).
     float NdotL     = max(dot(worldN, worldLDir), 0.0);
+#if defined AL_DIM_NETHER
+    // Nether: no sun/moon key — the world is lit by ember ambient + blocklight.
+    vec3  direct = vec3(0.0);
+#elif defined AL_DIM_END
+    // End: a cool violet key from the (existing) End light direction, softly wrapped
+    // so the sunless dimension still has gentle directionality. No cloud shadow.
+    float endWrap = NdotL * 0.6 + 0.4;
+    vec3  direct  = AL_END_KEY * (endWrap * shadowVis * AL_DIRECT_BOOST * 0.5);
+#else
     float cloudSh   = alCloudShadow(worldPos);
     float directNight = mix(AL_NIGHT_DIRECT_SCALE, 1.0, dayFactor);
     // 0.4.3 (ISSUE 7/8): strengthen the direct key so the sun-facing side clearly
@@ -77,46 +86,40 @@ vec3 alLightPhase1(vec3 albedoLin, vec3 worldN, vec2 lm,
     // lit/shadow CONTRAST rises — surfaces gain a real lit side and a dark side.
     vec3  direct  = alDirectColor(worldSunDir)
                   * (NdotL * shadowVis * cloudSh * directNight * AL_DIRECT_BOOST);
+#endif
 
-    // --- Hemisphere sky ambient (the cool fill) ---------------------------
-    // The upper-hemisphere sky colour now comes from the atmosphere model
-    // (day-scaled, dusk-warming); the lower hemisphere keeps the warm ground
-    // bounce identity. Wrap so faces turned from the sky still pick up fill.
+    // --- Hemisphere ambient (the fill) ------------------------------------
     float up      = worldN.y * 0.5 + 0.5;                 // 0 down .. 1 up
+#if defined AL_DIM_NETHER
+    // Nether: flat warm-ember ambient everywhere (no sky, so NO skyLm gate — the
+    // gate would kill all light since Nether sky-lightmap is 0). A gentle top/down
+    // wrap keeps some shape. Blocklight (below) still dominates near sources.
+    vec3  ambient   = AL_NETHER_AMBIENT * (0.55 + 0.45 * up) * AMBIENT_INTENSITY;
+    vec3  nightFloor = vec3(0.0);
+#elif defined AL_DIM_END
+    // End: purple ambient fill, hemispheric, not sky-gated (End sky-lightmap is 0
+    // away from portals). Sits above black so terrain reads in the violet gloom.
+    vec3  ambient   = AL_END_AMBIENT * (0.5 + 0.5 * up) * AMBIENT_INTENSITY;
+    vec3  nightFloor = vec3(0.0);
+#else
+    // Overworld: atmosphere-driven hemisphere sky fill.
     vec3  skyCol  = alAmbientColor(worldSunDir);          // atmosphere-driven
     vec3  hemiCol = mix(AL_AMBIENT_GROUND, skyCol, up);
-
-    // Field fix #2: desaturate the cool tint toward luminance-preserving grey as
-    // the RAW sky lightmap falls, so caves / deep water don't glow purple. Full
-    // cool tint only where genuinely sky-exposed.
+    // Field fix #2: desaturate the cool tint toward grey as the sky lightmap falls
+    // so caves / deep water don't glow purple.
     float skySat  = smoothstep(AL_AMBIENT_DESAT_LO, AL_AMBIENT_DESAT_HI, lm.y);
     hemiCol       = mix(vec3(alLuminance(hemiCol)), hemiCol, skySat);
-
-    // 0.4.3 (ISSUE 7): lower the wrap FLOOR so faces turned AWAY from the open sky
-    // (down/backfacing, up->0) receive markedly less hemisphere fill than up-facing
-    // ones. The old 0.6 floor lit every backface to 60% of full ambient, flattening
-    // objects into a uniform wash; 0.30 + 0.70*up gives a clear top-lit gradient so
-    // a tree/terrain reads with a lit side and a genuinely darker shadow side.
-    float wrap    = 0.30 + 0.70 * up;                     // soft wrap term
-    float skyLm   = lm.y * lm.y;                          // sky lightmap, eased
-    // Day scaling lives inside alAmbientColor (0.18 at night .. 1.0 by day). We
-    // re-scale the NIGHT ambient here in the shared model (NOT the atmosphere core)
-    // by mix(AL_NIGHT_AMBIENT_LIFT * NIGHT_BRIGHTNESS, 1.0, dayFactor). 0.3.2 field
-    // retune: AL_NIGHT_AMBIENT_LIFT dropped 1.9 -> 0.90 so nights read clearly
-    // darker/moodier than vanilla (the user found 1.9 "looks exactly like vanilla,
-    // not nearly dark enough"). NIGHT_BRIGHTNESS is the user-facing multiplier on
-    // this night term; NOON is provably unchanged (dayFactor == 1 -> factor 1.0).
+    // 0.4.3 (ISSUE 7): lower wrap FLOOR so backfacing/down faces get less fill ->
+    // a clear top-lit gradient (lit side vs darker shadow side).
+    float wrap    = 0.30 + 0.70 * up;
+    float skyLm   = lm.y * lm.y;
     float nightLift = mix(AL_NIGHT_AMBIENT_LIFT * NIGHT_BRIGHTNESS, 1.0, dayFactor);
-    // AL_AMBIENT_SCALE (0.4.4): trims the cool sky fill so the shadowed side goes
-    // properly dark against the boosted direct key (lit-vs-shadow contrast).
     vec3  ambient = hemiCol * (skyLm * wrap) * AMBIENT_INTENSITY * nightLift
                   * AL_AMBIENT_SCALE;
-
-    // --- Night floor ------------------------------------------------------
-    // A cool-blue minimum, gated by sky exposure so caves stay dark but open
-    // terrain never goes pitch black under the night sky.
+    // Cool-blue night minimum, sky-gated so caves stay dark.
     vec3 nightFloor = AL_NIGHT_FLOOR * NIGHT_BRIGHTNESS
                     * (skyLm * (1.0 - dayFactor));
+#endif
 
     // --- Warm block light -------------------------------------------------
     float bl     = lm.x;

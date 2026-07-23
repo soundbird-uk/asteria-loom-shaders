@@ -970,4 +970,27 @@ const vec3 AL_NIGHT_FLOOR = vec3(0.008, 0.012, 0.026);
 // black. (BOUNCE_INTENSITY scales it; AO multiplies it.)
 const vec3 AL_BOUNCE = vec3(0.006, 0.006, 0.008);
 
+/* =========================================================================
+   DIMENSIONS (Phase 5 — world-1 Nether, world1 End). Colour identity for the
+   per-dimension passes. Programs in shaders/world-1 / shaders/world1 define
+   AL_DIM_NETHER / AL_DIM_END before including the shared libs so lib/lighting +
+   lib/fog take the right branch. Edit + hot-reload.
+   ========================================================================= */
+// --- Nether (world-1) ---
+// Flat warm-ember ambient (the Nether glows everywhere; no sun, no sky gate).
+const vec3 AL_NETHER_AMBIENT = vec3(0.34, 0.13, 0.07);
+// Dense short-range ember fog tint + its half-distance (blocks to ~50% fog).
+const vec3 AL_NETHER_FOG = vec3(0.26, 0.07, 0.035);
+#define AL_NETHER_FOG_HALF 26.0
+
+// --- End (world1) ---
+// Cool violet key + purple ambient (the End has no sun). The black-hole sky is
+// drawn procedurally in world1/deferred1; these light the terrain.
+const vec3 AL_END_KEY     = vec3(0.55, 0.42, 0.85);   // cool violet directional-ish
+const vec3 AL_END_AMBIENT = vec3(0.24, 0.16, 0.34);   // purple ambient fill
+const vec3 AL_END_FOG     = vec3(0.10, 0.06, 0.16);   // purple haze
+#define AL_END_FOG_HALF 260.0
+// Procedural black-hole apparent size (angular radius multiplier). Small default.
+#define END_BLACKHOLE_SIZE 1.0 // [0.50 0.75 1.00 1.50 2.00]
+
 #endif // AL_SETTINGS

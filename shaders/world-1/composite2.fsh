@@ -1,5 +1,6 @@
 #version 330 compatibility
 #include "/settings.glsl"
+#define AL_DIM_NETHER   // Nether fog branch in lib/fog.glsl (ember, no sky gate)
 #include "/lib/common.glsl"
 #include "/lib/color.glsl"
 #include "/lib/encoding.glsl"
@@ -323,7 +324,7 @@ void main() {
                                    rainStrength, wetness, thunderStrength);
 #endif
 
-#ifdef GOD_RAYS
+#if defined(GOD_RAYS) && !defined(AL_DIM_NETHER)
     // --- Sun shafts / god rays (ISSUE 12) — above water -------------------
     // Additive warm shafts fanning from the sun through gaps in leaves/terrain,
     // heavily gated (see alGodRayGate) so it never washes the screen, and stable

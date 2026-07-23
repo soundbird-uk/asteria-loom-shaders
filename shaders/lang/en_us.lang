@@ -95,6 +95,13 @@ value.STARS_DENSITY.0.75 = Light
 value.STARS_DENSITY.1.00 = Default
 value.STARS_DENSITY.1.50 = Dense
 value.STARS_DENSITY.2.00 = Very Dense
+option.END_BLACKHOLE_SIZE = End Black Hole Size
+option.END_BLACKHOLE_SIZE.comment = Apparent size of the procedural black hole that hangs in the End sky. Lower is a distant pinpoint; higher looms large.
+value.END_BLACKHOLE_SIZE.0.50 = Distant
+value.END_BLACKHOLE_SIZE.0.75 = Small
+value.END_BLACKHOLE_SIZE.1.00 = Default
+value.END_BLACKHOLE_SIZE.1.50 = Large
+value.END_BLACKHOLE_SIZE.2.00 = Looming
 
 # ---- Clouds ----------------------------------------------------------------
 screen.CLOUDS = Clouds
