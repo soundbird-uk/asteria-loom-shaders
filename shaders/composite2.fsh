@@ -68,8 +68,15 @@ uniform float rainStrength;
 uniform float wetness;
 uniform float thunderStrength;
 
-// Camera state (verified). Skip fog when the eye is submerged (Phase 4 owns it).
+// Camera state (verified). isEyeInWater: 0 = none, 1 = water, 2 = lava, 3 =
+// powder snow. Phase 4 (WATER agent) now HANDLES the submerged cases here (the
+// underwater medium) instead of passing them through.
 uniform int   isEyeInWater;
+
+// frameTimeCounter (verified Iris uniform) — Phase 4 addition, needed ONLY by
+// the underwater UV-refraction wobble in the isEyeInWater branch below. Declared
+// nowhere else in this program / its includes, so this is collision-free.
+uniform float frameTimeCounter;
 
 // Render distance (blocks). Drives the far-plane convergence ramp that fades
 // distant terrain into the sky so the render-distance edge is seamless.
@@ -113,8 +120,49 @@ void main() {
     return;
 #endif
 
-    // Sky (clouds carry their own transmittance) and underwater -> passthrough.
-    if (depth >= 1.0 || isEyeInWater != 0) {
+    // ---- UNDERWATER MEDIUM (Phase 4, WATER agent — the isEyeInWater branch) --
+    // isEyeInWater: 1 = water, 2 = lava, 3 = powder snow. Each is an exponential
+    // distance haze toward a medium tint; water additionally gets a gentle
+    // time-animated UV refraction wobble of the scene sample. Aerial fog stays
+    // SKIPPED underwater (this branch returns before the fog integral). We have
+    // no per-biome water colour at composite time, so water uses a pleasant
+    // UNIVERSAL blue-green (documented approximation). All NaN-safe: fail clear.
+    if (isEyeInWater != 0) {
+        vec2 uv = texcoord;
+        if (isEyeInWater == 1) {
+            float t = frameTimeCounter;
+            vec2 wob = vec2(sin(uv.y * 42.0 + t * 1.4),
+                            sin(uv.x * 42.0 + t * 1.7)) * AL_UW_WOBBLE;
+            uv = clamp(texcoord + wob, 0.0, 1.0);
+        }
+        vec3  s  = texture(colortex0, uv).rgb;
+        float du = texture(depthtex0, uv).r;
+
+        // Distance to the sampled surface (sky / degenerate -> far).
+        float d;
+        if (du >= 1.0) {
+            d = far * 2.0;
+        } else {
+            vec3 pp = alViewToPlayer(alScreenToView(uv, du));
+            d = length(pp);
+            if (!(d >= 0.0) || d > 1.0e7) d = far * 2.0;
+        }
+
+        vec3  tint; float density;
+        if (isEyeInWater == 1)      { tint = AL_UW_WATER_TINT; density = AL_UW_WATER_DENSITY; }
+        else if (isEyeInWater == 2) { tint = AL_UW_LAVA_TINT;  density = AL_UW_LAVA_DENSITY;  }
+        else                        { tint = AL_UW_SNOW_TINT;  density = AL_UW_SNOW_DENSITY;  }
+
+        float haze = alSaturate(1.0 - exp(-max(density, 0.0) * d));
+        vec3  outc = mix(s, tint, haze);
+
+        bool okU = all(greaterThanEqual(outc, vec3(0.0)));
+        outColor = vec4(okU ? outc : s, 1.0);
+        return;
+    }
+
+    // Sky (clouds carry their own transmittance) -> passthrough.
+    if (depth >= 1.0) {
         outColor = vec4(scene, 1.0);
         return;
     }

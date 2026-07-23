@@ -43,6 +43,14 @@
                          validated with an analytic fallback.
    colortex7    RGBA16F  Cloud history (CLOUDS agent): rgb = in-scattered
                          radiance, a = transmittance. `clear.colortex7 = false`.
+   colortex8    RGBA16F  TAA history (TAA agent): rgb = resolved scene colour,
+                         a = blend confidence. `clear.colortex8 = false`
+                         (persists across frames for temporal reprojection) ->
+                         reads are NaN-proof range-validated in composite3.fsh.
+   colortex9    RGBA16F  Bloom tile atlas (BLOOM agent): mip chain packed as
+                         tiles (layout in lib/bloom.glsl). Cleared. Format
+                         declared here on the BLOOM agent's behalf per contract
+                         §2 (TAA agent owns the colortex8/9 format consts).
    shadowcolor0 RGBA8    reserved for Phase 2 (coloured/translucent shadows);
                          Phase 1's shadow pass is depth-only, so nothing is
                          allocated yet — this only reserves the format.
@@ -58,6 +66,8 @@ const int colortex4Format = RG16F;
 const int colortex5Format = RGBA16F;
 const int colortex6Format = RGBA16F;
 const int colortex7Format = RGBA16F;
+const int colortex8Format = RGBA16F;
+const int colortex9Format = RGBA16F;
 const int shadowcolor0Format = RGBA8;
 */
 

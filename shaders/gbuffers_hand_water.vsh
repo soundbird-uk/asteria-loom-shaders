@@ -1,9 +1,14 @@
 #version 330 compatibility
 #include "/settings.glsl"
+#include "/lib/jitter.glsl"
 
 /*
  gbuffers_hand_water (vertex) — translucent held items (potions, stained
- glass in hand, water bucket contents). Same forward-lit path as water.
+ glass in hand, water bucket contents). Same forward-lit path as water, kept
+ MINIMAL: no G-buffer surface write (RENDERTARGETS: 0 only in the fsh) — held
+ items get no SSR — just the shared forward lighting. The last position line
+ applies the TAA sub-pixel jitter (identity when TAA is off) so the hand moves
+ with the rest of the jittered scene and does not shimmer.
 */
 
 uniform mat4 gbufferModelViewInverse;
@@ -25,4 +30,6 @@ void main() {
     vec3 viewN = normalize(gl_NormalMatrix * gl_Normal);
     wnormal = mat3(gbufferModelViewInverse) * viewN;
     playerPos = (gbufferModelViewInverse * viewPos).xyz;
+
+    gl_Position = alJitter(gl_Position);   // TAA jitter (identity when TAA off)
 }

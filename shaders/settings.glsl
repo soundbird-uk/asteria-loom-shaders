@@ -448,12 +448,135 @@ const float sunPathRotation = -35.0;
 
 
 /* =========================================================================
+   WATER  (Phase 4 — SSR, ripples, absorption, caustics, underwater)
+   -------------------------------------------------------------------------
+   gbuffers_water draws forward-lit ripple-normalled water AND (new) writes its
+   surface into the G-buffer (colortex2 normal+lightmap, colortex3 matID WATER)
+   so the new `composite` pass can screen-space reflect and depth-tint it. The
+   `composite` pass ALWAYS runs (cheap early-out for non-water pixels): SSR is
+   gated INTERNALLY by the SSR toggle so absorption + caustics survive with SSR
+   off. Underwater medium (haze + wobble) is a surgical addition to composite2's
+   isEyeInWater branch. Internal shaping tunables live at the bottom of this
+   section.
+   ========================================================================= */
+
+// Screen-space reflections on water/ice surfaces. When on, the composite pass
+// raymarches the reflected ray against the depth buffer and blends the hit (or
+// a sky-LUT fallback on miss) over the water via Schlick Fresnel. When off, the
+// reflection term falls back to the sky sample only (still Fresnel-blended) and
+// absorption + caustics still run. POTATO turns this off.
+#define SSR // [SSR]
+
+// SSR raymarch quality: 1 = 16 steps, 2 = 24, 3 = 32 (binary-search refined
+// either way). Higher = longer, cleaner reflections at more cost. LOW uses 1,
+// MEDIUM/HIGH 2, ULTRA 3.
+#define SSR_QUALITY 2 // [1 2 3]
+
+// Animated ripple normals on the water surface (2-3 octave wind-aligned
+// wave-noise, pure math). Drives both the forward shading and the SSR
+// reflection wobble. Cheap, so it stays ON even on POTATO.
+#define WATER_WAVES // [WATER_WAVES]
+
+// Animated voronoi caustics on the submerged scene, projected along the sun
+// direction and faded with water depth + sky exposure + time of day. POTATO
+// turns this off.
+#define WATER_CAUSTICS // [WATER_CAUSTICS]
+
+// --- Wave shaping (internal, not GUI) --------------------------------------
+// Gentle, dreamy ripples — NOT an ocean storm (brief §3). SCALE maps world XZ
+// into the noise domain (bigger = shorter wavelength ripples); SPEED is the
+// wind-drift rate; AMP scales the normal perturbation (kept subtle); NORMAL_EPS
+// is the central-difference step (world metres) for the normal.
+#define AL_WATER_WAVE_OCTAVES 3
+#define AL_WATER_WAVE_SCALE   0.16
+#define AL_WATER_WAVE_SPEED   0.55
+#define AL_WATER_WAVE_AMP     0.28
+#define AL_WATER_NORMAL_EPS   0.10
+
+// --- Water surface opacity (internal, not GUI) -----------------------------
+// Fresnel-driven alpha: near-transparent looking straight down (see through to
+// the seabed), more opaque at grazing angles (the surface reads as a mirror).
+// The base texture alpha still multiplies this so vanilla water density carries.
+#define AL_WATER_ALPHA_MIN 0.55   // looking down (low Fresnel)
+#define AL_WATER_ALPHA_MAX 0.94   // grazing (high Fresnel)
+
+// --- SSR / reflection (internal, not GUI) ----------------------------------
+// F0 for a water/air interface ~0.02. REFLECT_MAX caps grazing Fresnel a touch
+// below 1 so water never becomes a hard chrome mirror (dreamy identity).
+#define AL_WATER_F0          0.02
+#define AL_WATER_REFLECT_MAX 0.90
+#define AL_SSR_MAX_DIST      48.0   // total view-space march length (metres)
+#define AL_SSR_THICKNESS     1.10   // max surface thickness accepted as a hit (m)
+#define AL_SSR_REFINE        5      // binary-search refinement iterations
+#define AL_SSR_EDGE_FADE     0.12   // screen-edge reflection fade width (uv)
+
+// --- Absorption (internal, not GUI) ----------------------------------------
+// Beer-Lambert tint of the SUBMERGED scene by the water path length between the
+// surface (depthtex0) and the opaque behind it (depthtex1). Red is absorbed
+// most -> the classic green-blue deepening. The coeffs are the brief's stated
+// ~(0.35,0.12,0.08)/m; SCALE brings the path-length units into a pleasant range
+// (raw per-metre coeffs would go black within a few metres). Applied
+// MULTIPLICATIVELY to colortex0 (which already blended the water over the
+// scene), weighted by (1-Fresnel) so it reads as depth-dependent water colour —
+// an honest approximation (we cannot separate the pre-blended transmitted term).
+#define AL_WATER_ABSORB       vec3(0.35, 0.12, 0.08)
+#define AL_WATER_ABSORB_SCALE 0.16
+
+// --- Caustics (internal, not GUI) ------------------------------------------
+// SCALE maps world XZ into the voronoi domain; SPEED is the (slow) animation
+// rate; STRENGTH is the max ± modulation of the submerged contribution (~28%);
+// DEPTH_FADE is the water-depth (metres) over which caustics fade out (bright in
+// the shallows, gone in the deep).
+#define AL_CAUSTIC_SCALE      0.32
+#define AL_CAUSTIC_SPEED      0.45
+#define AL_CAUSTIC_STRENGTH   0.28
+#define AL_CAUSTIC_DEPTH_FADE 7.0
+
+// --- Underwater medium (internal, not GUI) ---------------------------------
+// composite2's isEyeInWater branch: exponential haze toward a tint, per medium.
+// DENSITY is per-metre extinction of the medium (bigger = shorter visibility).
+// WATER: pleasant universal blue-green (we have no per-biome water colour at
+// composite time — documented approximation). LAVA: dense warm orange-red.
+// SNOW: dense soft white. WOBBLE is the underwater UV refraction amplitude.
+const vec3 AL_UW_WATER_TINT = vec3(0.055, 0.16, 0.20);
+#define AL_UW_WATER_DENSITY 0.075
+const vec3 AL_UW_LAVA_TINT  = vec3(0.85, 0.26, 0.05);
+#define AL_UW_LAVA_DENSITY  1.30
+const vec3 AL_UW_SNOW_TINT  = vec3(0.82, 0.86, 0.94);
+#define AL_UW_SNOW_DENSITY  0.85
+#define AL_UW_WOBBLE        0.0032
+
+
+/* =========================================================================
    POST
    ========================================================================= */
 
 // Fixed exposure multiplier applied before the placeholder tonemap. Auto
 // exposure arrives in a later phase; this is the manual override for now.
 #define EXPOSURE 1.0 // [0.25 0.50 0.75 1.00 1.25 1.50 2.00]
+
+// Temporal Anti-Aliasing. Jitters the camera by a Halton(2,3) sub-pixel pattern
+// each frame (lib/jitter.glsl, applied in every gbuffers vertex shader) and
+// resolves the jittered frames in composite3 with reprojection + a neighbourhood
+// clamp, giving smooth edges and steady sub-pixel detail with no visible grain.
+// On in every preset except POTATO (brief §3). Off = raw aliased edges, no cost.
+#define TAA // [TAA]
+
+// --- TAA resolve shaping (internal, not GUI — composite3.fsh) --------------
+// Max fraction of the reprojected history kept per frame, scaled by confidence.
+// 0.9 = strong smoothing while still reactive (matches the AO history ceiling).
+#define AL_TAA_MAX_BLEND      0.9
+// Shorter ceiling for the HAND (matID HAND): a fast weapon swing would ghost at
+// 0.9, so the first-person hand caps lower and re-converges quickly.
+#define AL_TAA_HAND_MAX_BLEND 0.6
+// Confidence ramp: added each accepted frame, capped at MAX. A freshly
+// disoccluded / newly-revealed pixel starts at STEP and converges over ~1/STEP
+// frames (~10) toward full history weight.
+#define AL_TAA_CONF_STEP 0.1
+#define AL_TAA_CONF_MAX  1.0
+// History rejection: relative linear-depth mismatch above this discards the
+// reprojected sample (disocclusion / a different surface). ~5%.
+#define AL_TAA_DEPTH_REJECT 0.05
 
 
 /* =========================================================================

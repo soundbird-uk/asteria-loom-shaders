@@ -139,9 +139,26 @@ value.FOG_DENSITY.1.25 = Hazy
 value.FOG_DENSITY.1.50 = Thick
 value.FOG_DENSITY.2.00 = Soup
 
+# ---- Water -----------------------------------------------------------------
+screen.WATER = Water
+option.SSR = Screen-Space Reflections
+option.SSR.comment = Reflect the sky and nearby terrain on water with soft, ripple-broken reflections. Off keeps a plain sky reflection (and still tints and lights the water underneath). Off on Potato.
+option.SSR_QUALITY = Reflection Quality
+option.SSR_QUALITY.comment = Raymarch step count for reflections. Low is 16 steps, Medium 24, High 32. Higher reaches further and stays cleaner at more cost.
+value.SSR_QUALITY.1 = Low
+value.SSR_QUALITY.2 = Medium
+value.SSR_QUALITY.3 = High
+option.WATER_WAVES = Water Ripples
+option.WATER_WAVES.comment = Gentle animated wind-aligned ripple normals on the water surface. Cheap pure-math waves; stays on even on Potato.
+option.WATER_CAUSTICS = Caustics
+option.WATER_CAUSTICS.comment = Dancing light patterns cast onto the submerged scene, projected along the sun and faded with depth and time of day. Off on Potato.
+
 # ---- Post ------------------------------------------------------------------
 option.EXPOSURE = Exposure
 option.EXPOSURE.comment = Manual brightness multiplier before tone mapping. Auto exposure arrives later.
+
+option.TAA = Temporal Anti-Aliasing
+option.TAA.comment = Smooths jagged edges and steadies sub-pixel detail by jittering the camera and blending across frames. Soft, grain-free, and reactive. On everywhere except Potato; off gives raw aliased edges at no cost.
 
 # ---- Debug -----------------------------------------------------------------
 option.DEBUG_VIEW = Debug View

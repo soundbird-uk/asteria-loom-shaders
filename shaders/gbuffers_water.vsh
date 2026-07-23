@@ -1,11 +1,15 @@
 #version 330 compatibility
 #include "/settings.glsl"
+#include "/lib/jitter.glsl"
 
 /*
- gbuffers_water (vertex) — translucent water, forward-lit. Phase 1 is plain
- vanilla-texture water, slightly tinted and transparent; real water (SSR,
- caustics, ripples) is Phase 4. We forward everything the shared lighting
- model needs, plus player-space position for shadow sampling.
+ gbuffers_water (vertex) — Phase 4 real water. Forward-lit AND (new) surface
+ data for the SSR/absorption composite pass. We forward everything the shared
+ lighting model needs plus the player-space position, which the fragment stage
+ turns into a world position for the procedural ripple wave-noise. The last
+ position line applies the TAA sub-pixel jitter (lib/jitter.glsl, identity when
+ TAA is off) — water must jitter with every other jittered gbuffer or it
+ shimmers against the resolved scene.
 */
 
 uniform mat4 gbufferModelViewInverse;
@@ -27,4 +31,6 @@ void main() {
     vec3 viewN = normalize(gl_NormalMatrix * gl_Normal);
     wnormal = mat3(gbufferModelViewInverse) * viewN;
     playerPos = (gbufferModelViewInverse * viewPos).xyz;
+
+    gl_Position = alJitter(gl_Position);   // TAA jitter (identity when TAA off)
 }

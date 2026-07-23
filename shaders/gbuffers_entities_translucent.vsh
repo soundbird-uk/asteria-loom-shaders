@@ -1,5 +1,6 @@
 #version 330 compatibility
 #include "/settings.glsl"
+#include "/lib/jitter.glsl"
 
 /*
  gbuffers_entities_translucent (vertex) — the translucent half of entity
@@ -22,6 +23,7 @@ out vec3 playerPos;
 void main() {
     vec4 viewPos = gl_ModelViewMatrix * gl_Vertex;
     gl_Position = gl_ProjectionMatrix * viewPos;   // == ftransform()
+    gl_Position = alJitter(gl_Position);   // TAA sub-pixel jitter — LAST gl_Position write
 
     texcoord = (gl_TextureMatrix[0] * gl_MultiTexCoord0).xy;
     lmcoord  = (gl_TextureMatrix[1] * gl_MultiTexCoord1).xy;
