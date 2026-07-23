@@ -39,17 +39,30 @@ initializer. (A stub table here once masked exactly this into a false PASS that
 shipped to the user's Mac.)
 
 Compile targets (`--target`): the same source is compiled under different
-Iris-macro environments so both platform code paths get syntax coverage.
+Iris-macro environments so every platform code path gets syntax coverage.
   * `mac`      — MC_OS_MAC, GL/GLSL 410, IRIS_FEATURE_* undefined => every
                  AL_ADVANCED_TIER gate compiles OUT (the M4 path; the one that
                  must never false-PASS).
+  * `mac-hw`   — mac + only IRIS_FEATURE_SEPARATE_HARDWARE_SAMPLERS (Apple
+                 Silicon reports this; the M4 takes the hardware-PCSS branch
+                 under MC_OS_MAC).
   * `advanced` — MC_OS_WINDOWS, GL/GLSL 460, all four IRIS_FEATURE_* defined =>
-                 AL_ADVANCED_TIER branches compile IN (Windows path; gives the
-                 advanced tier syntax coverage from Phase 6 on).
-Default is `mac`; CI runs `both`.
+                 AL_ADVANCED_TIER branches compile IN (Windows path).
+Default `mac`; `both` = mac+advanced; `all` = mac+mac-hw+advanced. CI runs `all`.
+
+World folders (Iris rule): once any `worldN` folder exists under shaders/,
+programs load ONLY from world folders — discovery reflects that and validates
+every world x profile x variant (the report groups rows by world). Flat-root
+packs stay supported. Includes always resolve absolute `/lib/...` from the
+shaders/ root and relative includes from the including file's world folder.
+
+Distant Horizons: `dh_*` programs compile with DISTANT_HORIZONS defined plus DH
+uniform/attribute/constant stubs; every non-dh program also gets ONE extra
+`mac+DH` spot-check compile (mac macro set + DISTANT_HORIZONS) so DH-guarded
+branches in shared files get coverage without exploding the matrix.
 
 It collects *all* failures before exiting non-zero and prints a compact
-target/profile x program result table plus full glslang output for every failure.
+per-variant, world-grouped result matrix plus full glslang output for failures.
 
 stdlib only. Python 3.8+.
 """
@@ -1240,6 +1253,8 @@ def run_validation(shaders_root, out_dir, profile_filter=None, program_glob=None
     result.lint_fails += lint_format_canonical(shaders_root)
     program_stems = {os.path.splitext(os.path.basename(rel))[0] for rel, _p, _s, _w in all_programs}
     result.lint_fails += lint_blend_directives(entries, program_stems)
+    result.lint_fails += lint_program_directives(entries, program_stems)
+    result.worlds = discover_worlds(shaders_root)
     of, ow = lint_option_consistency(options, profile_refs, screen_refs, lang_keys)
     result.lint_fails += of
     result.lint_warns += ow
@@ -1276,26 +1291,55 @@ def run_validation(shaders_root, out_dir, profile_filter=None, program_glob=None
                 "(cannot run the compile gate)")
             return result
 
-    # --- compile every target x profile x program ---
+    # --- compile plan ---
+    # Every (target x profile x program), grouped by world (world is embedded in
+    # the program rel path). dh_* programs are ALWAYS compiled with
+    # DISTANT_HORIZONS defined (they only exist under DH). In addition, a single
+    # "mac+DH" spot-check pass compiles every NON-dh program on the mac macro set
+    # with DISTANT_HORIZONS defined, so DH-guarded branches in shared files get
+    # syntax coverage without exploding the matrix (mac target only).
+    def _compile(variant, macro_stubs, rel, path, stage, state, profile, dh):
+        patched = patch_source(path, shaders_root, state, option_names,
+                               macro_stubs, const_option_names,
+                               distant_horizons=dh, stage=stage)
+        dest = os.path.join(out_dir, variant.replace("+", "_"), profile, rel)
+        os.makedirs(os.path.dirname(dest), exist_ok=True)
+        with open(dest, "w", encoding="utf-8") as f:
+            f.write(patched)
+        if result.glslang_available:
+            ok, output = run_glslang(glslang_path, glslang_name, dest, stage)
+        else:
+            ok, output = True, "(glslang unavailable — compile skipped)"
+        result.compile_results[(variant, profile, rel)] = (ok, output)
+
     if os.path.isdir(out_dir):
         shutil.rmtree(out_dir)
+
+    variants = list(targets)
     for target in targets:
         macro_stubs = TARGET_MACROS[target]
         for profile in profile_names:
             state = profiles[profile]
-            prof_out = os.path.join(out_dir, target, profile)
             for rel, path, stage, _world in programs:
-                patched = patch_source(path, shaders_root, state, option_names,
-                                       macro_stubs, const_option_names)
-                dest = os.path.join(prof_out, rel)
-                os.makedirs(os.path.dirname(dest), exist_ok=True)
-                with open(dest, "w", encoding="utf-8") as f:
-                    f.write(patched)
-                if result.glslang_available:
-                    ok, output = run_glslang(glslang_path, glslang_name, dest, stage)
-                else:
-                    ok, output = True, "(glslang unavailable — compile skipped)"
-                result.compile_results[(target, profile, rel)] = (ok, output)
+                _compile(target, macro_stubs, rel, path, stage, state, profile,
+                         dh=program_is_dh(rel))
+
+    # DH spot-check on the mac macro set (only when mac is a selected target).
+    if "mac" in targets:
+        variant = "mac+DH"
+        macro_stubs = TARGET_MACROS["mac"]
+        did_spot = False
+        for profile in profile_names:
+            state = profiles[profile]
+            for rel, path, stage, _world in programs:
+                if program_is_dh(rel):
+                    continue  # dh_* already compiled with DH in every target
+                _compile(variant, macro_stubs, rel, path, stage, state, profile, dh=True)
+                did_spot = True
+        if did_spot:
+            variants.append(variant)
+
+    result.variants = variants
 
     if not keep and os.path.isdir(out_dir):
         shutil.rmtree(out_dir)
@@ -1315,28 +1359,34 @@ def print_report(result, verbose=True):
         for e in result.setup_errors:
             out.write("  - %s\n" % e)
 
-    # Compile summary table — one matrix per target.
+    # Compile summary — one matrix per compile variant, rows grouped by world.
     if result.compile_results:
         profiles = result.profiles
-        programs = sorted({rel for (_t, _p, rel) in result.compile_results})
-        namew = max([len(p) for p in programs] + [7]) + 2
-        for target in result.targets:
-            out.write("\nCompile matrix [target=%s] (profile x program):\n\n" % target)
+        variants = result.variants or sorted({v for (v, _p, _r) in result.compile_results})
+        all_rels = sorted({rel for (_v, _p, rel) in result.compile_results})
+        namew = max([len(p) for p in all_rels] + [7]) + 2
+        for variant in variants:
+            var_rels = sorted({rel for (v, _p, rel) in result.compile_results if v == variant})
+            out.write("\nCompile matrix [variant=%s] (profile x program):\n" % variant)
+            # group rows by world
+            worlds_here = sorted({rel_world(r) for r in var_rels})
             header = " " * (namew + 2) + "".join("%-9s" % p for p in profiles)
-            out.write(header + "\n")
-            for rel in programs:
-                row = "  %-*s" % (namew, rel)
-                for prof in profiles:
-                    ok, _ = result.compile_results.get((target, prof, rel), (True, ""))
-                    row += "%-9s" % ("OK" if ok else "FAIL")
-                out.write(row + "\n")
+            for w in worlds_here:
+                out.write("\n  -- %s --\n" % w)
+                out.write(header + "\n")
+                for rel in [r for r in var_rels if rel_world(r) == w]:
+                    row = "  %-*s" % (namew, rel)
+                    for prof in profiles:
+                        ok, _ = result.compile_results.get((variant, prof, rel), (True, ""))
+                        row += "%-9s" % ("OK" if ok else "FAIL")
+                    out.write(row + "\n")
 
     # Full glslang output for failures.
     fails = [(k, v) for k, v in result.compile_results.items() if not v[0]]
     if fails:
         out.write("\nCOMPILE FAILURES:\n")
-        for (target, prof, rel), (_ok, output) in sorted(fails):
-            out.write("\n--- [target=%s] [%s] %s ---\n" % (target, prof, rel))
+        for (variant, prof, rel), (_ok, output) in sorted(fails):
+            out.write("\n--- [variant=%s] [%s] %s ---\n" % (variant, prof, rel))
             out.write(output.rstrip() + "\n")
 
     if result.lint_fails:
@@ -1356,9 +1406,12 @@ def print_report(result, verbose=True):
                   % (n_compile_fail, len(result.lint_fails)))
     else:
         note = "" if result.glslang_available else " [glslang unavailable — compile skipped]"
-        out.write("\nRESULT: PASS%s (%d program(s) x %d profile(s) x %d target(s) [%s], %d warning(s))\n"
-                  % (note, len(result.programs), len(result.profiles), len(result.targets),
-                     ",".join(result.targets), len(result.lint_warns)))
+        worlds_desc = ",".join(result.worlds) if result.worlds else "flat-root"
+        out.write("\nRESULT: PASS%s (%d program(s) x %d profile(s) x %d variant(s) [%s]; "
+                  "worlds: %s; %d warning(s))\n"
+                  % (note, len(result.programs), len(result.profiles),
+                     len(result.variants), ",".join(result.variants),
+                     worlds_desc, len(result.lint_warns)))
 
 
 # ---------------------------------------------------------------------------
@@ -1482,6 +1535,11 @@ def self_test():
         _write(os.path.join(sh, "lib", "util2.glsl"), SELFTEST_LIB_UTIL2)
         _write(os.path.join(sh, "deferred.fsh"), SELFTEST_GOOD_FSH)
         _write(os.path.join(sh, "deferred.vsh"), SELFTEST_GOOD_VSH)
+        # a shadow program: satisfies `program.shadow.enabled` + exercises the
+        # shadow RENDERTARGETS exemption (depth-only, no RENDERTARGETS comment).
+        _write(os.path.join(sh, "shadow.fsh"),
+               "#version 330 compatibility\nout vec4 c;\nvoid main(){ c = vec4(1.0); }\n")
+        _write(os.path.join(sh, "shadow.vsh"), SELFTEST_GOOD_VSH)
         # Canonical buffer-format block: lives INSIDE a comment (the location
         # Iris reads it from). final.fsh is the single source of truth.
         _write(os.path.join(sh, "final.fsh"),
@@ -1758,6 +1816,101 @@ def self_test():
               "blend: a valid 4-factor blend list passes")
 
         _write(os.path.join(sh, "shaders.properties"), SELFTEST_PROPERTIES)
+
+        # --- Phase 5: flat-root vs world-folder layouts + DH coverage ---
+        check(res.worlds == [], "world: flat-root layout detected for base pack (no world folders)")
+        check(res.variants == ["mac", "mac+DH"],
+              "DH: default run adds the mac+DH spot-check variant (%s)" % ", ".join(res.variants))
+
+        wtmp = tempfile.mkdtemp(prefix="al-selftest-world-")
+        try:
+            wsh = os.path.join(wtmp, "shaders")
+            _write(os.path.join(wsh, "settings.glsl"),
+                   "#define SHADOWS // toggle\n#define VC_QUALITY 2 // [1 2 4]\n")
+            _write(os.path.join(wsh, "shaders.properties"),
+                   "profile.LOW = !SHADOWS VC_QUALITY=1\n"
+                   "profile.HIGH = profile.LOW SHADOWS VC_QUALITY=4\n"
+                   "screen = <profile> [MAIN]\nscreen.MAIN = SHADOWS VC_QUALITY\n")
+            _write(os.path.join(wsh, "lang", "en_us.lang"),
+                   "option.SHADOWS=Shadows\noption.VC_QUALITY=Q\n")
+            _write(os.path.join(wsh, "lib", "wutil.glsl"),
+                   "#ifndef AL_WUTIL\n#define AL_WUTIL\nfloat wutil(float x){ return x; }\n#endif\n")
+
+            # world0: good deferred (absolute /lib + world-relative include),
+            # final (single canonical fmt block), a DH program, and a shared file
+            # with a DH-guarded syntax error.
+            _write(os.path.join(wsh, "world0", "wlocal.glsl"),
+                   "#ifndef AL_WLOCAL\n#define AL_WLOCAL\nfloat wlocal(float x){ return x*2.0; }\n#endif\n")
+            _write(os.path.join(wsh, "world0", "deferred.fsh"),
+                   "#version 330 compatibility\n/* RENDERTARGETS: 0 */\n"
+                   '#include "/settings.glsl"\n'
+                   '#include "/lib/wutil.glsl"\n'
+                   '#include "wlocal.glsl"\n'
+                   "out vec4 c;\n"
+                   "void main(){ c = vec4(wutil(1.0)+wlocal(1.0)+float(VC_QUALITY)); }\n")
+            _write(os.path.join(wsh, "world0", "deferred.vsh"),
+                   "#version 330 compatibility\nvoid main(){ gl_Position = ftransform(); }\n")
+            _write(os.path.join(wsh, "world0", "final.fsh"),
+                   "#version 330 compatibility\n/* fmt (comment):\n"
+                   "const int colortex0Format = RGBA16F;\n*/\n"
+                   "out vec4 c;\nvoid main(){ c = vec4(1.0); }\n")
+            _write(os.path.join(wsh, "world0", "final.vsh"),
+                   "#version 330 compatibility\nvoid main(){ gl_Position = ftransform(); }\n")
+            _write(os.path.join(wsh, "world0", "dh_terrain.fsh"),
+                   "#version 330 compatibility\n/* RENDERTARGETS: 0 */\n"
+                   "out vec4 c;\nvoid main(){\n"
+                   "  float d = dhFarPlane;\n"
+                   "  if (dhMaterialId == DH_BLOCK_TERRAIN) d += 1.0;\n"
+                   "  c = vec4(d);\n}\n")
+            _write(os.path.join(wsh, "world0", "dh_terrain.vsh"),
+                   "#version 330 compatibility\n"
+                   "void main(){ int m = dhMaterialId; gl_Position = dhProjection * gl_Vertex; }\n")
+            _write(os.path.join(wsh, "world0", "composite.fsh"),
+                   "#version 330 compatibility\n/* RENDERTARGETS: 0 */\n"
+                   "out vec4 c;\nvoid main(){\n"
+                   "#ifdef DISTANT_HORIZONS\n  @@@ dh syntax error @@@ ;\n#endif\n"
+                   "  c = vec4(1.0);\n}\n")
+            _write(os.path.join(wsh, "world0", "composite.vsh"),
+                   "#version 330 compatibility\nvoid main(){ gl_Position = ftransform(); }\n")
+
+            # world1: a good deferred and a broken program (attribution test).
+            _write(os.path.join(wsh, "world1", "deferred.fsh"),
+                   "#version 330 compatibility\n/* RENDERTARGETS: 0 */\n"
+                   "out vec4 c;\nvoid main(){ c = vec4(1.0); }\n")
+            _write(os.path.join(wsh, "world1", "deferred.vsh"),
+                   "#version 330 compatibility\nvoid main(){ gl_Position = ftransform(); }\n")
+            _write(os.path.join(wsh, "world1", "broken.fsh"),
+                   "#version 330 compatibility\n/* RENDERTARGETS: 0 */\n"
+                   "out vec4 c;\nvoid main(){ c = vec4(1.0)   // missing ;\n c.x = 0.0; }\n")
+            _write(os.path.join(wsh, "world1", "broken.vsh"),
+                   "#version 330 compatibility\nvoid main(){ gl_Position = ftransform(); }\n")
+
+            wr = run_validation(wsh, os.path.join(wtmp, "out"), keep=False,
+                                require_glslang=False, verbose=False, targets=["mac"])
+
+            check(wr.worlds == ["world0", "world1"],
+                  "world: both world folders discovered (%s)" % ", ".join(wr.worlds))
+            check("world0/deferred.fsh" in wr.programs and "world1/deferred.fsh" in wr.programs
+                  and "deferred.fsh" not in wr.programs,
+                  "world: programs discovered per world; root ignored (Iris rule)")
+            check(not any("unresolved" in e for e in wr.lint_fails),
+                  "world: absolute /lib and world-relative includes both resolve from world0")
+            if have_glslang:
+                check(wr.compile_results[("mac", "HIGH", "world0/deferred.fsh")][0],
+                      "world: world0 program compiles green")
+                check(not wr.compile_results[("mac", "HIGH", "world1/broken.fsh")][0],
+                      "world: broken world1 program FAILS (per-world attribution)")
+                check(wr.compile_results[("mac", "HIGH", "world1/deferred.fsh")][0],
+                      "world: sibling world1 program stays green while its neighbour fails")
+                check(wr.compile_results[("mac", "HIGH", "world0/dh_terrain.fsh")][0]
+                      and wr.compile_results[("mac", "HIGH", "world0/dh_terrain.vsh")][0],
+                      "DH: dh_* program compiles with DISTANT_HORIZONS + DH uniform/attr/const stubs")
+                check(wr.compile_results[("mac", "HIGH", "world0/composite.fsh")][0],
+                      "DH: shared file compiles under plain mac (DH branch compiled out)")
+                check(not wr.compile_results[("mac+DH", "HIGH", "world0/composite.fsh")][0],
+                      "DH: mac+DH spot-check catches the DH-guarded syntax error in a shared file")
+        finally:
+            shutil.rmtree(wtmp, ignore_errors=True)
 
         print("")
         if failures:
