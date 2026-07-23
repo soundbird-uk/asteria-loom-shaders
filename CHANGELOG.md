@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-07-23
+
+Field fixes from 0.4.1 testing.
+
+### Fixed
+
+- **The horizon haze band can no longer appear in front of terrain.** Sky
+  convergence is now driven by optical depth instead of a render-distance plane:
+  fog stays dark scene-tone in the mid field and only heavily-extincted rays
+  approach the raw sky, so terrain melts into the sky asymptotically. Elevated
+  peaks keep low optical depth and stay crisp — haze climbs slopes smoothly
+  instead of drawing a horizontal line (verified with a mountain-profile table;
+  terrain/sky seam delta is 0% at typical render distances).
+
+### Changed
+
+- **Water waves de-uniformed** — six interfering directional components with
+  roughly-opposing pairs (criss-cross chop instead of a marching front),
+  dispersion (long waves travel faster), ~66-block patches that rotate and
+  reweight the mix so different lake areas move differently, and a distance-faded
+  domain-warped micro-detail layer. Big-wave normals are analytic (alias-free).
+- **Water is much less see-through** — down-look opacity in deep water ~0.72
+  (was ~0.42), shorelines stay clearer (~0.49), grazing keeps ~0.95; deep water
+  reads as dense blue-green volume with red absorbed fastest.
+
 ## [0.4.1] - 2026-07-23
 
 ### Fixed
