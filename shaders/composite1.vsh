@@ -2,9 +2,7 @@
 #include "/settings.glsl"
 
 /*
- composite1 (vertex) — fullscreen pass (aerial-perspective fog).
- Same trivial fullscreen setup as composite.vsh; the fog work is all in the
- fragment shader.
+ composite (vertex) — fullscreen pass.
 */
 
 out vec2 texcoord;
