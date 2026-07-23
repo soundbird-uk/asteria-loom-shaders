@@ -35,12 +35,13 @@ in vec3 worldDir;
 layout(location = 0) out vec4 outColor;
 
 void main() {
-    // END (world1): the sky is the procedural black hole + starfield + purple haze
-    // (lib/blackhole.glsl). Suppress vanilla End stars/void; terrain occludes the
-    // hole normally (this only draws sky pixels). frameTimeCounter comes from
-    // lib/nightsky.glsl (drives the disc turbulence).
+    // END (world1): the full procedural black-hole sky is painted fullscreen in
+    // world1/composite2 (per-pixel view ray -> reliable coverage). Here we only
+    // suppress the vanilla End stars/void and lay down the purple haze as a cheap
+    // fallback for any sky pixel composite2 might not reach; composite2 overwrites
+    // it with the black hole + starfield everywhere depth == 1.
     if (renderStage == MC_RENDER_STAGE_STARS) discard;
-    outColor = vec4(alEndBlackHoleSky(worldDir, END_BLACKHOLE_SIZE, frameTimeCounter), 1.0);
+    outColor = vec4(alEndHaze(normalize(worldDir)), 1.0);
     return;
 
     vec3 dir    = normalize(worldDir);

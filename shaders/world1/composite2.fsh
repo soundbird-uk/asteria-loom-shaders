@@ -342,6 +342,20 @@ void main() {
                                    rainStrength, wetness, thunderStrength);
 #endif
 
+#ifdef AL_DIM_END
+    // Violet light shafts rising through the End haze. Sampled at the MID-POINT of
+    // the view ray so the beams read as volumetric columns in the fog (constant in
+    // world-Y => vertical). They build with distance (more haze volume to light)
+    // and fade well above the camera. Additive, HDR (blooms in composite4/5).
+    {
+        vec3  wmid  = cameraPosition + worldDir * (dist * 0.5);
+        float mask  = alEndShaftMask(wmid.xz, frameTimeCounter);
+        float build = 1.0 - exp(-dist / AL_END_SHAFT_DIST);
+        float hFade = exp(-max(wmid.y - cameraPosition.y, 0.0) / 80.0);
+        fogged += AL_END_SHAFT_COLOR * (mask * build * hFade * AL_END_SHAFT_STRENGTH);
+    }
+#endif
+
 #if defined(GOD_RAYS) && !defined(AL_DIM_END)
     // --- Sun shafts / god rays (ISSUE 12) — above water -------------------
     // Additive warm shafts fanning from the sun through gaps in leaves/terrain,

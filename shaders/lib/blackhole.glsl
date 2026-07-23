@@ -56,6 +56,17 @@ vec3 alBhDiscColor(float t) {
                      : mix(cool, mid, t * 2.0);
 }
 
+// End light-shaft mask — broad soft vertical beams as a function of world XZ
+// ONLY (constant in world-Y, so a vertical column of air shares one value and
+// reads as a vertical beam), drifting slowly. Returns 0..1. Used by the End fog
+// pass (world1/composite2) to add violet aurora-like shafts through the haze.
+float alEndShaftMask(vec2 wxz, float time) {
+    vec2 p = wxz * AL_END_SHAFT_SCALE;
+    p.x += time * AL_END_SHAFT_DRIFT;
+    float n = alFbm3(vec3(p, time * 0.02));        // seamless value-noise FBM
+    return smoothstep(0.50, 0.82, n);               // sharpen into discrete beams
+}
+
 /*
  Full End sky for a world-space view direction. `size` = END_BLACKHOLE_SIZE,
  `time` = frameTimeCounter (disc turbulence animation).
@@ -75,13 +86,11 @@ vec3 alEndBlackHoleSky(vec3 dir, float size, float time) {
     vec3  refB = normalize(cross(bh, refA));
     float phi  = atan(dot(tang, refB), dot(tang, refA));
 
-    // --- Angular scales (radians) ---
-    // Bigger than a pinpoint so the hole DOMINATES the End sky (the brief's
-    // centrepiece). rEH ~4.6 deg at size 1.0; the disc reaches out to ~37 deg.
-    float rEH      = 0.080 * max(size, 0.01);         // event horizon
-    float rPhoton  = rEH * 1.30;                       // photon ring
-    float rDiscIn  = rEH * 1.9;
-    float rDiscOut = rEH * 8.0;
+    // --- Angular scale (radians) ---
+    // rEH ~4.6 deg at size 1.0 so the hole DOMINATES the End sky; the accretion
+    // disc's horizontal wings reach out to ~8x that (~37 deg). Everything else is
+    // measured in "horizon units" rN = ang / rEH (1.0 == the event horizon).
+    float rEH = 0.080 * max(size, 0.01);
 
     // --- Gravitationally-lensed background ---
     // Push the background sample OUTWARD near the hole (compresses the starfield
@@ -93,29 +102,50 @@ vec3 alEndBlackHoleSky(vec3 dir, float size, float time) {
     vec3  stars = alStarfield(bgDir) * 1.7;            // denser/brighter in the End
     vec3  col   = alEndHaze(bgDir) + stars;
 
-    // --- Accretion disc (tilted annulus) ---
-    // Fake the tilt by scaling the effective radius with the azimuth so the
-    // annulus reads as an ellipse; a brighter arc near the top hints at the
-    // lensed far side. Doppler brightens phi~0 (approaching), dims phi~pi.
-    float tilt    = 0.45;
-    float rEff    = ang * (1.0 + tilt * cos(phi));     // elliptical annulus
-    float inBand  = smoothstep(rDiscIn, rDiscIn * 1.25, rEff)
-                  * (1.0 - smoothstep(rDiscOut * 0.75, rDiscOut, rEff));
-    float tParam  = 1.0 - alSaturate((rEff - rDiscIn) / max(rDiscOut - rDiscIn, 1e-4));
-    float doppler = 0.35 + 0.65 * (0.5 + 0.5 * cos(phi));
-    float turb    = 0.7 + 0.3 * sin(phi * 5.0 + time * 0.25 + rEff * 60.0);
-    float arc     = 1.0 + 0.6 * smoothstep(0.4, 1.0, cos(phi)); // lensed top arc hint
-    vec3  disc    = alBhDiscColor(tParam)
-                  * (inBand * doppler * turb * arc * 4.5);       // brighter -> blooms
-    col += disc;
+    // --- Accretion disc: Interstellar "Gargantua" silhouette --------------
+    // The disc is a thin annulus seen nearly edge-on. Two ingredients build the
+    // iconic shape: HORIZONTAL WINGS (the disc plane — thin, reaching far out
+    // left/right) PLUS a LENSED WRAP RING hugging the photon sphere (the far side
+    // of the disc bent up over the top and down under the bottom). A slight tilt,
+    // per-side Doppler, a radial temperature ramp and slow swirling wisps finish
+    // it, all HDR-bright so the hot side blooms to white in composite4/5.
+    float rN   = ang / rEH;                        // radius in horizon units
+    float phiT = phi - 0.32;                        // tilt the whole disc ~18 deg
+    float ca   = cos(phiT);
+    float wN   = rN * sin(phiT);                    // vertical offset (EH units)
 
-    // --- Photon ring (thin bright ring at the capture threshold) ---
-    float prx = (ang - rPhoton) / max(rEH * 0.12, 1e-4);
-    float pr  = exp(-prx * prx);                        // squared directly (no pow neg-base)
-    col += vec3(1.0, 0.88, 0.75) * (pr * 5.0);          // hot bright ring
+    // Swirling wisps flowing around the disc (slow animation).
+    float swirl = phiT * 3.0 - rN * 2.2 + time * 0.12;
+    float wisp  = 0.55 + 0.45 * sin(swirl) * sin(swirl * 1.7 + 1.1);
+    wisp        = clamp(wisp * (0.7 + 0.5 * sin(swirl * 5.0 + rN * 3.0)), 0.15, 1.30);
 
-    // --- Event horizon: pure black, nothing escapes ---
-    float eh = smoothstep(rEH, rEH * 0.82, ang);       // 1 inside, 0 outside
+    // (1) Horizontal wings: thin bright band along the disc plane (wN~0).
+    float thick = 0.55 + 0.30 * wisp;               // vertical half-thickness (EH)
+    float bandV = exp(-(wN * wN) / (2.0 * thick * thick));
+    float wingR = smoothstep(1.02, 1.45, rN) * (1.0 - smoothstep(5.0, 8.5, rN));
+    float wings = bandV * wingR;
+
+    // (2) Lensed wrap ring: bright loop hugging the photon sphere at all angles
+    //     — this is what arcs OVER the top and UNDER the bottom of the horizon.
+    float dW   = (rN - 1.5) / 0.5;
+    float wrap = exp(-dW * dW);
+
+    float discA = max(wings, wrap * 0.95) * wisp;
+
+    // Doppler: the approaching (+refA) side is far brighter and whiter.
+    float dopp  = 0.30 + 1.05 * smoothstep(-0.5, 0.75, ca);
+    // Temperature: white-hot near the hole -> amber outside.
+    vec3  dcol  = alBhDiscColor(alSaturate(1.0 - (rN - 1.0) / 5.0));
+
+    col += dcol * (discA * dopp * 6.5);
+
+    // --- Photon ring (thin, very bright, hugs the horizon) ---
+    float prx = (rN - 1.06) / 0.05;
+    float pr  = exp(-prx * prx);                    // direct square (no pow neg-base)
+    col += vec3(1.0, 0.92, 0.82) * (pr * 9.0);
+
+    // --- Event horizon: pure black inside ---
+    float eh = smoothstep(1.0, 0.95, rN);           // 1 inside, 0 outside
     col = mix(col, vec3(0.0), eh);
 
     // NaN/negative guard.
