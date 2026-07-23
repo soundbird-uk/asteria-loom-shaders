@@ -94,25 +94,12 @@ void main() {
     outColor = vec4(max(result, vec3(0.0)), 1.0);
 
     // ---- (2) Auto-exposure metering + adaptation --------------------------
-#ifdef AL_ADVANCED_TIER
-    // ADVANCED tier: the average luminance is a TRIMMED-MEAN of a real luminance
-    // histogram built by the compute passes (composite5_a/_b.csh), deposited in
-    // the colortex5 scratch texel's .a. A histogram rejects bright/dark outliers
-    // that skew a mip average, so exposure tracks the scene the eye adapts to.
-    // This branch exists ONLY on the compute-capable path — on macOS
-    // AL_ADVANCED_TIER is never defined and the portable mip path below compiles
-    // in instead (no SSBO/image/#version bump reaches this #version 330 program).
-    float avgLum = texelFetch(colortex5, AL_HISTO_TEXEL, 0).a;
-    avgLum = (avgLum >= 0.0 && avgLum < 65000.0) ? avgLum : AL_EXPOSURE_KEY;
-#else
-    // Portable path (macOS included): deep-mip average luminance (whole-screen).
-    // LOD just below the 1x1 top.
+    // Deep-mip average luminance (whole-screen). LOD just below the 1x1 top.
     float maxLod = floor(log2(max(viewWidth, viewHeight)));
     vec3  avg    = textureLod(colortex0, vec2(0.5), max(maxLod - 1.0, 0.0)).rgb;
     float avgLum = alLuminance(max(avg, vec3(0.0)));
     // Reject NaN/garbage average -> neutral.
     avgLum = (avgLum >= 0.0 && avgLum < 65000.0) ? avgLum : AL_EXPOSURE_KEY;
-#endif
 
     // Metered exposure to bring the average toward the key, clamped and then
     // pulled toward 1.0 by STRENGTH (subtle; asymmetric bounds protect nights).

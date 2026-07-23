@@ -74,19 +74,20 @@ hardening notes will be added once 0.4.0 ships._
 - [ ] Distant Horizons programs (`dh_terrain`, `dh_water`, `dh_shadow`, depth compositing)
 - [ ] `worldN` folder migration via include shims
 
-## Phase 6 — Advanced tier (Windows/Linux)
+## Phase 6 — Advanced tier (Windows/Linux) — ON HOLD
 
-- [x] `AL_ADVANCED_TIER` gate + `[ADVANCED]` options; CI compiles `.csh` on the
-      `advanced` target only; Mac matrix proven byte-identical (compiles out)
-- [x] Compute histogram auto-exposure (Mac fallback: mipmap-average)
 - [ ] Flood-fill colored voxel light (LPV-style, 3D image ping-pong)
 - [ ] Voxel ray-traced shadows / GI
+- [ ] Compute histogram auto-exposure (Mac fallback: mipmap-average)
 - [ ] 3D-image-cached volumetric upgrades
 
-_Advanced-tier features are syntax-validated by the CI compile gate only — no GPU
-in CI, maintainer on macOS — so they are compute-capable scaffolding, not yet
-runtime-verified. All gated behind `AL_ADVANCED_TIER`; the portable path (macOS
-included) is unaffected. See `docs/architecture/phase6-contract.md`._
+**Blocked by a hard platform constraint (field-confirmed 2026-07):** Iris compiles
+every `.csh` a pack ships, and macOS (OpenGL 4.1 — this pack's primary target)
+cannot compile compute shaders, so ANY compute program makes the whole pack fail
+to load on macOS — gating with `AL_ADVANCED_TIER` does not help. The validator now
+**hard-fails** if any `.csh` is present. A real advanced tier therefore has to ship
+as a SEPARATE Windows/Linux-only pack, not be gated inside the macOS pack. Deferred
+until that split is warranted.
 
 ## Phase 7 — Tuning & release
 

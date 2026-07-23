@@ -788,10 +788,7 @@ def discover_programs(shaders_root):
     progs = []
     seen = set()
     for world, base in roots:
-        # .csh = Iris compute programs (Phase 6 advanced tier). They exist only on
-        # the compute-capable (advanced) path — the compile plan restricts them to
-        # the `advanced` target, since compute genuinely cannot exist on Mac GL4.1.
-        for ext, stage in (("*.vsh", "vert"), ("*.fsh", "frag"), ("*.csh", "comp")):
+        for ext, stage in (("*.vsh", "vert"), ("*.fsh", "frag")):
             for path in sorted(glob.glob(os.path.join(base, ext))):
                 if os.sep + "lib" + os.sep in path:
                     continue
@@ -936,6 +933,27 @@ def lint_includes(programs, shaders_root):
                         '`#include "path"` with nothing after the quote — the '
                         'flattener leaves this verbatim): %s'
                         % (rel, inc_rel, line_no, raw.strip()))
+    return errs
+
+
+def lint_no_compute_programs(shaders_root):
+    """HARD invariant (field regression 2026-07): this pack MUST run on macOS
+    (OpenGL 4.1), which has NO compute-shader support. Iris still attempts to
+    compile every `.csh` compute program the pack ships, so a single `.csh`
+    present makes the WHOLE pack fail to load on macOS ("Shader compilation failed
+    for compute <name>"). glslang cannot catch this — it happily compiles a
+    `#version 460` compute file regardless of the target's GL version — so it is a
+    structural rule instead: NO compute programs may exist in the pack. (If a
+    future Windows-only build wants them, it must ship as a SEPARATE pack, not be
+    smuggled into the macOS one.)"""
+    errs = []
+    for path in sorted(glob.glob(os.path.join(shaders_root, "**", "*.csh"),
+                                 recursive=True)):
+        rel = os.path.relpath(path, shaders_root)
+        errs.append("%s: compute program (.csh) present, but this pack targets "
+                    "macOS GL 4.1 which cannot compile compute shaders — Iris "
+                    "fails the whole pack to load. Remove it (compute belongs in a "
+                    "separate Windows/Linux-only pack)." % rel)
     return errs
 
 
@@ -1314,6 +1332,7 @@ def run_validation(shaders_root, out_dir, profile_filter=None, program_glob=None
     all_programs = discover_programs(shaders_root)
     result.programs = [rel for rel, _p, _s, _w in all_programs]
 
+    result.lint_fails += lint_no_compute_programs(shaders_root)
     result.lint_fails += lint_includes(all_programs, shaders_root)
     result.lint_fails += lint_rendertargets(all_programs, shaders_root)
     result.lint_fails += lint_sampler_budget(all_programs, shaders_root)
@@ -1390,12 +1409,6 @@ def run_validation(shaders_root, out_dir, profile_filter=None, program_glob=None
         for profile in profile_names:
             state = profiles[profile]
             for rel, path, stage, _world in programs:
-                # Compute programs (.csh) exist ONLY on the compute-capable path:
-                # compile them under `advanced` only. On mac/mac-hw they are absent
-                # (Iris never loads compute without the feature), so skipping them
-                # here mirrors reality and keeps the Mac matrix honest.
-                if stage == "comp" and target != "advanced":
-                    continue
                 _compile(target, macro_stubs, rel, path, stage, state, profile,
                          dh=program_is_dh(rel))
 
@@ -1409,8 +1422,6 @@ def run_validation(shaders_root, out_dir, profile_filter=None, program_glob=None
             for rel, path, stage, _world in programs:
                 if program_is_dh(rel):
                     continue  # dh_* already compiled with DH in every target
-                if stage == "comp":
-                    continue  # compute is advanced-only; never on the mac+DH path
                 _compile(variant, macro_stubs, rel, path, stage, state, profile, dh=True)
                 did_spot = True
         if did_spot:
@@ -2002,26 +2013,19 @@ def self_test():
                 check(not wr.compile_results[("mac+DH", "HIGH", "world0/composite.fsh")][0],
                       "DH: mac+DH spot-check catches the DH-guarded syntax error in a shared file")
 
-            # --- Phase 6: compute (.csh) discovered + advanced-target-only ---
-            # A .csh is an Iris compute program. It must be discovered, compiled
-            # on the `advanced` target, and NEVER on mac/mac-hw (compute genuinely
-            # cannot exist on GL 4.1 — compiling it there would be a false PASS).
+            # --- Field regression: NO compute (.csh) allowed (macOS GL4.1) ---
+            # A shipped .csh makes Iris fail the whole pack to load on macOS
+            # ("Shader compilation failed for compute <name>"), which glslang
+            # cannot catch. Its mere presence must be a hard lint failure.
             _write(os.path.join(wsh, "world0", "composite.csh"),
                    "#version 460 compatibility\n"
                    "layout(local_size_x = 1) in;\nconst ivec3 workGroups = ivec3(1);\n"
                    "void main(){}\n")
             wc = run_validation(wsh, os.path.join(wtmp, "outc"), keep=False,
-                                require_glslang=False, verbose=False,
-                                targets=["mac", "advanced"])
-            check("world0/composite.csh" in wc.programs,
-                  "compute: .csh program discovered")
-            check(("advanced", "HIGH", "world0/composite.csh") in wc.compile_results,
-                  "compute: .csh compiled on the advanced target")
-            check(("mac", "HIGH", "world0/composite.csh") not in wc.compile_results,
-                  "compute: .csh NOT compiled on mac (compute absent on GL 4.1)")
-            if have_glslang:
-                check(wc.compile_results[("advanced", "HIGH", "world0/composite.csh")][0],
-                      "compute: trivial .csh compiles green on the advanced target")
+                                require_glslang=False, verbose=False, targets=["mac"])
+            check(any("composite.csh" in e and "compute" in e for e in wc.lint_fails),
+                  "compute: a .csh in the pack is a hard lint failure (macOS can't run it)")
+            os.remove(os.path.join(wsh, "world0", "composite.csh"))
         finally:
             shutil.rmtree(wtmp, ignore_errors=True)
 

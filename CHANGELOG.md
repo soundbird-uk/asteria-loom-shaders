@@ -22,23 +22,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     shafts read as gently interwoven bands (`lib/rays.glsl`).
   - **Aurora** — woven green-teal/violet curtains on clear cold nights only (cold
     biome + no rain + deep night), kept below the moon. `AURORA` option.
-- **Advanced tier (Phase 6 — Windows/Linux; no effect on macOS).**
-  - `AL_ADVANCED_TIER` gate (opt-in `ADVANCED_TIER` + Iris compute/SSBO/image
-    features), a new `[ADVANCED]` options screen, and CI now syntax-compiles `.csh`
-    compute programs on the `advanced` target. The macOS path is proven unaffected
-    (the gate compiles out; the compute programs aren't compiled on the Mac matrix).
-  - **Compute histogram auto-exposure** — a luminance histogram (built in
-    `composite5_a/_b.csh`) drives a trimmed-mean exposure that rejects bright/dark
-    outliers; the portable path keeps the deep-mip average.
-  - _Verification note: advanced-tier features are validated by the CI compile gate
-    for **syntax only** — there is no GPU in CI and the maintainer runs macOS, so
-    their on-device behaviour is not yet runtime-verified._
-
 ### Changed
 
 - **CI compile gate** rejects malformed `#include` lines (e.g. a trailing comment
   after the quote) that the include-flattener would otherwise pass through verbatim
   into an opaque glslang error.
+
+### Removed
+
+- **Compute-shader auto-exposure (advanced tier) reverted.** A brief experiment
+  shipped `.csh` compute programs behind an `AL_ADVANCED_TIER` gate. Even gated,
+  Iris still tries to compile every `.csh` in the pack, and macOS (OpenGL 4.1 —
+  the pack's primary target) cannot compile compute shaders at all, so the whole
+  pack failed to load ("Shader compilation failed for compute composite5_a"). The
+  CI gap that let it through — compute was only compiled on the Windows profile —
+  is now closed: the validator hard-fails if ANY `.csh` is present in this
+  macOS-targeted pack. Auto-exposure is back to the portable deep-mip average on
+  every platform.
 
 ## [0.4.9] - 2026-07-23
 
