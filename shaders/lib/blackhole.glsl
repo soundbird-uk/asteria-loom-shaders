@@ -27,16 +27,22 @@
 #include "/lib/color.glsl"
 #include "/lib/nightsky.glsl"
 
-// Fixed black-hole direction: high in the End sky, slightly off-centre so the
-// tilted disc reads. Normalised constant (azimuth ~38 deg, elevation ~52 deg).
-#define AL_BH_DIR normalize(vec3(0.36, 0.66, 0.30))
+// Fixed black-hole direction: LOW in the End sky (~23 deg elevation) so it hangs
+// near where the player naturally looks and dominates the view, slightly off
+// the forward axis so the tilted disc reads. Azimuth ~21 deg. Normalised.
+#define AL_BH_DIR normalize(vec3(0.80, 0.36, 0.30))
 
-// Purple End haze: violet glow near the horizon fading to near-black at zenith.
+// Purple End haze: a moody violet sky that DEEPENS toward the black hole (a dark
+// halo of drained sky around it) and glows a little brighter low on the horizon.
 vec3 alEndHaze(vec3 dir) {
     float up = alSaturate(dir.y * 0.5 + 0.5);
-    vec3  horizon = vec3(0.16, 0.06, 0.24);
-    vec3  zenith  = vec3(0.025, 0.015, 0.06);
-    return mix(horizon, zenith, alSmooth(smoothstep(0.30, 0.92, up)));
+    vec3  horizon = vec3(0.20, 0.05, 0.30);      // deep magenta-violet low
+    vec3  zenith  = vec3(0.045, 0.02, 0.10);     // near-black violet high
+    vec3  base    = mix(horizon, zenith, alSmooth(smoothstep(0.20, 0.95, up)));
+    // Drain the sky toward black as it nears the hole -> a dark gravitational halo.
+    float toHole  = alSaturate(dot(dir, AL_BH_DIR));
+    base *= mix(1.0, 0.35, smoothstep(0.80, 0.998, toHole));
+    return base;
 }
 
 // Accretion-disc colour from a normalised temperature t (0 = cool outer red,
@@ -70,10 +76,12 @@ vec3 alEndBlackHoleSky(vec3 dir, float size, float time) {
     float phi  = atan(dot(tang, refB), dot(tang, refA));
 
     // --- Angular scales (radians) ---
-    float rEH      = 0.045 * max(size, 0.01);         // event horizon
-    float rPhoton  = rEH * 1.35;                       // photon ring
-    float rDiscIn  = rEH * 2.1;
-    float rDiscOut = rEH * 7.0;
+    // Bigger than a pinpoint so the hole DOMINATES the End sky (the brief's
+    // centrepiece). rEH ~4.6 deg at size 1.0; the disc reaches out to ~37 deg.
+    float rEH      = 0.080 * max(size, 0.01);         // event horizon
+    float rPhoton  = rEH * 1.30;                       // photon ring
+    float rDiscIn  = rEH * 1.9;
+    float rDiscOut = rEH * 8.0;
 
     // --- Gravitationally-lensed background ---
     // Push the background sample OUTWARD near the hole (compresses the starfield
@@ -98,13 +106,13 @@ vec3 alEndBlackHoleSky(vec3 dir, float size, float time) {
     float turb    = 0.7 + 0.3 * sin(phi * 5.0 + time * 0.25 + rEff * 60.0);
     float arc     = 1.0 + 0.6 * smoothstep(0.4, 1.0, cos(phi)); // lensed top arc hint
     vec3  disc    = alBhDiscColor(tParam)
-                  * (inBand * doppler * turb * arc * 2.4);
+                  * (inBand * doppler * turb * arc * 4.5);       // brighter -> blooms
     col += disc;
 
     // --- Photon ring (thin bright ring at the capture threshold) ---
-    float prx = (ang - rPhoton) / max(rEH * 0.10, 1e-4);
+    float prx = (ang - rPhoton) / max(rEH * 0.12, 1e-4);
     float pr  = exp(-prx * prx);                        // squared directly (no pow neg-base)
-    col += vec3(1.0, 0.86, 0.72) * (pr * 3.0);
+    col += vec3(1.0, 0.88, 0.75) * (pr * 5.0);          // hot bright ring
 
     // --- Event horizon: pure black, nothing escapes ---
     float eh = smoothstep(rEH, rEH * 0.82, ang);       // 1 inside, 0 outside

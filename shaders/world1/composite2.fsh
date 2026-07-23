@@ -76,10 +76,13 @@ uniform float thunderStrength;
 // underwater medium) instead of passing them through.
 uniform int   isEyeInWater;
 
-// frameTimeCounter (verified Iris uniform) — Phase 4 addition, needed ONLY by
-// the underwater UV-refraction wobble in the isEyeInWater branch below. Declared
-// nowhere else in this program / its includes, so this is collision-free.
+// frameTimeCounter (verified Iris uniform) — underwater wobble AND (world1) the
+// black-hole disc turbulence. Guarded so lib/blackhole.glsl (-> lib/nightsky.glsl)
+// can be pulled in below without double-declaring it.
+#ifndef AL_UNIFORM_FRAMETIME
+#define AL_UNIFORM_FRAMETIME
 uniform float frameTimeCounter;
+#endif
 
 // Render distance (blocks). Feeds the thin edge-insurance strip that closes the
 // terrain/sky seam at low render distances (the primary sky-convergence is
@@ -110,6 +113,12 @@ uniform float rainfall;
 // alSkySample().
 #include "/lib/atmosphere.glsl"
 #include "/lib/fog.glsl"
+#ifdef AL_DIM_END
+// The End sky (procedural black hole) is painted here, fullscreen over every sky
+// pixel (depth==1), so it covers the whole void regardless of how vanilla draws
+// the End sky dome/texture — the gbuffers_skybasic path did not cover it.
+#include "/lib/blackhole.glsl"
+#endif
 
 in vec2 texcoord;
 
@@ -281,7 +290,16 @@ void main() {
 
     // Sky (clouds carry their own transmittance) -> passthrough.
     if (depth >= 1.0) {
+#ifdef AL_DIM_END
+        // THE END: paint the procedural black-hole sky over every sky pixel, from
+        // a per-pixel world-space view ray (reliable full coverage). Replaces
+        // whatever vanilla drew (void colour / end_sky texture).
+        vec3 skyDir = normalize(alViewDirToWorld(alScreenToView(texcoord, 1.0)));
+        vec3 bh = alEndBlackHoleSky(skyDir, END_BLACKHOLE_SIZE, frameTimeCounter);
+        outColor = vec4(bh, 1.0);
+#else
         outColor = vec4(scene, 1.0);
+#endif
         return;
     }
 

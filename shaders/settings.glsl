@@ -1001,15 +1001,16 @@ const vec3 AL_BOUNCE = vec3(0.006, 0.006, 0.008);
 // --- Nether (world-1) ---
 // Flat warm-ember ambient (the Nether glows everywhere; no sun, no sky gate).
 const vec3 AL_NETHER_AMBIENT = vec3(0.34, 0.13, 0.07);
-// Dense short-range ember fog tint + its half-distance (blocks to ~50% fog).
-const vec3 AL_NETHER_FOG = vec3(0.26, 0.07, 0.035);
-#define AL_NETHER_FOG_HALF 26.0
+// Ember fog tint + its half-distance (blocks to ~50% fog). Raised from 26 -> 62
+// so the Nether reads atmospheric, not soupy — you can see across a cavern again.
+const vec3 AL_NETHER_FOG = vec3(0.24, 0.07, 0.04);
+#define AL_NETHER_FOG_HALF 62.0
 
 // --- End (world1) ---
 // Cool violet key + purple ambient (the End has no sun). The black-hole sky is
 // drawn procedurally in world1/deferred1; these light the terrain.
-const vec3 AL_END_KEY     = vec3(0.55, 0.42, 0.85);   // cool violet directional-ish
-const vec3 AL_END_AMBIENT = vec3(0.24, 0.16, 0.34);   // purple ambient fill
+const vec3 AL_END_KEY     = vec3(0.62, 0.40, 0.95);   // cool violet directional-ish
+const vec3 AL_END_AMBIENT = vec3(0.14, 0.09, 0.22);   // low purple fill (moodier, less washed)
 const vec3 AL_END_FOG     = vec3(0.10, 0.06, 0.16);   // purple haze
 #define AL_END_FOG_HALF 260.0
 // Procedural black-hole apparent size (angular radius multiplier). Small default.

@@ -50,10 +50,15 @@
 
 #include "/lib/common.glsl"
 
-// frameTimeCounter drives twinkle + shooting-star timing. Declared here (this
-// lib is included only by gbuffers_skybasic, which does not declare it) so the
-// file is self-contained. Guarded by the include guard => single declaration.
+// frameTimeCounter drives twinkle + shooting-star timing. Guarded by a SHARED
+// macro (not just this lib's include guard) so a program that ALSO declares
+// frameTimeCounter itself — e.g. composite2 pulling in lib/blackhole.glsl, which
+// pulls in this file — does not double-declare it. Whoever declares first wins;
+// the other side sees AL_UNIFORM_FRAMETIME already set and skips.
+#ifndef AL_UNIFORM_FRAMETIME
+#define AL_UNIFORM_FRAMETIME
 uniform float frameTimeCounter;
+#endif
 
 /* ------------------------------------------------------------------------
    TUNABLES (internal, not GUI — edit + hot-reload). The only GUI options are
