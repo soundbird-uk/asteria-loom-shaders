@@ -4,7 +4,9 @@
 #include "/lib/color.glsl"
 #include "/lib/atmosphere.glsl"
 #include "/lib/nightsky.glsl"
-#include "/lib/blackhole.glsl"   // world1 End: procedural black-hole sky
+// world1 End: procedural black-hole sky (must stay a bare include line — the
+// pack's include-flattener only matches `#include "..."` with nothing trailing).
+#include "/lib/blackhole.glsl"
 
 /*
  gbuffers_skybasic (fragment) — the physically based sky. Replaces the Phase-1
