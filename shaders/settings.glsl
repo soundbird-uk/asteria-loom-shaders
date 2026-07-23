@@ -119,7 +119,9 @@
 // + hot-reload; NIGHT_BRIGHTNESS is the user-facing multiplier on top.
 // 0.4.4: dropped 0.90 -> 0.42 so night is genuinely dark/moody (the moon key +
 // stars carry it), not "looks like no shader on".
-#define AL_NIGHT_AMBIENT_LIFT 0.42
+// 5.0.4 FIELD: 0.42 read as too dark ("at night it's too dark"). Raised to 0.66 —
+// a brighter moonlit night that's still cool + moody, not daylight.
+#define AL_NIGHT_AMBIENT_LIFT 0.66
 
 // Daytime ambient (cool sky fill) scale (internal). 0.4.4 ("sun does nothing /
 // shadows not dark enough"): the shadowed side was lit almost as much as the lit
@@ -1009,20 +1011,24 @@ const vec3 AL_NETHER_FOG = vec3(0.24, 0.07, 0.04);
 // --- End (world1) ---
 // Cool violet key + purple ambient (the End has no sun). The black-hole sky is
 // drawn procedurally in world1/deferred1; these light the terrain.
-const vec3 AL_END_KEY     = vec3(0.62, 0.40, 0.95);   // cool violet directional-ish
-const vec3 AL_END_AMBIENT = vec3(0.16, 0.10, 0.26);   // low purple fill (moody, not washed)
-// Dense purple haze that veils everything (the reference End look). Richer violet
-// + a much shorter half-distance (260 -> 78) so distance drowns in purple fog.
-const vec3 AL_END_FOG     = vec3(0.22, 0.09, 0.36);   // saturated purple in-scatter
-#define AL_END_FOG_HALF 78.0
+const vec3 AL_END_KEY     = vec3(0.60, 0.38, 0.92);   // cool violet directional-ish
+const vec3 AL_END_AMBIENT = vec3(0.12, 0.075, 0.20);  // low purple fill (moody, darker)
+// Dense purple haze that veils everything, DARKER overall (field feedback). Short
+// half-distance so distance drowns in purple fog.
+const vec3 AL_END_FOG     = vec3(0.15, 0.055, 0.26);  // deep purple in-scatter
+#define AL_END_FOG_HALF 82.0
 
-// End "aurora" light shafts — broad soft vertical purple beams rising through the
-// haze (a function of world XZ only, so they read as vertical columns). Sampled
-// mid-view-ray so they look volumetric, in lib/blackhole.glsl + world1/composite2.
-#define AL_END_SHAFT_COLOR    vec3(0.58, 0.24, 0.98)  // bright violet beam colour
+// End procedural space backdrop — a dark purple gradient the procedural black
+// hole sits in. LOW = near horizon, HIGH = zenith (darker). Darker overall.
+const vec3 AL_END_SPACE_LOW  = vec3(0.09, 0.030, 0.17);
+const vec3 AL_END_SPACE_HIGH = vec3(0.03, 0.012, 0.075);
+
+// End "aurora" light shafts — vertical violet beams with BRIGHT and DARK streaks,
+// in the haze (terrain, world XZ columns) AND the sky backdrop (azimuth columns).
+#define AL_END_SHAFT_COLOR    vec3(0.55, 0.22, 0.95)  // violet beam colour
 #define AL_END_SHAFT_SCALE    0.012                   // world-XZ frequency of beams
 #define AL_END_SHAFT_DRIFT    0.10                    // slow horizontal drift
-#define AL_END_SHAFT_STRENGTH 1.15                    // additive beam brightness
+#define AL_END_SHAFT_STRENGTH 1.05                    // additive beam brightness
 #define AL_END_SHAFT_DIST     110.0                   // range over which beams build
 // Procedural black-hole apparent size (angular radius multiplier). Small default.
 #define END_BLACKHOLE_SIZE 1.0 // [0.50 0.75 1.00 1.50 2.00]

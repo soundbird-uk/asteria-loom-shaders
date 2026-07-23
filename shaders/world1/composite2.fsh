@@ -349,10 +349,13 @@ void main() {
     // and fade well above the camera. Additive, HDR (blooms in composite4/5).
     {
         vec3  wmid  = cameraPosition + worldDir * (dist * 0.5);
-        float mask  = alEndShaftMask(wmid.xz, frameTimeCounter);
+        float mask  = alEndShaftMask(wmid.xz, frameTimeCounter);   // 0..1
         float build = 1.0 - exp(-dist / AL_END_SHAFT_DIST);
         float hFade = exp(-max(wmid.y - cameraPosition.y, 0.0) / 80.0);
-        fogged += AL_END_SHAFT_COLOR * (mask * build * hFade * AL_END_SHAFT_STRENGTH);
+        float s     = (mask - 0.5) * 2.0;                          // -1..1 bright/dark
+        // Bright violet beams add; dark lanes subtract -> vertical bright+dark streaks.
+        fogged += AL_END_SHAFT_COLOR * (max(s, 0.0) * build * hFade * AL_END_SHAFT_STRENGTH);
+        fogged *= 1.0 - max(-s, 0.0) * (build * hFade * 0.35);
     }
 #endif
 

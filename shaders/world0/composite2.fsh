@@ -282,9 +282,19 @@ void main() {
         return;
     }
 
-    // Sky (clouds carry their own transmittance) -> passthrough.
+    // Sky pixels: fade toward the FAR fog colour near the horizon so the void
+    // beyond the render distance (sky showing through unrendered chunks) reads as
+    // thick fog that matches the fogged terrain — seamless, no seam, no band. Only
+    // near the horizon (|dir.y| small); the upper sky is untouched. This lives in
+    // the SKY (terrain, drawn first, masks it), which is exactly the requested
+    // "horizon band belongs to the skybox and terrain always masks it".
     if (depth >= 1.0) {
-        outColor = vec4(scene, 1.0);
+        vec3  vdir = normalize(alViewDirToWorld(alScreenToView(texcoord, 1.0)));
+        vec3  wSun = normalize(alViewDirToWorld(sunPosition));
+        float horizonT = 1.0 - smoothstep(0.0, AL_FOG_HORIZON_SKY, abs(vdir.y));
+        vec3  farCol   = alFogFarColor(wSun, rainStrength, wetness, thunderStrength);
+        vec3  skyOut   = mix(scene, farCol, horizonT * AL_FOG_HORIZON_SEAL);
+        outColor = vec4(skyOut, 1.0);
         return;
     }
 

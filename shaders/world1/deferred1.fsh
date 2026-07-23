@@ -169,7 +169,10 @@ void main() {
     // the block lightmap so a redstone torch that has been turned OFF (lightmap
     // drops) stops glowing.
     if (matID == AL_MATID_EMISSIVE) {
-        color += albedoLin * (AL_EMISSIVE_STRENGTH * (0.35 + 0.65 * lm.x));
+        // Only the actually-bright emitting texels glow — a lantern's dark metal
+        // frame (low luminance) must NOT emit, or the black parts light up grey.
+        float emitMask = smoothstep(0.22, 0.55, alLuminance(albedoLin));
+        color += albedoLin * (AL_EMISSIVE_STRENGTH * emitMask * (0.45 + 0.55 * lm.x));
     }
 
     // Held light: a warm point light around the camera from the held item's light

@@ -79,6 +79,22 @@
 #define AL_FOG_EDGE_END    0.985
 #define AL_FOG_EDGE_CURVE  2.2
 
+// 5.0.4 RENDER-DISTANCE EDGE (rebuild): a THICK grey fog wall in the last few
+// chunks that completely hides the unrendered-chunk dropoff into the void and
+// melts into the sky. The far fog colour is DIRECTION-INDEPENDENT (no sky sample
+// in the view direction) so it can NEVER paint a horizon band on terrain.
+//   EDGE_CHUNKS — how many chunks before `far` the thick fog starts
+//   EDGE_BRIGHT — lifts the far fog toward the sky's brightness (greyish blend)
+#define AL_FOG_EDGE_CHUNKS 3.5
+#define AL_FOG_EDGE_BRIGHT 1.35
+
+// Horizon void-seal (applied to SKY pixels in composite2): fade the sky toward
+// the far fog colour near the horizon so the void beyond the render edge reads as
+// thick fog matching the fogged terrain (no seam). SKY = elevation over which it
+// fades out; SEAL = max strength at the horizon.
+#define AL_FOG_HORIZON_SKY  0.16
+#define AL_FOG_HORIZON_SEAL 0.92
+
 // Scale height (metres): altitude over which density falls by 1/e. Larger =
 // fog climbs higher up mountains before thinning.
 #define AL_FOG_HEIGHT 26.0
@@ -282,10 +298,13 @@ void alFogModulation(int biomeCategory, float temperature, float rainfall,
 #endif
 
     // --- Weather (always) ---
+    // 5.0.4 FIELD ("rain makes the whole world grey"): the 1.8x density + 0.6
+    // desat turned distance into a flat grey wall in any drizzle. Softened to a
+    // gentle thickening + light desat so rain reads moody, not colourless.
     float rain = alSaturate(max(rainStrength, wetness * 0.6));
-    densityMul *= mix(1.0, 1.8, rain);
-    desat       = rain * 0.6;
-    darken      = mix(1.0, 0.72, alSaturate(thunderStrength));
+    densityMul *= mix(1.0, 1.25, rain);
+    desat       = rain * 0.22;
+    darken      = mix(1.0, 0.80, alSaturate(thunderStrength));
 }
 
 /* -------------------------------------------------------------------------
@@ -359,6 +378,28 @@ vec3 alFogSoftKnee(vec3 c, float amt) {
 }
 
 /* -------------------------------------------------------------------------
+   FAR / horizon fog colour — a bright, DIRECTION-INDEPENDENT grey haze that both
+   the render-distance edge (terrain) and the horizon sky (composite2 sky path)
+   converge to, so distance melts seamlessly into the sky with NO painted band.
+   Derived from the atmosphere's hemisphere ambient (already a directional
+   AVERAGE — carries the time-of-day tone but no horizon band), pulled toward grey
+   and lifted toward the sky's brightness, then rain/thunder/night-treated to
+   match the terrain haze. Shared by alApplyAerialFog (edge) and the sky path.
+   ------------------------------------------------------------------------- */
+vec3 alFogFarColor(vec3 worldSunDir, float rainStrength, float wetness,
+                   float thunderStrength) {
+    float dayF = alSmooth(smoothstep(-0.06, 0.16, worldSunDir.y));
+    vec3  amb  = alAmbientColor(worldSunDir);
+    vec3  grey = mix(amb, vec3(alLuminance(amb)), 0.45) * AL_FOG_EDGE_BRIGHT;
+    float rain = alSaturate(max(rainStrength, wetness * 0.6));
+    grey = mix(grey, vec3(alLuminance(grey)), rain * 0.22);        // rain desat
+    grey *= mix(1.0, 0.80, alSaturate(thunderStrength));           // thunder darken
+    vec3 nightHaze = mix(vec3(0.60, 0.70, 1.00), vec3(1.0), dayF)  // cool at night
+                   * mix(AL_FOG_NIGHT_DIM, 1.0, dayF);
+    return max(grey * nightHaze, vec3(0.0));
+}
+
+/* -------------------------------------------------------------------------
    Full aerial-perspective evaluation for one pixel.
      sceneColor   — linear HDR colour under the fog (colortex0)
      camY         — camera world Y (cameraPosition.y)
@@ -409,10 +450,11 @@ vec3 alApplyAerialFog(vec3 sceneColor, float camY, vec3 worldDir, float dist,
     float density = (0.6931472 / AL_FOG_DIST_HALF) * max(userDensity, 0.0) * densityMul;
     float baseFog = 1.0 - exp(-density * max(dist, 0.0));
 
-    // Edge seal: ramps to FULL fog near the render distance so the boundary/void
-    // is completely hidden and the last terrain melts into the sky.
-    float edge = pow(smoothstep(AL_FOG_EDGE_START, AL_FOG_EDGE_END, dist / farD),
-                     AL_FOG_EDGE_CURVE);
+    // Edge seal: a THICK fog wall in the last AL_FOG_EDGE_CHUNKS chunks, FULL a
+    // half-chunk before the render edge, so the unrendered-chunk dropoff/void is
+    // completely hidden and the last terrain melts into the sky. Absolute chunk
+    // distance -> behaves the same at any render distance.
+    float edge = smoothstep(farD - AL_FOG_EDGE_CHUNKS * 16.0, farD - 8.0, dist);
 
     float fogF = max(baseFog, edge) * skyGate;
 
@@ -448,14 +490,13 @@ vec3 alApplyAerialFog(vec3 sceneColor, float camY, vec3 worldDir, float dist,
                    * mix(AL_FOG_NIGHT_DIM, 1.0, dayF);
     haze *= nightHaze;
 
-    // Mid-field uses the uniform dark haze (NO band). Only the very edge blends to
-    // the ACTUAL sky in the view direction so the fully-fogged far terrain melts
-    // SEAMLESSLY into the sky/horizon behind it (hides render distance). skyBlend =
-    // edge^2 lags the fog ramp, so the sky colour appears ONLY at the extreme edge
-    // — never in the mid-field, so no horizon band can form.
-    float skyBlend = edge * edge;
-    vec3  skyInView = alFogSkyInscatter(worldDir) * nightHaze;
-    vec3  inscatter = mix(haze, skyInView, skyBlend);
+    // Mid-field = uniform dark haze (atmospheric depth). Far edge converges to the
+    // DIRECTION-INDEPENDENT far/horizon fog colour (grey, sky-bright) — NOT the sky
+    // sampled in the view direction, so a horizon band is NEVER painted on terrain.
+    // The horizon SKY converges to the SAME colour (composite2 sky path), so far
+    // terrain and the void beyond meet seamlessly.
+    vec3 farCol    = alFogFarColor(worldSunDir, rainStrength, wetness, thunderStrength);
+    vec3 inscatter = mix(haze, farCol, edge);
 
     vec3 result = sceneColor * (1.0 - fogF) + inscatter * fogF;
     return max(result, vec3(0.0));
