@@ -71,6 +71,22 @@ void main() {
     }
 #endif // AL_DBG_NO_SKYFILL
 
+    // --- Horizon-band softening (0.4.5b — confirmed via Debug View 11) -----
+    // Tame the harsh, over-bright, yellow-green astronomical-horizon band into a
+    // soft haze so it no longer cuts a hard line across the scene above distant
+    // terrain. Strongest exactly at the horizon (|dir.y| ~ 0), gone by ~11 deg up.
+    // The DESAT (neutralise the yellow-green) is gated to HIGH sun so sunrise /
+    // sunset keep their warm glow; the DIM applies at all times. Applied to the
+    // SKY only (terrain is shaded elsewhere), before the additive night sky / sun
+    // disc so those stay bright.
+    {
+        float horizonBand = 1.0 - smoothstep(0.0, AL_SKY_HORIZON_WIDTH, abs(dir.y));
+        float sunHigh     = smoothstep(0.12, 0.35, sunDir.y);   // 1 at midday
+        sky = mix(sky, vec3(alLuminance(sky)),
+                  horizonBand * AL_SKY_HORIZON_DESAT * sunHigh);
+        sky *= mix(1.0, AL_SKY_HORIZON_DIM, horizonBand);
+    }
+
     // --- Procedural night sky (additive, fades in as the sun sets) --------
     // nightFactor: 0 in full day, 1 well after sunset.
     float nightFactor = smoothstep(0.04, -0.10, sunDir.y);

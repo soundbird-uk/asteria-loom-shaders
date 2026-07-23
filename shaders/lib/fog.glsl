@@ -112,9 +112,13 @@
 //   TONE_MIX   — how far the in-scatter moves from raw sky toward the scene tone
 //   TONE_LUMCUT— fraction of the scene tone that is the desaturated (grey) sky
 //   TONE_DIM   — overall darkening of the scene tone
-#define AL_FOG_TONE_MIX    0.55
-#define AL_FOG_TONE_LUMCUT 0.50
-#define AL_FOG_TONE_DIM    0.75
+// 0.4.5b: distant terrain was washing toward the BRIGHT sky horizon band because
+// the fog tone still carried 45% raw sky. Pushed the mix hard toward the dark
+// scene tone (0.55 -> 0.80) and dimmed it (0.75 -> 0.60) so fogged distant terrain
+// reads as a dark, desaturated hazy SILHOUETTE distinct from the sky — no bleed.
+#define AL_FOG_TONE_MIX    0.80
+#define AL_FOG_TONE_LUMCUT 0.55
+#define AL_FOG_TONE_DIM    0.60
 
 // --- NIGHT fog floor (0.3.3, ISSUE 3: no fog at night) -----------------------
 // At night alSkySample is ~black, so the sky-derived in-scatter vanishes. Add a

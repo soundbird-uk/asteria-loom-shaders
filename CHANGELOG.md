@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.6] - 2026-07-23
+
+### Fixed
+
+- **The bright horizon band cutting across the scene.** Confirmed via Debug View
+  11: the analytic atmosphere was drawing a harsh, over-bright, yellow-green band
+  at the astronomical horizon that read as a hard line above distant terrain. It
+  is now softened into a gentle haze — dimmed at all times and desaturated toward
+  neutral at high sun (so midday no longer shows a warm band, while sunrise/sunset
+  keep their warmth). This also fixes the long-standing midday-orange-horizon report.
+- **Distant terrain washing into the horizon colour.** The fog tone still carried
+  ~45% of the raw bright sky, so heavily-fogged distant terrain blended into the
+  sky band. The tone is now pushed hard toward the dark scene colour and dimmed,
+  so distant terrain reads as a dark, hazy silhouette distinct from the sky.
+
 ## [0.4.5] - 2026-07-23
 
 Diagnostics + fixes: horizon debug tooling, held light, stable adjustable god

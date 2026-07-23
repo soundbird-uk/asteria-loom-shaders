@@ -504,6 +504,20 @@ const float sunPathRotation = -35.0;
 #define STARS_DENSITY 1.00 // [0.50 0.75 1.00 1.50 2.00]
 
 
+// --- Horizon-band softening (internal, not GUI — gbuffers_skybasic.fsh) ----
+// 0.4.5b FIELD FIX (confirmed via Debug View 11): the analytic atmosphere makes a
+// harsh, over-bright, yellow-green BAND at the astronomical horizon (dir.y ~ 0)
+// that cuts a hard line across the scene right where distant terrain sits. These
+// tame it into a soft haze so the sky-to-terrain transition reads naturally:
+//   WIDTH  — elevation (|dir.y|) over which the softening fades out (radians-ish)
+//   DESAT  — how far the band is pulled toward neutral grey (kills the midday
+//            yellow-green; GATED to high sun so sunrise/sunset stay warm)
+//   DIM    — overall dimming of the band at all times (never blinding)
+#define AL_SKY_HORIZON_WIDTH 0.20
+#define AL_SKY_HORIZON_DESAT 0.65
+#define AL_SKY_HORIZON_DIM   0.68
+
+
 /* =========================================================================
    FOG
    -------------------------------------------------------------------------
