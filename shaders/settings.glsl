@@ -112,9 +112,39 @@
 // without lifting the whole scene toward daylight. Edit + hot-reload.
 #define AL_NIGHT_DIRECT_SCALE 0.55
 
+// Direct-key contrast boost (internal, not GUI). Multiplies ONLY the direct
+// sun/moon term in lib/lighting.glsl (never ambient), on top of SUN_INTENSITY.
+// 0.4.3 field fix (ISSUE 7/8: "objects have no lit vs shadow side / sun too weak
+// on ground"): the ambient wrap floor was lowered alongside, so overall exposure
+// barely moves but the lit-vs-shadow CONTRAST rises — the sun now reads as a real
+// key light with a bright side and a dark side. AgX rolls the extra highlight off
+// softly, so noon does not clip. Edit + hot-reload.
+#define AL_DIRECT_BOOST 1.45
+
 // Fake indirect-bounce floor. A tiny lift so unlit coloured faces are never
 // pure black (real GI arrives in a later phase).
 #define BOUNCE_INTENSITY 1.0 // [0.00 0.25 0.50 0.75 1.00 1.50 2.00]
+
+
+/* =========================================================================
+   FOLIAGE WIND  (vertex sway — lib/wind.glsl, ISSUE 5)
+   -------------------------------------------------------------------------
+   Grass/plants and leaves sway in the gbuffers_terrain vertex shader (and the
+   shadow pass, so their shadows wave in step). Block bases stay anchored (a
+   height/top weight from at_midBlock); grass sways more than leaves; rolling
+   gusts + per-plant phase make it organic and spatially varied, never a uniform
+   sine. Foliage block IDs are mapped in block.properties (10010 grass, 10020
+   leaves). Internal (not GUI) — edit + hot-reload; set strengths to 0 to disable.
+   ========================================================================= */
+// Master switch (internal). Comment out to compile foliage wind away entirely.
+#define AL_WAVING_FOLIAGE
+// Time multiplier on the whole animation.
+#define AL_WIND_SPEED 1.0
+// Grass / small-plant sway strength (the strong, lapping motion).
+#define AL_WIND_GRASS 1.0
+// Leaf flutter strength (deliberately subtler than grass — subtle branch-like
+// movement, not big translation).
+#define AL_WIND_LEAF  0.45
 
 
 /* =========================================================================
@@ -325,13 +355,34 @@ const float shadowDistance = 128.0; // [64.0 96.0 128.0 192.0 256.0]
 #define AL_CLOUD_AMBIENT      0.65  // sky-ambient contribution to cloud fill
 #define AL_CLOUD_SUN          22.0  // direct sun-scatter brightness (HDR)
 
-// --- Cirrus (cheap thin high layer) ----------------------------------------
+// --- Cirrus / high wisps (cheap thin high layer) ---------------------------
+// 0.4.3 (ISSUE 6: "need more small wispy white clouds"): the cirrus layer is
+// extended into the pack's small-wisp system — a fragmented, multi-scale veil that
+// dots the sky with many small bright wisps while the volumetric cumulus keeps the
+// big weather masses. Higher coverage + lower density = lighter, wispier; the
+// WISP break-up (lib/clouds.glsl) shatters the sheet into small streaks so it
+// never reads as one continuous veil or as noisy speckle. Bright by day; the
+// night darkening below applies to them too (composited together).
 #define AL_CIRRUS_SCALE   0.00090
-#define AL_CIRRUS_COVER   0.55
-#define AL_CIRRUS_DENSITY 1.10
+#define AL_CIRRUS_COVER   0.62
+#define AL_CIRRUS_DENSITY 0.85
 #define AL_CIRRUS_HG      0.70
 #define AL_CIRRUS_SUN     8.0
 #define AL_CIRRUS_AMB     0.50
+// Small-wisp break-up: frequency multiplier (vs coverage scale) and how hard it
+// fragments the cirrus sheet into small streaks. Higher WISP_STR = more, smaller
+// wisps. Kept smooth (value noise) so wisps stay soft, never speckly.
+#define AL_CIRRUS_WISP_SCALE 5.0
+#define AL_CIRRUS_WISP_STR   0.60
+
+// --- Night darkening (ISSUE 2: "night clouds too bright/white") ------------
+// Applied to the whole composited cloud radiance in composite1 AFTER temporal
+// accumulation, gated by the sun-elevation day factor so NOON is untouched. At
+// night clouds drop to AL_CLOUD_NIGHT_BRIGHT of their day radiance and take on the
+// cool AL_CLOUD_NIGHT_TINT, so they read as dark, moody, moonlit masses (with dark
+// undersides) instead of glowing daytime white. Storm fronts stay visible but dim.
+#define AL_CLOUD_NIGHT_BRIGHT 0.20
+const vec3 AL_CLOUD_NIGHT_TINT = vec3(0.46, 0.58, 0.86);
 
 // --- Cloud shadow (lib/clouds_common.glsl) ---------------------------------
 #define AL_CLOUD_SHADOW_CLEAR 0.50  // ground darkening under clear-sky cloud
@@ -441,6 +492,21 @@ const float sunPathRotation = -35.0;
 // it off genuinely skips the pass (colortex0 passes straight through to final).
 #define AERIAL_FOG // [AERIAL_FOG]
 
+// --- Sun shafts / god rays (internal, not GUI — composite2.fsh, ISSUE 12) ---
+// Screen-space light scattering: from each pixel a short march toward the sun's
+// screen position accumulates UNOCCLUDED (sky / gap) samples, so warm shafts fan
+// out through gaps in leaves and around terrain silhouettes toward the sun. It is
+// gated to near-zero cost when the sun is behind the camera / below the horizon /
+// off-screen, and its strength rises at LOW sun and in HAZY weather (per the
+// brief). Additive in HDR (AgX rolls it off) and bounded so it never washes the
+// whole screen. Comment out AL_GOD_RAYS to compile it away entirely.
+#define AL_GOD_RAYS
+#define AL_GODRAY_SAMPLES   24     // march taps toward the sun (perf vs smoothness)
+#define AL_GODRAY_DECAY     0.94   // per-step weight decay (concentrates near sun)
+#define AL_GODRAY_INTENSITY 0.55   // master strength of the additive shafts
+#define AL_GODRAY_LOWSUN    2.2    // extra multiplier as the sun nears the horizon
+#define AL_GODRAY_RAINBOOST 1.6    // extra multiplier in rain/haze
+
 // Overall fog density multiplier on top of the tuned sea-level baseline.
 // 1.00 is the intended look; lower for crisp long views, higher for a soupier,
 // moodier haze.
@@ -494,20 +560,33 @@ const float sunPathRotation = -35.0;
 // the fine "physical 3D texture", faded out with distance to kill sparkle. The
 // big-wave normal is ANALYTIC (one pass, exact gradient — cheaper AND alias-free
 // than finite differences); only the micro layer uses central differences.
-#define AL_WATER_WAVE_COMPONENTS 6      // superposed directional waves (>=2 opposing)
-#define AL_WATER_WAVE_K          0.85   // base spatial wavenumber (longest wave)
-#define AL_WATER_WAVE_SPEED      0.55   // dispersion time-rate (omega = SPEED*sqrt(k))
-#define AL_WATER_WAVE_AMP        0.30   // overall normal-perturbation strength (subtle)
-#define AL_WATER_NORMAL_EPS      0.08   // micro-layer central-difference step (world m)
+// 0.4.3 FIELD FIX (ISSUE 10: "water looks like a compact scrolling fabric"): the
+// fabric look came from too MANY directional components criss-crossing at a high
+// base wavenumber PLUS a strong, high-frequency micro layer that dominated the
+// normal. Reworked toward BROAD, multi-directional swells with the micro detail
+// demoted to a faint near-surface texture:
+//   * fewer components (6 -> 4) so the interference reads as lapping swells, not a
+//     dense weave;
+//   * lower base wavenumber (0.85 -> 0.42 => ~15-block longest wavelength, broad
+//     swells), and the per-component spread below now covers a wider, gentler band;
+//   * lower overall amplitude so the surface undulates instead of shattering into
+//     high-frequency chop.
+#define AL_WATER_WAVE_COMPONENTS 4      // superposed directional waves (>=2 opposing)
+#define AL_WATER_WAVE_K          0.42   // base spatial wavenumber (longest wave)
+#define AL_WATER_WAVE_SPEED      0.50   // dispersion time-rate (omega = SPEED*sqrt(k))
+#define AL_WATER_WAVE_AMP        0.16   // overall normal-perturbation strength (subtle)
+#define AL_WATER_NORMAL_EPS      0.14   // micro-layer central-difference step (world m)
 // Spatial variation: patch field frequency (very low) + local rotation range.
-#define AL_WATER_PATCH_SCALE     0.015  // ~66-block patches move differently
-#define AL_WATER_PATCH_ROT       2.0    // radians of local component rotation
-// Micro detail (2-warp domain-warped value noise): frequency, amplitude, its own
-// (off-sync) drift rate, and the distance over which it fades to nothing.
-#define AL_WATER_MICRO_SCALE     1.55   // high freq (~0.65-block wavelength)
-#define AL_WATER_MICRO_AMP       0.16   // small
-#define AL_WATER_MICRO_SPEED     1.30   // off-sync from the big waves
-#define AL_WATER_MICRO_FADE      26.0   // blocks; micro gone beyond (anti-sparkle)
+#define AL_WATER_PATCH_SCALE     0.012  // ~83-block patches move differently
+#define AL_WATER_PATCH_ROT       1.6    // radians of local component rotation
+// Micro detail (2-warp domain-warped value noise): DEMOTED to a faint, larger-
+// scale near-surface shimmer so it can never become the tiled-cloth texture.
+// Lower frequency (bigger features), a fraction of the old amplitude, and a much
+// shorter fade so it is gone within a few blocks (kills the busy weave + sparkle).
+#define AL_WATER_MICRO_SCALE     0.85   // lower freq (~1.2-block wavelength)
+#define AL_WATER_MICRO_AMP       0.045  // faint (was 0.16)
+#define AL_WATER_MICRO_SPEED     0.90   // off-sync from the big waves
+#define AL_WATER_MICRO_FADE      12.0   // blocks; micro gone beyond (anti-sparkle)
 
 // --- Water surface opacity (internal, not GUI) -----------------------------
 // Fresnel-driven alpha: the surface is denser looking straight down and near-
@@ -517,8 +596,18 @@ const float sunPathRotation = -35.0;
 // COLOUR (denser tint, not a window). The rest of the down-look opacity is
 // DEPTH-DRIVEN by the composite absorption below (shallow stays clear, deep goes
 // properly opaque blue-green). See the before/after transmission table there.
-#define AL_WATER_ALPHA_MIN 0.65   // looking down (low Fresnel)
-#define AL_WATER_ALPHA_MAX 0.94   // grazing (high Fresnel)
+// 0.4.3 (ISSUE 11: "water too see-through / vanilla texture visible"): ALPHA_MIN
+// raised 0.65 -> 0.74 so the down-look surface carries clearly more of its own
+// shader colour (denser water, not a window). Deep opacity is still mostly
+// DEPTH-driven by the absorption below (shallow shorelines stay readable).
+#define AL_WATER_ALPHA_MIN 0.74   // looking down (low Fresnel)
+#define AL_WATER_ALPHA_MAX 0.95   // grazing (high Fresnel)
+
+// Shader-driven deep-water surface colour (linear). The vanilla scrolling water
+// texture is SUPPRESSED (see gbuffers_water.fsh) and replaced by this identity
+// tint modulated by the biome vertex colour, so the surface look is defined by
+// reflection + absorption, not the animated atlas. Deep blue-green, dreamy.
+const vec3 AL_WATER_TINT = vec3(0.09, 0.19, 0.22);
 
 // --- SSR / reflection (internal, not GUI) ----------------------------------
 // F0 for a water/air interface ~0.02. REFLECT_MAX caps grazing Fresnel a touch
@@ -551,8 +640,11 @@ const float sunPathRotation = -35.0;
 //   -> deep down-look opacity now ~0.72 (target 0.65-0.75), shallow ~0.49
 //   (shorelines read), grazing ~0.95 (reflection dominates). Red is crushed far
 //   faster than blue/green, so deep water is COLOURED, not black.
+// 0.4.3 (ISSUE 11): SCALE raised 0.55 -> 0.78 so DEEP water goes properly opaque
+// blue-green (bottom hidden) while the colour RATIO keeps shallow shorelines clear
+// and readable. Red is crushed fastest -> deep water is coloured, never black.
 #define AL_WATER_ABSORB       vec3(0.35, 0.12, 0.08)
-#define AL_WATER_ABSORB_SCALE 0.55
+#define AL_WATER_ABSORB_SCALE 0.78
 
 // --- Caustics (internal, not GUI) ------------------------------------------
 // SCALE maps world XZ into the voronoi domain; SPEED is the (slow) animation
@@ -677,6 +769,13 @@ const vec3 AL_UW_SNOW_TINT  = vec3(0.82, 0.86, 0.94);
 // History rejection: relative linear-depth mismatch above this discards the
 // reprojected sample (disocclusion / a different surface). ~5%.
 #define AL_TAA_DEPTH_REJECT 0.05
+// Neighbourhood VARIANCE-CLIP width (composite3): the history is clipped to
+// mean +/- this * stddev of the 3x3 YCoCg neighbourhood (intersected with the
+// true min/max). 0.4.3 (ISSUE 1): replaces the old hard min/max box, which let
+// distant high-contrast edges swim. ~1.0 is the standard sweet spot — lower =
+// steadier (more ghost-prone), higher = looser (more crawl). Distant terrain
+// stays stable at 1.0 while near edges keep their AA.
+#define AL_TAA_CLIP_GAMMA 1.0
 
 
 /* =========================================================================

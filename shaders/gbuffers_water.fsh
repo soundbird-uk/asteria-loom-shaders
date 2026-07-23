@@ -90,9 +90,15 @@ void main() {
 
     if (isWater > 0.5) {
         // ================= REAL WATER =================
-        // Biome water colour comes through glcolor. Decode to linear, apply a
-        // gentle cool blue-green deepening for the dreamy identity.
-        vec3 albedoLin = alSrgbToLinear(tex.rgb) * vec3(0.55, 0.80, 0.90);
+        // ISSUE 11 ("vanilla scrolling texture still visible"): do NOT sample the
+        // animated vanilla water atlas into the albedo — that is what made the
+        // tiled scrolling pattern show through. Use the pack's shader-driven
+        // deep-water identity (AL_WATER_TINT) as the surface colour, nudged gently
+        // toward the biome hue in glcolor so swamp/warm waters still read. The look
+        // is then defined by reflection + depth absorption (composite), i.e. a real
+        // shader water surface, not the scrolling atlas.
+        vec3 biomeLin  = alSrgbToLinear(glcolor.rgb);
+        vec3 albedoLin = AL_WATER_TINT * mix(vec3(1.0), biomeLin * 3.0, 0.30);
 
         // --- Ripple normal ---
         vec3 N = Ng;

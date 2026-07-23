@@ -7,6 +7,68 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.3] - 2026-07-23
+
+Cinematic pass — a broad field-fix sweep across atmosphere, lighting, water,
+clouds, foliage, TAA and interaction affordances, driven by screenshot review.
+
+### Fixed
+
+- **Fog was far too thick.** Sea-level extinction dropped ~4.3× (0.0068 → 0.0016:
+  half-extinction moves from ~102 m to ~433 m). At 20–24 chunk render distances the
+  mid-field no longer washes to haze — a flat horizon reaches only ~40% haze at the
+  far edge while nearby terrain stays clear. Aerial depth is now subtle, not a wall.
+- **Orange horizon ring / skybox through terrain.** Sky convergence is pushed late
+  (only near-opaque flat-horizon rays approach the raw sky) and the edge-insurance
+  strip is now a razor-thin, hard-gated seam seal — so no coloured ring follows the
+  camera and legitimate mid-distance terrain keeps its dark, scene-referenced tone.
+- **Void under the horizon.** The below-horizon sky is filled with the haze sampled
+  at the horizon, so the world sits against continuous atmosphere and the horizon
+  line sits *behind* terrain instead of showing a dark void band.
+- **Night distance went pale grey.** The whole fog in-scatter is now crushed and
+  cooled at night, so distant night terrain reads as dark, desaturated, moonlit
+  silhouettes instead of white mist. Night fog floor lowered (0.085 → 0.028).
+- **Sunrise/sunset shadows too weak.** `alSunlightColor` no longer crushes the low
+  sun to a near-black deep red — it is re-normalised to keep luminance and shift
+  *hue* to warm orange, so golden hour has a bright, strong, directional key and
+  long dramatic shadows.
+- **Objects had no lit vs shadow side.** The direct key is boosted (`AL_DIRECT_BOOST`)
+  and the ambient wrap floor lowered (0.6 → 0.3), so sun-facing surfaces clearly
+  brighten while backfacing/downward faces darken — real directional contrast on
+  terrain, trees and grass without over-darkening open shaded ground or caves.
+- **Water looked like scrolling fabric.** The wave model is retuned to broad,
+  multi-directional swells (fewer components, ~15-block base wavelength, lower
+  amplitude) and the high-frequency micro layer is demoted to a faint, larger-scale,
+  short-range shimmer — no more tiled criss-cross weave.
+- **Vanilla water texture visible / water too see-through.** The animated water
+  atlas is no longer sampled into the surface albedo (shader-driven blue-green tint
+  instead); down-look opacity and depth absorption are raised so deep water goes
+  properly opaque blue-green while shorelines stay readable.
+- **Night clouds too bright/white.** Cloud radiance is darkened (~20%) and cooled at
+  night, gated by sun elevation so noon is untouched — clouds now read as dark,
+  moody, moonlit masses with dark undersides.
+- **Distant terrain shimmer with TAA.** The reprojection is un-jittered (removing
+  the frame-varying reconstruction wobble that made far silhouettes swim) and the
+  neighbourhood clamp is now a variance clip (mean ± σ) — far terrain/mountains/
+  horizon are stable while near edges keep their anti-aliasing.
+- **Block selection outline missing.** The outline is emitted as a bright, crisp
+  near-white line, exempted from fog, and given the short TAA blend — so it stays a
+  legible interaction affordance at close range.
+
+### Added
+
+- **High-quality foliage wind.** Grass, plants, crops, vines and leaves now sway
+  (`lib/wind.glsl`): rolling gusts + per-plant phase (spatially varied, never in
+  sync), anchored bases via `at_midBlock` top-weighting, grass swaying more than
+  leaves, and a subtle leaf flutter. Applied in both the G-buffer and shadow passes
+  so shadows wave in step. Foliage block IDs mapped in `block.properties`.
+- **More small wispy clouds.** The cirrus layer is extended into a fragmented,
+  multi-scale wisp system — many small bright wisps dotted across the sky by day
+  (still obeying night darkening) alongside the existing volumetric weather masses.
+- **God rays / sun shafts.** Screen-space light scattering (`composite2`) casts warm
+  shafts through gaps in leaves and around terrain silhouettes toward the sun,
+  strongest at low sun and in haze, heavily gated so it never washes the screen.
+
 ## [0.4.2] - 2026-07-23
 
 Field fixes from 0.4.1 testing.

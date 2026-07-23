@@ -182,6 +182,16 @@ void main() {
         dispScatter = outScatter * extFog;               // in-scatter fades to 0
     }
 
+    // ISSUE 2 ("night clouds too bright/white"): darken + cool the cloud radiance
+    // at night so clouds read as dark, moody, moonlit masses (dark undersides)
+    // instead of glowing daytime white. Gated by the sun-elevation day factor so
+    // NOON is provably untouched (dayF==1 -> factor 1.0). Applied POST-temporal so
+    // the history stays view/time-independent and converges cleanly across dusk.
+    float cloudDayF  = smoothstep(-0.06, 0.16, sunDir.y);
+    vec3  nightCloud = mix(AL_CLOUD_NIGHT_TINT, vec3(1.0), cloudDayF)
+                     * mix(AL_CLOUD_NIGHT_BRIGHT, 1.0, cloudDayF);
+    dispScatter *= nightCloud;
+
     // Composite over the scene: background shows through by the (dissolved)
     // transmittance, plus the (distance-faded) in-scattered radiance.
     vec3 composited = scene * dispTrans + dispScatter;

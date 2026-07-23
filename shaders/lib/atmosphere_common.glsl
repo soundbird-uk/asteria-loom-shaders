@@ -273,13 +273,24 @@ vec3 alSkyFallback(vec3 dir) {
 // sun adds reddening on top.
 // ------------------------------------------------------------------------
 vec3 alSunlightColor(float sunHeight) {
-    float cosZ = max(sunHeight, 0.02);
+    float cosZ = max(sunHeight, 0.04);
     // Smooth, bounded relative air mass (~1 at zenith, ~25-40 at the horizon).
     float airmass = 1.0 / (cosZ + 0.025 * exp(-11.0 * cosZ));
     // Per-channel relative optical depth (blue > green > red), scaled by
-    // turbidity so hazier air reddens the sun sooner.
-    vec3 tau = vec3(0.20, 0.55, 1.30) * (0.35 * TURBIDITY);
+    // turbidity so hazier air reddens the sun as it descends.
+    // GOLDEN-HOUR RETUNE (0.4.3, ISSUE 3/4): the old (0.20,0.55,1.30)*0.35 ramp
+    // crushed the low sun to a near-BLACK deep red (T ~= (0.19,0.01,0.00) at the
+    // horizon), so sunrise/sunset had almost no directional key — flat, weak
+    // shadows. We (a) lower the per-channel taus so the reddening is gentler, and
+    // (b) RE-NORMALISE the result to its brightest channel, so a low sun keeps its
+    // LUMINANCE and shifts HUE toward warm orange instead of dimming to black.
+    // The warmth is then a colour shift (bright golden key) — physically the sun's
+    // *radiance* barely falls until it grazes; the visible dimming at sunset is
+    // aerial extinction of the whole scene (fog), not the key going dark. This is
+    // exactly the strong, warm, directional low-sun light the brief wants.
+    vec3 tau = vec3(0.14, 0.34, 0.80) * (0.30 * TURBIDITY);
     vec3 T = exp(-tau * max(airmass - 1.0, 0.0));    // zenith -> (1,1,1)
+    T /= max(max(T.r, T.g), max(T.b, 0.02));         // keep luminance, shift hue
     return clamp(T, 0.0, 1.0);
 }
 

@@ -217,13 +217,21 @@ vec4 alCirrus(vec3 camPos, vec3 worldDir, vec3 sunDir, vec3 sunColor,
     vec2 p  = xz * AL_CIRRUS_SCALE + alCloudWind() * 1.7;
     p.x *= 0.35;                                  // anisotropic -> streaky wisps
     float n = 0.0, amp = 0.5, freq = 1.0, norm = 0.0;
-    for (int i = 0; i < 3; i++) {
+    for (int i = 0; i < 4; i++) {                 // +1 octave -> finer wisp scale
         n    += amp * alCloudValue2D(p * freq);
         norm += amp;
-        freq *= 2.0;
-        amp  *= 0.5;
+        freq *= 2.3;                              // more scale separation
+        amp  *= 0.55;
     }
     n /= max(norm, 1e-4);
+
+    // ISSUE 6: high-frequency break-up. Fragment the continuous cirrus sheet into
+    // MANY small streaky wisps dotted across the sky (not one veil) by modulating
+    // the coverage with a second, higher-frequency smooth noise. Smooth (value
+    // noise) so wisps stay soft — never speckle.
+    float wisp = alCloudValue2D(xz * (AL_CIRRUS_SCALE * AL_CIRRUS_WISP_SCALE)
+                                + alCloudWind() * 2.4);
+    n *= (1.0 - AL_CIRRUS_WISP_STR) + 2.0 * AL_CIRRUS_WISP_STR * wisp;
 
     float lo  = 1.0 - AL_CIRRUS_COVER;
     float cov = smoothstep(lo, 1.0, n);

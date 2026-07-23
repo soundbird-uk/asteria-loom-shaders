@@ -56,12 +56,17 @@
    ------------------------------------------------------------------------- */
 
 // Extinction coefficient at sea level, per world-metre, at FOG_DENSITY = 1 and
-// in a neutral biome/clear weather. THICKER re-tone (0.3.3): raised from 0.0046
-// so haze is obviously atmospheric at a few hundred blocks (half extinction at
-// ln2 / 0.0068 ≈ 102 m of clear air). GUI FOG_DENSITY = 1.00 now == this thicker
-// look; the in-scatter is DARKENED + scene-toned (below) so thicker reads as
-// depth, not white glow.
-#define AL_FOG_SEA_DENSITY 0.0068
+// in a neutral biome/clear weather.
+// 0.4.3 FIELD FIX (ISSUE 15: "fog far too thick / whole mid-distance washes to
+// haze / forms a band"): the 0.3.3 value of 0.0068 put HALF extinction at only
+// ~102 m, so at a 20-24 chunk (320-384 block) render distance everything beyond a
+// hundred blocks drowned in haze and the flat horizon blew out to a bright band.
+// Dropped ~4.3x to 0.0016: half extinction now at ln2/0.0016 ≈ 433 m, i.e. at
+// 320 blocks a flat sea-level horizon reaches ~40% haze (gentle, seals the seam)
+// while mid-scene terrain at 120-150 m sits at ~17-21% — subtle aerial depth, not
+// a wall. Elevated terrain (mountains) fogs even less (height falloff). GUI
+// FOG_DENSITY still scales this for anyone who wants a soupier look.
+#define AL_FOG_SEA_DENSITY 0.0016
 
 // Scale height (metres): altitude over which density falls by 1/e. Larger =
 // fog climbs higher up mountains before thinning.
@@ -121,7 +126,17 @@
 // matched to lib/lighting.glsl / atmosphere_common so night stays consistent).
 // AL_MOON_TINT is the shared identity moon colour. Kept dim: visible depth-haze,
 // never a glow. Auto-gated by extinction (caves get beta0=0 -> no night fog).
-#define AL_FOG_NIGHT_LEVEL 0.085
+// 0.4.3 FIELD FIX (ISSUE 14: "night distance too white/grey"): dropped 0.085 ->
+// 0.028 so the night haze is a whisper of cool depth, not a pale wash.
+#define AL_FOG_NIGHT_LEVEL 0.028
+
+// 0.4.3 (ISSUE 14): overall night DARKENING of the whole in-scatter. At night the
+// raw sky sample + scene tone still carry a dim grey that, once terrain is fogged,
+// reads as pale mist over distant hills. This multiplier crushes the night
+// in-scatter toward dark (cool) so distant night terrain darkens + desaturates as
+// silhouettes instead of turning white. Applied via mix(this, 1.0, dayFactor) so
+// noon is untouched.
+#define AL_FOG_NIGHT_DIM 0.40
 
 // --- Distance convergence to sky (0.4.2 REWORK, ISSUE 1: kill the band) ------
 // The terrain/sky boundary must be seamless WITHOUT a bright horizontal band.
@@ -145,12 +160,21 @@
 //     ettes (mountain peaks) at the very edge are excluded and keep their colour.
 // Numeric check (horizon terrain vs sky, 0.995·far): delta 0% at far>=256, ~5-7%
 // at far=192 — imperceptible, and no band at any distance.
-#define AL_FOG_CONVERGE_A   0.86     // 1-ext where sky-convergence begins (tau~2.0)
-#define AL_FOG_CONVERGE_B   0.975    // 1-ext where it completes            (tau~3.7)
-#define AL_FOG_EDGE_START   0.965    // edge-insurance strip start (fraction of far)
-#define AL_FOG_EDGE_END     0.995    // edge-insurance strip end
-#define AL_FOG_EDGE_FOG_LO  0.45     // fog-thickness gate: below -> excluded (peaks)
-#define AL_FOG_EDGE_FOG_HI  0.72     // fog-thickness gate: above -> converge (ground)
+// 0.4.3 (ISSUE 13: "orange ring / skybox through terrain"): pushed the whole
+// convergence LATE (A 0.86->0.93, B 0.975->0.995) so terrain keeps the dark,
+// scene-referenced fogTone far longer and only the genuinely near-opaque flat
+// horizon (fogF -> ~1) reaches the raw sky. With the 4x thinner density this means
+// convergence happens ONLY at the true horizon line, never as a mid-distance ring
+// painted over legitimate terrain — so no orange circle follows the camera.
+#define AL_FOG_CONVERGE_A   0.93     // 1-ext where sky-convergence begins
+#define AL_FOG_CONVERGE_B   0.995    // 1-ext where it completes
+// Edge-insurance strip: kept only as a razor-thin seam seal at the very far plane
+// and gated harder on fog thickness, so mountain silhouettes at the edge keep
+// their colour and the strip never reads as a coloured band/ring.
+#define AL_FOG_EDGE_START   0.985    // edge-insurance strip start (fraction of far)
+#define AL_FOG_EDGE_END     0.999    // edge-insurance strip end
+#define AL_FOG_EDGE_FOG_LO  0.60     // fog-thickness gate: below -> excluded (peaks)
+#define AL_FOG_EDGE_FOG_HI  0.85     // fog-thickness gate: above -> converge (ground)
 
 // Biome-modulation master switch. All biome_category / temperature / rainfall
 // reads (verified Iris uniforms — see composite1.fsh header for evidence) are
@@ -437,6 +461,15 @@ vec3 alApplyAerialFog(vec3 sceneColor, float camY, vec3 worldDir, float dist,
     float hTau = smoothstep(AL_FOG_CONVERGE_A, AL_FOG_CONVERGE_B, fogF);
     vec3  inscatter = mix(fogTone, sky, hTau);
 
+    // ISSUE 14 ("night distance too white/grey"): crush + cool the WHOLE in-scatter
+    // at night. The raw sky sample and scene tone still carry a dim grey that, once
+    // terrain is fogged, reads as pale mist over distant hills; multiplying by a
+    // cool, dim night factor turns that into dark, desaturated, moonlit silhouettes.
+    // mix(...,1.0,dayF) makes noon provably untouched.
+    vec3  nightHaze = mix(vec3(0.60, 0.70, 1.00), vec3(1.0), dayF)   // cool by night
+                    * mix(AL_FOG_NIGHT_DIM, 1.0, dayF);              // dim by night
+    inscatter *= nightHaze;
+
     vec3 aerial = sceneColor * ext + inscatter * fogF;
 
     // --- EDGE INSURANCE (thin, low-render-distance only) ------------------
@@ -449,7 +482,9 @@ vec3 alApplyAerialFog(vec3 sceneColor, float camY, vec3 worldDir, float dist,
     float edge = smoothstep(AL_FOG_EDGE_START, AL_FOG_EDGE_END, dist / f)
                * skyGate
                * smoothstep(AL_FOG_EDGE_FOG_LO, AL_FOG_EDGE_FOG_HI, fogF);
-    vec3  result = mix(aerial, sky, edge);
+    // Converge the seam seal to the SAME night-dimmed haze, not the raw (brighter)
+    // sky, so the far edge stays dark at night instead of glowing.
+    vec3  result = mix(aerial, sky * nightHaze, edge);
 
     return max(result, vec3(0.0));
 }

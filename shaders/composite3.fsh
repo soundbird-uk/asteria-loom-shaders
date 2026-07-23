@@ -4,6 +4,10 @@
 #include "/lib/color.glsl"
 #include "/lib/encoding.glsl"
 #include "/lib/space.glsl"
+// lib/jitter.glsl OWNS viewWidth / viewHeight / frameCounter and exposes
+// alHaltonOffset() — used here to UN-JITTER the reprojection (ISSUE 1). We must
+// therefore NOT redeclare viewWidth/viewHeight below (jitter.glsl already does).
+#include "/lib/jitter.glsl"
 
 /*
  composite3 (fragment) — TAA RESOLVE (Phase 4, contract §4).
@@ -74,8 +78,8 @@ uniform sampler2D colortex3;   // matID .r / flags .g  (hand detection)
 uniform sampler2D colortex8;   // TAA history: rgb colour, a = confidence
 uniform sampler2D depthtex0;
 
-uniform float viewWidth;
-uniform float viewHeight;
+// viewWidth / viewHeight / frameCounter come from lib/jitter.glsl (do NOT
+// redeclare — duplicate-uniform error).
 
 in vec2 texcoord;
 
@@ -133,6 +137,18 @@ void main() {
     vec2  texel = 1.0 / vec2(viewWidth, viewHeight);
     float depth = texture(depthtex0, texcoord).r;
 
+    // --- UN-JITTER for reprojection (ISSUE 1: distant terrain shakes) ---------
+    // The G-buffer was rendered with a per-frame sub-pixel Halton jitter, but the
+    // reconstruction matrices are UNJITTERED. Reconstructing a distant point from
+    // the jittered screen position therefore gives a world position that WOBBLES by
+    // the jitter each frame, so its reprojected history UV oscillates and far
+    // silhouettes visibly swim. Subtracting the current jitter from the screen
+    // position BEFORE reconstruction removes that frame-varying error (the jitter
+    // cancels out of the final history UV — see the velocity note below), so a
+    // world-static distant point reprojects to a stable place and TAA converges it
+    // instead of shaking it. Screen-space (uv) jitter = pixel offset / viewSize.
+    vec2 jitterUV = alHaltonOffset(frameCounter % 8) / vec2(viewWidth, viewHeight);
+
     // --- 1. 3x3 closest-depth dilation ------------------------------------
     vec2  closestUV    = texcoord;
     float closestDepth = depth;
@@ -150,14 +166,20 @@ void main() {
     float expectZ = -1.0;   // prev-frame eye depth of this surface (<0 => sky/none)
 
     if (isSky) {
-        vec3 viewDir     = normalize(alScreenToView(texcoord, 1.0));
+        // Reconstruct the view ray from the UN-jittered pixel centre so the sky/
+        // cloud silhouette reprojects stably (rotation-only, infinite distance).
+        vec3 viewDir     = normalize(alScreenToView(texcoord - jitterUV, 1.0));
         vec3 worldDir    = mat3(gbufferModelViewInverse) * viewDir;
         vec3 prevViewDir = mat3(gbufferPreviousModelView) * worldDir;
         vec4 prevClip    = gbufferPreviousProjection * vec4(prevViewDir, 0.0);
         if (prevClip.w <= 0.0) histUV = vec2(-1.0);   // behind camera -> reject
         else                   histUV = (prevClip.xy / prevClip.w) * 0.5 + 0.5;
     } else {
-        vec3 viewPos   = alScreenToView(closestUV, closestDepth);
+        // Reconstruct the closest surface from its UN-jittered screen position.
+        // velocity uses the (jittered) closestUV so the jitter CANCELS in histUV:
+        //   histUV = texcoord + (prevScr - closestUV)
+        // where prevScr now derives from the un-jittered world point -> stable.
+        vec3 viewPos   = alScreenToView(closestUV - jitterUV, closestDepth);
         vec3 playerPos = alViewToPlayer(viewPos);
         vec3 prevView  = alPlayerToPrevView(playerPos);
         vec3 prevScr   = alPrevViewToScreen(prevView);
@@ -166,25 +188,39 @@ void main() {
         expectZ = alLinearEyeDepth(prevView);
     }
 
-    // --- 3/4. Neighbourhood colour box (YCoCg) ----------------------------
-    vec3 curY   = alRGBToYCoCg(current);
-    vec3 boxMin = curY;
-    vec3 boxMax = curY;
+    // --- 3/4. Neighbourhood statistics (YCoCg) -> VARIANCE clip box --------
+    // Hard min/max clamping makes distant high-contrast edges SWIM: the box
+    // extremes swing frame-to-frame as the jitter flips which side of an edge each
+    // sample lands on, so the clamped history jumps with them. A statistical
+    // variance box (mean +/- gamma*sigma) is far steadier while still catching
+    // ghosts; intersecting it with the true min/max keeps it from overshooting the
+    // real neighbourhood. Together with the un-jitter above this is what stills the
+    // far terrain/mountain/horizon crawl the brief calls out.
+    vec3 curY = alRGBToYCoCg(current);
+    vec3 m1 = vec3(0.0), m2 = vec3(0.0);
+    vec3 nmin = curY, nmax = curY;
     for (int y = -1; y <= 1; y++) {
         for (int x = -1; x <= 1; x++) {
-            if (x == 0 && y == 0) continue;
-            vec3 n = alSanitizeRGB(
+            vec3 n = (x == 0 && y == 0) ? current : alSanitizeRGB(
                 texture(colortex0, texcoord + vec2(float(x), float(y)) * texel).rgb);
             vec3 ny = alRGBToYCoCg(n);
-            boxMin  = min(boxMin, ny);
-            boxMax  = max(boxMax, ny);
+            m1  += ny;
+            m2  += ny * ny;
+            nmin = min(nmin, ny);
+            nmax = max(nmax, ny);
         }
     }
+    vec3 mean   = m1 / 9.0;
+    vec3 sigma  = sqrt(max(m2 / 9.0 - mean * mean, vec3(0.0)));
+    vec3 boxMin = max(nmin, mean - AL_TAA_CLIP_GAMMA * sigma);
+    vec3 boxMax = min(nmax, mean + AL_TAA_CLIP_GAMMA * sigma);
 
     // --- 5/6. Hand-aware blend ceiling ------------------------------------
     int  matID  = alDecodeMatID(texture(colortex3, texcoord).r);
-    bool isHand = (matID == AL_MATID_HAND);
-    float maxBlend = isHand ? AL_TAA_HAND_MAX_BLEND : AL_TAA_MAX_BLEND;
+    // Hand AND the block-selection outline (BASIC) use the short blend ceiling so
+    // a fast weapon swing / a moving outline re-converges immediately (no ghost).
+    bool lowBlend = (matID == AL_MATID_HAND) || (matID == AL_MATID_BASIC);
+    float maxBlend = lowBlend ? AL_TAA_HAND_MAX_BLEND : AL_TAA_MAX_BLEND;
 
     // --- Sample + validate history (NaN-law) ------------------------------
     vec3  resolved = current;

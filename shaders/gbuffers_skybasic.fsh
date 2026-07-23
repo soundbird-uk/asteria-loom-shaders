@@ -43,6 +43,19 @@ void main() {
     // --- Base atmosphere (baked LUT) --------------------------------------
     vec3 sky = alSkySample(dir);
 
+    // --- Ground / horizon haze fill (ISSUE 13: "void under the horizon") --
+    // Below the horizon the analytic atmosphere goes dim (ground-scattered), which
+    // reads as a dark VOID band under the world and a hard seam behind distant
+    // terrain. Fill the below-horizon hemisphere with the haze sampled AT the
+    // horizon so the world sits against continuous atmosphere (not a void) and the
+    // horizon line sits BEHIND terrain, melting into the aerial fog. It tracks time
+    // of day for free (the horizon sample darkens at night), so it never glows.
+    if (dir.y < 0.0) {
+        vec3  horizonHaze = alSkySample(vec3(dir.x, 0.015, dir.z));
+        float below = smoothstep(0.0, -0.22, dir.y);      // 0 at horizon -> 1 down
+        sky = mix(sky, horizonHaze, below * 0.9);
+    }
+
     // --- Procedural night sky (additive, fades in as the sun sets) --------
     // nightFactor: 0 in full day, 1 well after sunset.
     float nightFactor = smoothstep(0.04, -0.10, sunDir.y);

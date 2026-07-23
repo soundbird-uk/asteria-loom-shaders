@@ -2,6 +2,7 @@
 #include "/settings.glsl"
 #include "/lib/common.glsl"
 #include "/lib/color.glsl"
+#include "/lib/encoding.glsl"
 #include "/lib/space.glsl"
 
 /*
@@ -61,6 +62,7 @@
 // in lib/fog.glsl (clear=false buffer, analytic-sky fallback).
 uniform sampler2D colortex0;   // scene HDR (sky + lit scene + translucents + clouds)
 uniform sampler2D colortex2;   // G-buffer: normal.rg (octahedral), lightmap.ba (block, sky)
+uniform sampler2D colortex3;   // G-buffer: matID .r (outline / god-ray gating)
 uniform sampler2D depthtex0;   // translucent-inclusive depth
 
 // Weather (verified). rainStrength/wetness/thunderStrength drive density/tint.
@@ -88,6 +90,10 @@ uniform float far;
 // factor that drives the night fog floor.
 uniform vec3 sunPosition;
 
+// Forward projection (view -> clip) for the god-ray sun screen position. Owned
+// here: lib/space.glsl declares only the INVERSE, so this is collision-free.
+uniform mat4 gbufferProjection;
+
 // Biome (verified Iris uniforms — see header). Used only behind
 // AL_FOG_BIOME_UNIFORMS in lib/fog.glsl; declared here unconditionally so the
 // program always compiles (Iris supplies them; unused declarations are legal).
@@ -108,6 +114,28 @@ in vec2 texcoord;
 
 /* RENDERTARGETS: 0 */
 layout(location = 0) out vec4 outColor;   // -> colortex0 (fogged scene)
+
+#ifdef AL_GOD_RAYS
+// Screen-space sun shafts (ISSUE 12). March from this pixel toward the sun's
+// screen position, accumulating UNOCCLUDED (sky / gap) samples with a decaying
+// weight. Returns a normalised [0,1] shaft amount; the caller tints + gates it.
+// Reuses depthtex0 (no extra sampler). Dithered start kills banding.
+float alGodRayAmount(vec2 uv, vec2 sunUV, float dither) {
+    vec2  delta = (sunUV - uv) / float(AL_GODRAY_SAMPLES);
+    vec2  p     = uv + delta * dither;
+    float w     = 1.0;
+    float accum = 0.0;
+    for (int i = 0; i < AL_GODRAY_SAMPLES; i++) {
+        float d = texture(depthtex0, clamp(p, vec2(0.0015), vec2(0.9985))).r;
+        accum += ((d >= 1.0) ? 1.0 : 0.0) * w;   // sky/gap = light gets through
+        w     *= AL_GODRAY_DECAY;
+        p     += delta;
+    }
+    float wsum = (1.0 - pow(AL_GODRAY_DECAY, float(AL_GODRAY_SAMPLES)))
+               / max(1.0 - AL_GODRAY_DECAY, 1e-4);
+    return accum / max(wsum, 1e-4);
+}
+#endif
 
 void main() {
     vec3  scene = texture(colortex0, texcoord).rgb;
@@ -168,6 +196,13 @@ void main() {
         return;
     }
 
+    // Block selection outline / hitboxes (matID BASIC): an interaction overlay,
+    // NOT world geometry — must not be fogged (ISSUE 16). Pass it straight through.
+    if (alDecodeMatID(texture(colortex3, texcoord).r) == AL_MATID_BASIC) {
+        outColor = vec4(scene, 1.0);
+        return;
+    }
+
     // Reconstruct the world-relative view ray from depth.
     vec3  viewPos   = alScreenToView(texcoord, depth);
     vec3  playerPos = alViewToPlayer(viewPos);          // world pos rel. camera
@@ -195,6 +230,36 @@ void main() {
                                    FOG_DENSITY, skyLm, far, worldSunDir,
                                    biome_category, temperature, rainfall,
                                    rainStrength, wetness, thunderStrength);
+
+#ifdef AL_GOD_RAYS
+    // --- Sun shafts / god rays (ISSUE 12) ---------------------------------
+    // Additive warm shafts fanning from the sun through gaps in leaves/terrain.
+    // Heavily gated so it costs ~nothing and never washes the screen: only when
+    // the sun is in front of the camera, above the horizon, on/near screen, and
+    // the view points roughly toward it; strongest at low sun and in haze.
+    {
+        vec4 sc = gbufferProjection * vec4(sunPosition, 1.0);
+        if (sc.w > 0.0 && worldSunDir.y > -0.02) {
+            vec2  sunUV   = sc.xy / sc.w * 0.5 + 0.5;
+            float dayUp   = smoothstep(-0.02, 0.12, worldSunDir.y);
+            float lowSun  = mix(1.0, AL_GODRAY_LOWSUN,
+                                1.0 - smoothstep(0.04, 0.35, worldSunDir.y));
+            float haze    = mix(1.0, AL_GODRAY_RAINBOOST, alSaturate(rainStrength));
+            // Soft on-screen window (a little off-screen still contributes edge rays).
+            vec2  q       = alSaturate((sunUV + 0.35) / 1.70);
+            float onScr   = alSaturate(16.0 * q.x * (1.0 - q.x) * q.y * (1.0 - q.y));
+            float facing  = alSaturate(dot(worldDir, worldSunDir));
+            float gate    = dayUp * onScr * lowSun * haze * (0.25 + 0.75 * facing);
+            if (gate > 0.001) {
+                float dither = fract(frameTimeCounter * 61.8
+                                   + dot(gl_FragCoord.xy, vec2(0.0071, 0.0113)));
+                float shaft  = alGodRayAmount(texcoord, sunUV, dither);
+                fogged += alDirectColor(worldSunDir)
+                        * (shaft * AL_GODRAY_INTENSITY * gate);
+            }
+        }
+    }
+#endif
 
     // Clamp the output (NaN-safe: a non-finite result falls back to the raw
     // scene rather than propagating).

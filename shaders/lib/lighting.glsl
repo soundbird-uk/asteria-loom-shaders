@@ -71,7 +71,12 @@ vec3 alLightPhase1(vec3 albedoLin, vec3 worldN, vec2 lm,
     float NdotL     = max(dot(worldN, worldLDir), 0.0);
     float cloudSh   = alCloudShadow(worldPos);
     float directNight = mix(AL_NIGHT_DIRECT_SCALE, 1.0, dayFactor);
-    vec3  direct  = alDirectColor(worldSunDir) * (NdotL * shadowVis * cloudSh * directNight);
+    // 0.4.3 (ISSUE 7/8): strengthen the direct key so the sun-facing side clearly
+    // reads BRIGHTER than the shadowed side. AL_DIRECT_BOOST lifts the key while
+    // the ambient below is trimmed, so overall exposure moves little but the
+    // lit/shadow CONTRAST rises — surfaces gain a real lit side and a dark side.
+    vec3  direct  = alDirectColor(worldSunDir)
+                  * (NdotL * shadowVis * cloudSh * directNight * AL_DIRECT_BOOST);
 
     // --- Hemisphere sky ambient (the cool fill) ---------------------------
     // The upper-hemisphere sky colour now comes from the atmosphere model
@@ -87,7 +92,12 @@ vec3 alLightPhase1(vec3 albedoLin, vec3 worldN, vec2 lm,
     float skySat  = smoothstep(AL_AMBIENT_DESAT_LO, AL_AMBIENT_DESAT_HI, lm.y);
     hemiCol       = mix(vec3(alLuminance(hemiCol)), hemiCol, skySat);
 
-    float wrap    = 0.6 + 0.4 * up;                       // soft wrap term
+    // 0.4.3 (ISSUE 7): lower the wrap FLOOR so faces turned AWAY from the open sky
+    // (down/backfacing, up->0) receive markedly less hemisphere fill than up-facing
+    // ones. The old 0.6 floor lit every backface to 60% of full ambient, flattening
+    // objects into a uniform wash; 0.30 + 0.70*up gives a clear top-lit gradient so
+    // a tree/terrain reads with a lit side and a genuinely darker shadow side.
+    float wrap    = 0.30 + 0.70 * up;                     // soft wrap term
     float skyLm   = lm.y * lm.y;                          // sky lightmap, eased
     // Day scaling lives inside alAmbientColor (0.18 at night .. 1.0 by day). We
     // re-scale the NIGHT ambient here in the shared model (NOT the atmosphere core)
