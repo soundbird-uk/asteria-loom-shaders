@@ -180,8 +180,56 @@ KNOWN_RENDER_STAGES = [
 
 MAX_FRAGMENT_SAMPLERS = 16
 
-# Files exempt from the RENDERTARGETS-comment lint (by stem).
-RENDERTARGETS_EXEMPT_STEMS = {"shadow", "final"}
+# Files exempt from the RENDERTARGETS-comment lint (by stem). shadow / dh_shadow
+# are depth-only; final writes to the screen.
+RENDERTARGETS_EXEMPT_STEMS = {"shadow", "final", "dh_shadow"}
+
+# ---------------------------------------------------------------------------
+# Distant Horizons (DISTANT_HORIZONS) stubs.
+#
+# Iris injects these when DH is active. We inject them ONLY when compiling with
+# DISTANT_HORIZONS defined (dh_* programs always; a mac spot-check pass for the
+# rest) and ONLY when the symbol is genuinely absent from the assembled source
+# (a real declaration in the shader always wins). Clearly marked + extensible.
+# ---------------------------------------------------------------------------
+
+# Uniforms/samplers Iris provides under DH. name -> declaration to inject.
+DH_UNIFORM_STUBS = {
+    "dhProjection": "uniform mat4 dhProjection;",
+    "dhProjectionInverse": "uniform mat4 dhProjectionInverse;",
+    "dhPreviousProjection": "uniform mat4 dhPreviousProjection;",
+    "dhNearPlane": "uniform float dhNearPlane;",
+    "dhFarPlane": "uniform float dhFarPlane;",
+    "dhRenderDistance": "uniform float dhRenderDistance;",
+    "dhDepthTex0": "uniform sampler2D dhDepthTex0;",
+    "dhDepthTex1": "uniform sampler2D dhDepthTex1;",
+}
+
+# dhMaterialId is a vertex ATTRIBUTE (`in int` in a .vsh); in a .fsh it can only
+# arrive as a varying, so we fall back to a uniform there for compile purposes.
+# Handled specially in build_injection (needs the stage).
+
+# DH_BLOCK_* material-id constants Iris defines. Best-effort known set; any
+# other DH_BLOCK_* referenced is stubbed too (unlike MC_RENDER_STAGE_*, the DH
+# block list is not authoritatively verified here, so we stub permissively
+# rather than fail — extend this list as the real set is confirmed).
+KNOWN_DH_BLOCKS = [
+    "DH_BLOCK_UNKNOWN",
+    "DH_BLOCK_LEAVES",
+    "DH_BLOCK_STONE",
+    "DH_BLOCK_WOOD",
+    "DH_BLOCK_METAL",
+    "DH_BLOCK_DIRT",
+    "DH_BLOCK_LAVA",
+    "DH_BLOCK_DEEPSLATE",
+    "DH_BLOCK_SNOW",
+    "DH_BLOCK_SAND",
+    "DH_BLOCK_TERRAIN",
+    "DH_BLOCK_GRASS",
+    "DH_BLOCK_AIR",
+    "DH_BLOCK_ILLUMINATED",
+    "DH_BLOCK_WATER",
+]
 
 
 # ---------------------------------------------------------------------------
@@ -534,6 +582,13 @@ def declares_uniform(text, symbol):
     return re.search(r"\buniform\b[^;]*\b" + re.escape(symbol) + r"\b", text) is not None
 
 
+def declares_symbol(text, symbol):
+    """True if `symbol` appears in any declaration (uniform / in / out /
+    attribute / varying) — used for DH stubs so a real declaration wins."""
+    return re.search(r"\b(?:uniform|in|out|attribute|varying)\b[^;{}]*\b"
+                     + re.escape(symbol) + r"\b", text) is not None
+
+
 def defines_macro(text, macro):
     return re.search(r"^\s*#define\s+" + re.escape(macro) + r"\b", text, re.M) is not None
 
@@ -550,11 +605,15 @@ def strip_option_defines(source, option_names):
     return "\n".join(keep)
 
 
-def build_injection(state, assembled_source, macro_stubs, skip_inject=frozenset()):
+def build_injection(state, assembled_source, macro_stubs, skip_inject=frozenset(),
+                    distant_horizons=False, stage="frag"):
     """Build the block injected right after #version.
     state: dict optname -> (enabled, value)
     macro_stubs: the target's Iris macro environment (TARGET_MACROS[target]).
     skip_inject: option names to NOT emit as #defines (const-style options).
+    distant_horizons: when True, define DISTANT_HORIZONS and inject DH stubs
+        (uniforms/attributes/constants) for any DH symbol genuinely absent.
+    stage: 'vert' or 'frag' — decides how dhMaterialId is stubbed.
     """
     out = []
     out.append("// ==== injected by validate.py ====")
@@ -567,6 +626,9 @@ def build_injection(state, assembled_source, macro_stubs, skip_inject=frozenset(
         else:
             out.append("#define %s %s" % (name, value))
         out.append("#endif")
+
+    if distant_horizons:
+        out.append("#ifndef DISTANT_HORIZONS\n#define DISTANT_HORIZONS 1\n#endif")
 
     # NB: no buffer-format identifier stubs — see the note by IRIS_MACRO_STUBS.
     # Format identifiers must never be defined; a live one is meant to fail.
@@ -602,6 +664,31 @@ def build_injection(state, assembled_source, macro_stubs, skip_inject=frozenset(
         if name in referenced_stages and not defines_macro(assembled_source, name):
             stub_lines.append("#ifndef %s\n#define %s %d\n#endif" % (name, name, idx))
 
+    # Distant Horizons stubs (only when compiling with DH defined, and only for
+    # symbols genuinely absent from the source).
+    if distant_horizons:
+        for sym, decl in DH_UNIFORM_STUBS.items():
+            if references_symbol(assembled_source, sym) and not declares_symbol(assembled_source, sym):
+                stub_lines.append(decl)
+        # dhMaterialId: `in int` attribute in a vertex program; uniform fallback
+        # in a fragment program (where it would really arrive as a varying).
+        if references_symbol(assembled_source, "dhMaterialId") \
+                and not declares_symbol(assembled_source, "dhMaterialId"):
+            stub_lines.append("in int dhMaterialId;" if stage == "vert"
+                              else "uniform int dhMaterialId;")
+        # DH_BLOCK_* constants: stub known ones with stable values and any other
+        # referenced one dynamically (permissive — the list isn't verified here).
+        referenced_blocks = set(re.findall(r"\bDH_BLOCK_[A-Z0-9_]+\b", assembled_source))
+        emitted_blocks = []
+        for idx, name in enumerate(KNOWN_DH_BLOCKS):
+            if name in referenced_blocks and not defines_macro(assembled_source, name):
+                emitted_blocks.append(name)
+                stub_lines.append("#ifndef %s\n#define %s %d\n#endif" % (name, name, idx))
+        base = len(KNOWN_DH_BLOCKS)
+        for j, name in enumerate(sorted(referenced_blocks)):
+            if name not in KNOWN_DH_BLOCKS and not defines_macro(assembled_source, name):
+                stub_lines.append("#ifndef %s\n#define %s %d\n#endif" % (name, name, base + j))
+
     if stub_lines:
         out.append("// Iris symbol stubs (only injected when missing)")
         out.extend(stub_lines)
@@ -611,12 +698,13 @@ def build_injection(state, assembled_source, macro_stubs, skip_inject=frozenset(
 
 
 def patch_source(program_path, shaders_root, state, option_names, macro_stubs,
-                 skip_inject=frozenset()):
+                 skip_inject=frozenset(), distant_horizons=False, stage="frag"):
     """Return the fully patched, glslang-ready source for one program under one
     profile and compile target."""
     assembled = resolve_includes(program_path, shaders_root)
     assembled = strip_option_defines(assembled, option_names)
-    injection = build_injection(state, assembled, macro_stubs, skip_inject)
+    injection = build_injection(state, assembled, macro_stubs, skip_inject,
+                                distant_horizons, stage)
 
     lines = assembled.splitlines()
     # find the #version line (should be the first non-empty line)
@@ -637,30 +725,63 @@ def patch_source(program_path, shaders_root, state, option_names, macro_stubs,
 # Program discovery
 # ---------------------------------------------------------------------------
 
+WORLD_DIR_RE = re.compile(r"^world(-?\d+)$")
+
+
+def discover_worlds(shaders_root):
+    """Return the sorted list of world-folder names (world0, world1, world-1, ...)
+    present under shaders/, or [] when the pack is flat-root."""
+    if not os.path.isdir(shaders_root):
+        return []
+    worlds = [e for e in os.listdir(shaders_root)
+              if WORLD_DIR_RE.match(e) and os.path.isdir(os.path.join(shaders_root, e))]
+    return sorted(worlds)
+
+
 def discover_programs(shaders_root):
-    """Return list of (rel_name, abs_path, stage) for every program stage file.
-    Programs live at the shaders/ root and (future phases) worldN/ folders.
-    lib/ holds includes only and is excluded."""
+    """Return list of (rel_name, abs_path, stage, world) for every program stage
+    file.
+
+    Iris world rule: once ANY worldN folder exists, programs load ONLY from the
+    world folders (root programs are ignored). Otherwise the pack is flat-root
+    and programs live directly under shaders/. Either way, lib/ holds includes
+    only and is excluded.
+
+    `world` is the folder name (e.g. 'world0') or None for the flat layout.
+    """
+    worlds = discover_worlds(shaders_root)
+    if worlds:
+        roots = [(w, os.path.join(shaders_root, w)) for w in worlds]
+    else:
+        roots = [(None, shaders_root)]
+
     progs = []
-    patterns = [
-        os.path.join(shaders_root, "*.vsh"),
-        os.path.join(shaders_root, "*.fsh"),
-        os.path.join(shaders_root, "world*", "*.vsh"),
-        os.path.join(shaders_root, "world*", "*.fsh"),
-    ]
     seen = set()
-    for pat in patterns:
-        for path in sorted(glob.glob(pat)):
-            if os.sep + "lib" + os.sep in path:
-                continue
-            rp = os.path.realpath(path)
-            if rp in seen:
-                continue
-            seen.add(rp)
-            rel = os.path.relpath(path, shaders_root)
-            stage = "vert" if path.endswith(".vsh") else "frag"
-            progs.append((rel, path, stage))
+    for world, base in roots:
+        for ext, stage in (("*.vsh", "vert"), ("*.fsh", "frag")):
+            for path in sorted(glob.glob(os.path.join(base, ext))):
+                if os.sep + "lib" + os.sep in path:
+                    continue
+                rp = os.path.realpath(path)
+                if rp in seen:
+                    continue
+                seen.add(rp)
+                rel = os.path.relpath(path, shaders_root)
+                progs.append((rel, path, stage, world))
     return progs
+
+
+def program_is_dh(rel):
+    """A Distant Horizons program (dh_terrain, dh_water, dh_shadow, ...)."""
+    return os.path.basename(rel).startswith("dh_")
+
+
+def rel_world(rel):
+    """The world folder of a program rel path, or '(root)' for flat-root."""
+    head = rel.replace(os.sep, "/").split("/")
+    if len(head) > 1 and WORLD_DIR_RE.match(head[0]):
+        return head[0]
+    return "(root)"
 
 
 # ---------------------------------------------------------------------------
@@ -758,7 +879,7 @@ def count_samplers(code):
 def lint_includes(programs, shaders_root):
     """Iris hard-fails on a missing #include; so do we (F2)."""
     errs = []
-    for rel, path, stage in programs:
+    for rel, path, stage, _world in programs:
         missing = []
         resolve_includes(path, shaders_root, missing=missing)
         for includer, line_no, inc, target in missing:
@@ -774,7 +895,7 @@ def lint_rendertargets(programs, shaders_root):
     its index list must be internally consistent with the fragment's outputs
     (F4): same count as `out` declarations, every index in 0..15, no dupes."""
     errs = []
-    for rel, path, stage in programs:
+    for rel, path, stage, _world in programs:
         if stage != "frag":
             continue
         stem = os.path.splitext(os.path.basename(rel))[0]
@@ -823,7 +944,7 @@ def lint_sampler_budget(programs, shaders_root):
     """No fragment program may declare > MAX_FRAGMENT_SAMPLERS samplers
     (post-include). Counts declarators, not statements (F1)."""
     errs = []
-    for rel, path, stage in programs:
+    for rel, path, stage, _world in programs:
         if stage != "frag":
             continue
         code = strip_comments(resolve_includes(path, shaders_root))
@@ -839,7 +960,7 @@ def lint_render_stages(programs, shaders_root):
     hatch (then it isn't 'unknown')."""
     errs = []
     known = set(KNOWN_RENDER_STAGES)
-    for rel, path, stage in programs:
+    for rel, path, stage, _world in programs:
         code = strip_comments(resolve_includes(path, shaders_root))
         for tok in sorted(set(re.findall(r"\bMC_RENDER_STAGE_[A-Z0-9_]+\b", code))):
             if tok not in known and not defines_macro(code, tok):
@@ -859,7 +980,7 @@ def lint_format_live(programs, shaders_root):
     decl inside /* */ or after // is fine.
     """
     errs = []
-    for rel, path, stage in programs:
+    for rel, path, stage, _world in programs:
         live = strip_comments(resolve_includes(path, shaders_root))
         for m in FORMAT_CONST_DECL_RE.finditer(live):
             buf, init = m.group(1), m.group(2).strip()
@@ -928,6 +1049,25 @@ BLEND_FACTORS = {
     "DST_ALPHA", "ONE_MINUS_DST_ALPHA",
     "SRC_ALPHA_SATURATE",
 }
+
+
+PROGRAM_ENABLED_RE = re.compile(r"^program\.([A-Za-z0-9_]+)\.enabled$")
+
+
+def lint_program_directives(entries, program_stems):
+    """A `program.<name>.enabled = ...` directive must reference a real program.
+    Program sets are per-world but the directive is global, so a name is valid
+    if it exists in ANY world folder (program_stems is the union)."""
+    errs = []
+    for key, _val in entries:
+        m = PROGRAM_ENABLED_RE.match(key)
+        if not m:
+            continue
+        name = m.group(1)
+        if name not in program_stems:
+            errs.append("shaders.properties: `%s` references program '%s', which has "
+                        "no .vsh/.fsh in any world folder (typo?)" % (key, name))
+    return errs
 
 
 def _valid_blend_buffer(tok):
@@ -1033,7 +1173,7 @@ def parse_lang_option_keys(lang_path):
 
 class ValidationResult:
     def __init__(self):
-        self.compile_results = {}   # (profile, rel) -> (ok, output)
+        self.compile_results = {}   # (variant, profile, rel) -> (ok, output)
         self.lint_fails = []
         self.lint_warns = []
         self.setup_errors = []
@@ -1041,6 +1181,8 @@ class ValidationResult:
         self.profiles = []
         self.programs = []
         self.targets = []
+        self.variants = []          # compile-variant labels (targets [+ mac+DH])
+        self.worlds = []            # world folder names, or [] for flat-root
 
     def any_failures(self):
         if self.setup_errors or self.lint_fails:
@@ -1088,7 +1230,7 @@ def run_validation(shaders_root, out_dir, profile_filter=None, program_glob=None
 
     # --- static lints (profile-independent) ---
     all_programs = discover_programs(shaders_root)
-    result.programs = [rel for rel, _p, _s in all_programs]
+    result.programs = [rel for rel, _p, _s, _w in all_programs]
 
     result.lint_fails += lint_includes(all_programs, shaders_root)
     result.lint_fails += lint_rendertargets(all_programs, shaders_root)
@@ -1096,7 +1238,7 @@ def run_validation(shaders_root, out_dir, profile_filter=None, program_glob=None
     result.lint_fails += lint_render_stages(all_programs, shaders_root)
     result.lint_fails += lint_format_live(all_programs, shaders_root)
     result.lint_fails += lint_format_canonical(shaders_root)
-    program_stems = {os.path.splitext(os.path.basename(rel))[0] for rel, _p, _s in all_programs}
+    program_stems = {os.path.splitext(os.path.basename(rel))[0] for rel, _p, _s, _w in all_programs}
     result.lint_fails += lint_blend_directives(entries, program_stems)
     of, ow = lint_option_consistency(options, profile_refs, screen_refs, lang_keys)
     result.lint_fails += of
@@ -1142,7 +1284,7 @@ def run_validation(shaders_root, out_dir, profile_filter=None, program_glob=None
         for profile in profile_names:
             state = profiles[profile]
             prof_out = os.path.join(out_dir, target, profile)
-            for rel, path, stage in programs:
+            for rel, path, stage, _world in programs:
                 patched = patch_source(path, shaders_root, state, option_names,
                                        macro_stubs, const_option_names)
                 dest = os.path.join(prof_out, rel)
