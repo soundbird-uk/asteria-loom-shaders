@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-07-23
+
+### Fixed
+
+- **Pack failed to load ("Failed to parse buffer blend! index = -1").** The water
+  pass's per-buffer blend overrides used bare draw-buffer indices; Iris requires
+  buffer names (colortexN or legacy). Verified against Iris source and corrected
+  to `blend.gbuffers_water.colortex2/colortex3 = off`.
+
 ## [0.4.0] - 2026-07-23
 
 Phase 4 — water & post-processing. The pack gains its final rendering identity:
