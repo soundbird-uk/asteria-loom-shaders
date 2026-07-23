@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.3] - 2026-07-23
+
+Tone and atmosphere rework from macOS 0.3.2 field feedback.
+
+### Changed
+
+- **Nights are properly dark now** — open-ground night brightness roughly halved
+  (moon key, cool sky-fill, and night floor all reduced) while the cool-blue
+  readability floor survives; torches pop much harder against the darker base.
+- **Fog is thicker, darker, and scene-toned** — in-scatter blends toward a muted
+  scene-ambient tone instead of raw bright sky: hazy blue-grey days, muted warm
+  sunsets, and a new cool moon-haze so depth reads at night. Base density up
+  ~50% (half-extinction ~100 m).
+- **Clouds now genuinely dissolve into the distance** — opacity and scattering
+  both fade with the same optical-depth model the terrain fog uses, applied after
+  temporal accumulation; horizon clouds are 95-99% dissolved and converge to the
+  identical sky value as fogged terrain.
+
+### Fixed
+
+- The warm horizon glow can no longer sit in front of mid-distance terrain: the
+  far-plane sky convergence is confined to a thin skyline strip and scaled by how
+  fogged a pixel actually is.
+- Fog and lighting now share one canonical day/night ramp, so night fog and night
+  lighting transition at the same sun elevation.
+
 ## [0.3.2] - 2026-07-22
 
 Cloud and fog polish from macOS 0.3.1 field testing (first fully-working build on
