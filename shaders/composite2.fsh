@@ -78,8 +78,9 @@ uniform int   isEyeInWater;
 // nowhere else in this program / its includes, so this is collision-free.
 uniform float frameTimeCounter;
 
-// Render distance (blocks). Drives the far-plane convergence ramp that fades
-// distant terrain into the sky so the render-distance edge is seamless.
+// Render distance (blocks). Feeds the thin edge-insurance strip that closes the
+// terrain/sky seam at low render distances (the primary sky-convergence is
+// optical-depth driven inside lib/fog.glsl — no distance band).
 uniform float far;
 
 // Sun position (view/eye space, Iris/OptiFine standard). Transformed to world

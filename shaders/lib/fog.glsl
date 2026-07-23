@@ -123,16 +123,34 @@
 // never a glow. Auto-gated by extinction (caves get beta0=0 -> no night fog).
 #define AL_FOG_NIGHT_LEVEL 0.085
 
-// --- Far-plane convergence (BUG B / ISSUE 1a: hard seam, but TIGHTER) ---------
-// Distant terrain must converge to the SAME sky shown past the far plane, or the
-// render-distance edge shows as a hard cutoff. ISSUE 1a: the old [0.78,0.97] band
-// was far too WIDE — it painted sky over legitimately-visible mid-distance
-// terrain (mountains). Tightened to a thin skyline strip [0.92,0.985]·far, and
-// the fade is additionally SCALED BY HOW FOGGED the pixel already is (fogFactor =
-// 1-extinction) so a barely-fogged high mountain peak near the edge does NOT get
-// sky painted onto it — only genuinely hazed pixels converge.
-#define AL_FOG_FARFADE_START 0.92
-#define AL_FOG_FARFADE_END   0.985
+// --- Distance convergence to sky (0.4.2 REWORK, ISSUE 1: kill the band) ------
+// The terrain/sky boundary must be seamless WITHOUT a bright horizontal band.
+// Root cause of the 0.4.1 band: the old convergence blended toward the RAW BRIGHT
+// sky on a DISTANCE plane ([0.92,0.985]·far), painting bright sky over legitimate
+// mid-distance terrain (a horizontal line across mountains, since the fog tone is
+// darker than the sky). Fix — make convergence PRIMARILY a function of OPTICAL
+// DEPTH, not distance:
+//   * PRIMARY (CONVERGE_A/B): the in-scatter colour lerps fogTone -> raw sky by
+//     smoothstep(A, B, 1-ext). Mid haze (tau ~0.5-1.5, 1-ext < ~0.86) stays the
+//     dark scene tone; only heavily-extincted rays (tau >~2.5-3, 1-ext > ~0.9)
+//     approach the raw sky, so terrain converges to EXACTLY the sky colour
+//     asymptotically — no plane, no band, at ANY render distance. Crucially,
+//     ELEVATED terrain (mountains) has LOW optical depth, so it stays dark: the
+//     band across mountains cannot form. Haze instead rises smoothly up a slope
+//     (base fogs, peak stays crisp) — correct aerial perspective.
+//   * EDGE INSURANCE (EDGE_*): a thin strip [0.965,0.995]·far for LOW render
+//     distances, where even the horizon ground can't reach convergence tau. It is
+//     gated by skyGate AND a SHARP fog-thickness gate smoothstep(FOG_LO,FOG_HI,
+//     1-ext) so ONLY the heavily-fogged flat horizon converges — low-tau silhou-
+//     ettes (mountain peaks) at the very edge are excluded and keep their colour.
+// Numeric check (horizon terrain vs sky, 0.995·far): delta 0% at far>=256, ~5-7%
+// at far=192 — imperceptible, and no band at any distance.
+#define AL_FOG_CONVERGE_A   0.86     // 1-ext where sky-convergence begins (tau~2.0)
+#define AL_FOG_CONVERGE_B   0.975    // 1-ext where it completes            (tau~3.7)
+#define AL_FOG_EDGE_START   0.965    // edge-insurance strip start (fraction of far)
+#define AL_FOG_EDGE_END     0.995    // edge-insurance strip end
+#define AL_FOG_EDGE_FOG_LO  0.45     // fog-thickness gate: below -> excluded (peaks)
+#define AL_FOG_EDGE_FOG_HI  0.72     // fog-thickness gate: above -> converge (ground)
 
 // Biome-modulation master switch. All biome_category / temperature / rainfall
 // reads (verified Iris uniforms — see composite1.fsh header for evidence) are
@@ -403,23 +421,35 @@ vec3 alApplyAerialFog(vec3 sceneColor, float camY, vec3 worldDir, float dist,
 
     // Ground-ward softening (ISSUE 1b / old BUG A): compress any residual >1 for
     // rays at/below the horizon (toward-sun haze) + gentle desaturation, so haze
-    // never reads as a bright layer painted in front of terrain.
+    // never reads as a bright layer painted in front of terrain. This is the
+    // MID-DISTANCE fog colour ("fogTone") — dark, scene-referenced.
     float groundy = 1.0 - smoothstep(AL_FOG_GROUND_LO, AL_FOG_GROUND_HI, worldDir.y);
-    fogColor = alFogSoftKnee(fogColor, groundy);
+    vec3  fogTone = alFogSoftKnee(fogColor, groundy);
     float totalDesat = alSaturate(desat + AL_FOG_HORIZON_DESAT * groundy);
-    fogColor = mix(fogColor, vec3(alLuminance(fogColor)), totalDesat);
+    fogTone = mix(fogTone, vec3(alLuminance(fogTone)), totalDesat);
 
-    vec3 aerial = sceneColor * ext + fogColor * fogF;
+    // --- PRIMARY convergence to sky by OPTICAL DEPTH (ISSUE 1, 0.4.2) ------
+    // As the ray becomes heavily extincted the in-scatter COLOUR approaches the
+    // RAW sky, so distant/grazing terrain merges into the sky asymptotically —
+    // no distance plane, no bright band, at any render distance. Mid haze stays
+    // the dark fogTone; ELEVATED terrain (mountains) has low tau -> stays dark
+    // (no band across it — haze rises smoothly up a slope instead).
+    float hTau = smoothstep(AL_FOG_CONVERGE_A, AL_FOG_CONVERGE_B, fogF);
+    vec3  inscatter = mix(fogTone, sky, hTau);
 
-    // --- Far-plane convergence (ISSUE 1a: TIGHT + fog-scaled) -------------
-    // Ramp toward the RAW sky over a thin skyline strip [START,END]·far so the
-    // terrain/sky boundary is seamless — but ONLY where the pixel is already
-    // fogged (fogF) and under open sky (skyGate), so a barely-fogged mid-distance
-    // mountain peak keeps its own colour instead of getting sky painted on it.
+    vec3 aerial = sceneColor * ext + inscatter * fogF;
+
+    // --- EDGE INSURANCE (thin, low-render-distance only) ------------------
+    // Where even the horizon ground can't reach convergence tau (small render
+    // distance), a thin strip [START,END]·far closes the residual seam. Gated by
+    // skyGate AND a SHARP fog-thickness gate so ONLY the heavily-fogged flat
+    // horizon converges — low-tau silhouettes (mountain peaks) at the very edge
+    // are excluded and keep their colour, so this can never paint a band either.
     float f = max(farDist, 1.0);
-    float edge = smoothstep(f * AL_FOG_FARFADE_START, f * AL_FOG_FARFADE_END, dist);
-    float farFade = edge * skyGate * fogF;
-    vec3  result  = mix(aerial, sky, farFade);
+    float edge = smoothstep(AL_FOG_EDGE_START, AL_FOG_EDGE_END, dist / f)
+               * skyGate
+               * smoothstep(AL_FOG_EDGE_FOG_LO, AL_FOG_EDGE_FOG_HI, fogF);
+    vec3  result = mix(aerial, sky, edge);
 
     return max(result, vec3(0.0));
 }

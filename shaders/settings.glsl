@@ -510,10 +510,14 @@ const float sunPathRotation = -35.0;
 #define AL_WATER_MICRO_FADE      26.0   // blocks; micro gone beyond (anti-sparkle)
 
 // --- Water surface opacity (internal, not GUI) -----------------------------
-// Fresnel-driven alpha: near-transparent looking straight down (see through to
-// the seabed), more opaque at grazing angles (the surface reads as a mirror).
-// The base texture alpha still multiplies this so vanilla water density carries.
-#define AL_WATER_ALPHA_MIN 0.55   // looking down (low Fresnel)
+// Fresnel-driven alpha: the surface is denser looking straight down and near-
+// mirror at grazing. The base texture alpha still multiplies this so vanilla
+// water density carries. 0.4.2 field fix ("far too see-through"): ALPHA_MIN
+// raised 0.55 -> 0.65 so the down-look surface carries meaningfully more water
+// COLOUR (denser tint, not a window). The rest of the down-look opacity is
+// DEPTH-DRIVEN by the composite absorption below (shallow stays clear, deep goes
+// properly opaque blue-green). See the before/after transmission table there.
+#define AL_WATER_ALPHA_MIN 0.65   // looking down (low Fresnel)
 #define AL_WATER_ALPHA_MAX 0.94   // grazing (high Fresnel)
 
 // --- SSR / reflection (internal, not GUI) ----------------------------------
@@ -528,15 +532,27 @@ const float sunPathRotation = -35.0;
 
 // --- Absorption (internal, not GUI) ----------------------------------------
 // Beer-Lambert tint of the SUBMERGED scene by the water path length between the
-// surface (depthtex0) and the opaque behind it (depthtex1). Red is absorbed
-// most -> the classic green-blue deepening. The coeffs are the brief's stated
-// ~(0.35,0.12,0.08)/m; SCALE brings the path-length units into a pleasant range
-// (raw per-metre coeffs would go black within a few metres). Applied
-// MULTIPLICATIVELY to colortex0 (which already blended the water over the
-// scene), weighted by (1-Fresnel) so it reads as depth-dependent water colour —
-// an honest approximation (we cannot separate the pre-blended transmitted term).
+// surface (depthtex0) and the opaque behind it (depthtex1). Red is absorbed most
+// -> the classic green-blue deepening. The coeffs keep the brief's (0.35,0.12,
+// 0.08) COLOUR RATIO (so transmitted stays coloured blue-green, never grey);
+// SCALE sets how fast water goes opaque with depth. Applied MULTIPLICATIVELY to
+// colortex0 (which already blended the water over the scene), weighted by
+// (1-Fresnel) so it reads as depth-dependent water VOLUME — an honest
+// approximation (we cannot separate the pre-blended transmitted term).
+//   0.4.2 field fix ("far too see-through"): SCALE raised 0.16 -> 0.55 (~3.4x).
+//   This is what makes DEEP water read opaque while shallow shoreline stays
+//   clear. Effective bottom TRANSMISSION looking straight down (surface factor
+//   (1-alpha)(1-fres) ~= 0.534 at ALPHA_MIN 0.65, x per-channel absorb), i.e.
+//   opacity = 1 - luminance(T):
+//     depth   BEFORE (0.16)            AFTER (0.55)
+//      1 blk  T~(.57,.59,.60) op~.42   T~(.44,.50,.51) op~.49
+//      3 blk  T~(.51,.57,.58) op~.44   T~(.31,.46,.49) op~.57
+//      8 blk  T~(.39,.52,.55) op~.51   T~(.11,.32,.38) op~.72  (dense blue-green)
+//   -> deep down-look opacity now ~0.72 (target 0.65-0.75), shallow ~0.49
+//   (shorelines read), grazing ~0.95 (reflection dominates). Red is crushed far
+//   faster than blue/green, so deep water is COLOURED, not black.
 #define AL_WATER_ABSORB       vec3(0.35, 0.12, 0.08)
-#define AL_WATER_ABSORB_SCALE 0.16
+#define AL_WATER_ABSORB_SCALE 0.55
 
 // --- Caustics (internal, not GUI) ------------------------------------------
 // SCALE maps world XZ into the voronoi domain; SPEED is the (slow) animation
