@@ -14,11 +14,19 @@
 
 uniform mat4 gbufferModelViewInverse;
 
+// Block-ID attribute (Iris fills mc_Entity.x from block.properties; = 10001.0
+// for the water blocks we mapped, something else for glass/ice/slime/etc.).
+in vec4 mc_Entity;
+
 out vec2 texcoord;
 out vec2 lmcoord;
 out vec4 glcolor;
 out vec3 wnormal;
 out vec3 playerPos;
+// 1.0 for real water, 0.0 for every other translucent that routes through this
+// program. `flat` (330-core) — it is a per-primitive classification, not a value
+// to interpolate. The fragment stage gates ALL water-specific behaviour on it.
+flat out float isWater;
 
 void main() {
     vec4 viewPos = gl_ModelViewMatrix * gl_Vertex;
@@ -27,6 +35,7 @@ void main() {
     texcoord = (gl_TextureMatrix[0] * gl_MultiTexCoord0).xy;
     lmcoord  = (gl_TextureMatrix[1] * gl_MultiTexCoord1).xy;
     glcolor  = gl_Color;
+    isWater  = (mc_Entity.x == 10001.0) ? 1.0 : 0.0;
 
     vec3 viewN = normalize(gl_NormalMatrix * gl_Normal);
     wnormal = mat3(gbufferModelViewInverse) * viewN;

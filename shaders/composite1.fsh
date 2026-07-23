@@ -7,7 +7,7 @@
 #endif
 
 /*
- composite (fragment) — volumetric clouds + scene composite + AO-history copy.
+ composite1 (fragment) — volumetric clouds + scene composite + AO-history copy.
 
  Three jobs:
    1. VOLUMETRIC CLOUDS (when VOLUMETRIC_CLOUDS is on): raymarch the 2-layer

@@ -118,32 +118,13 @@ vec3 alBloomDownsample(sampler2D tex, vec2 uv, vec2 d, float lod) {
     return sum * 0.25;
 }
 
-/*
- 9-tap tent UPSAMPLE (weights 1-2-1 / 2-4-2 / 1-2-1, /16). Used by composite5 to
- read each bloom tile smoothly (spreading it back toward the scene). `d` = the
- per-tile sample radius in ATLAS UV (kept small and inside the inset so no tap
- leaves the tile). Sampling is done in TILE-LOCAL UV, mapped through
- alBloomToAtlas so the clamp guards the edges.
-*/
-vec3 alBloomUpsampleTile(sampler2D atlas, int L, vec2 localUV,
-                         vec2 atlasTexel, float radius) {
-    vec2 rD = atlasTexel * radius;   // radius in atlas UV
-    // Convert the atlas-space offsets to tile-local by dividing by tile size.
-    vec4 r = alBloomTileRect(L);
-    vec2 tileSize = r.zw - r.xy;
-    vec2 lD = rD / max(tileSize, vec2(1e-6));
-
-    vec3 c = texture(atlas, alBloomToAtlas(L, localUV,                     atlasTexel)).rgb * 4.0;
-    c += texture(atlas, alBloomToAtlas(L, localUV + vec2(-lD.x,  0.0),     atlasTexel)).rgb * 2.0;
-    c += texture(atlas, alBloomToAtlas(L, localUV + vec2( lD.x,  0.0),     atlasTexel)).rgb * 2.0;
-    c += texture(atlas, alBloomToAtlas(L, localUV + vec2( 0.0,  -lD.y),    atlasTexel)).rgb * 2.0;
-    c += texture(atlas, alBloomToAtlas(L, localUV + vec2( 0.0,   lD.y),    atlasTexel)).rgb * 2.0;
-    c += texture(atlas, alBloomToAtlas(L, localUV + vec2(-lD.x, -lD.y),    atlasTexel)).rgb;
-    c += texture(atlas, alBloomToAtlas(L, localUV + vec2( lD.x, -lD.y),    atlasTexel)).rgb;
-    c += texture(atlas, alBloomToAtlas(L, localUV + vec2(-lD.x,  lD.y),    atlasTexel)).rgb;
-    c += texture(atlas, alBloomToAtlas(L, localUV + vec2( lD.x,  lD.y),    atlasTexel)).rgb;
-    return c * (1.0 / 16.0);
-}
+// NOTE: composite5 combines the chain with a single BILINEAR gather per tile
+// (each tile is already dual-filter blurred by composite4, so a plain
+// alBloomToAtlas() sample reads smoothly — a per-tile 9-tap tent added no
+// visible smoothing for its cost). The tent-upsample helper that lived here was
+// dead code and has been removed; alBloomToAtlas() + alBloomLevelWeight() are
+// the whole read path. If a strict tent cascade is ever wanted, reintroduce it
+// as a documented multi-pass upsample, not a single-pass gather.
 
 // Per-level combine weights (dreamy/soft: slightly favour the WIDE levels so the
 // glow reads as a broad, painterly halo rather than a tight ring). Normalised to

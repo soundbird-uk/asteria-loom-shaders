@@ -5,7 +5,7 @@
 #include "/lib/space.glsl"
 
 /*
- composite1 (fragment) — aerial-perspective fog.
+ composite2 (fragment) — aerial-perspective fog.
 
  Runs AFTER composite (volumetric clouds already blended into colortex0). It
  reconstructs each pixel's world-relative position from depthtex0 (translucent-

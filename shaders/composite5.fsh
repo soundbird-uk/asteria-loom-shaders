@@ -12,15 +12,18 @@
  (1) BLOOM COMBINE -> colortex0. Reads the 6 tiles composite4 wrote into the
      colortex9 atlas, sums them with per-level weights (lib/bloom.glsl —
      normalised to 1.0, gently favouring the wide levels for the pack's soft,
-     dreamy halo), and mixes into the scene with an ENERGY-CONSERVING lerp:
-         out = mix(scene, bloomSum, w),  w = BLOOM_STRENGTH * AL_BLOOM_MIX
-     Because bloomSum is a weighted AVERAGE of the level blurs (not a sum of raw
-     energy) and w is small, noon barely changes while night torches/glowstone —
-     which sit far above 1.0 in the HDR scene — spread a clear glow into the dark
-     surroundings (the emissive spill the brief asks for). This is a single-pass
-     gather, NOT a strict tent-cascade upsample; the deviation is intentional and
-     documented in lib/bloom.glsl (the tiles are already dual-filter blurred, so
-     a bilinear gather reads identically for a fraction of the passes).
+     dreamy halo), and ADDS them into the scene:
+         out = scene + bloomSum * w,   w = BLOOM_STRENGTH * AL_BLOOM_ADD
+     Additive (NOT a crossfade): bright emissives GAIN a soft glow and nothing is
+     dimmed — the brief's "generous bloom / emissive spill". bloomSum is a
+     weighted AVERAGE of the level blurs (bounded energy), w is small, and AgX's
+     soft highlight rolloff in final absorbs the added highlight energy without
+     clipping. Tuned so a night torch/glowstone halo brightens clearly (~2.1x)
+     while a noon midtone shifts <2% (see settings.glsl AL_BLOOM_ADD). This is a
+     single-pass gather, NOT a strict tent-cascade upsample; the deviation is
+     intentional and documented in lib/bloom.glsl (the tiles are already
+     dual-filter blurred, so a bilinear gather reads identically for a fraction
+     of the passes).
 
  (2) AUTO-EXPOSURE (Mac path) -> colortex5.a at texel (0,0). Samples a deep mip
      of colortex0 (colortex0MipmapEnabled below) for the average scene
@@ -80,11 +83,11 @@ void main() {
         vec3 b  = alBloomValidate(texture(colortex9, uv).rgb);
         bloomSum += alBloomLevelWeight(L) * b;
     }
-    float w = alSaturate(BLOOM_STRENGTH * AL_BLOOM_MIX);
-    vec3 mixed = mix(scene, bloomSum, w);
+    float w = max(BLOOM_STRENGTH * AL_BLOOM_ADD, 0.0);
+    vec3 added = scene + bloomSum * w;
     // NaN guard — fall back to the untouched scene.
-    bool okB = (mixed.r >= 0.0) && (mixed.g >= 0.0) && (mixed.b >= 0.0);
-    result = okB ? mixed : scene;
+    bool okB = (added.r >= 0.0) && (added.g >= 0.0) && (added.b >= 0.0);
+    result = okB ? added : scene;
 #endif
 #endif
     // Debug views (7/8 probes etc.) pass the scene through untouched above.

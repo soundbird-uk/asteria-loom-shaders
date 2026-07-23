@@ -27,12 +27,18 @@
 
     WHY THIS IS SAFE (documented per contract §3): the deferred lighting pass
     (deferred1) has ALREADY consumed the opaque G-buffer for THIS frame before
-    any translucent draws, so overwriting colortex2/3 for water pixels here does
-    not corrupt opaque shading. Later fullscreen passes that read colortex2/3
-    (fog's sky-lightmap gate, TAA) then see the WATER surface's normal/lightmap
-    at water pixels, which is correct for those effects. Non-water translucents
-    (ice, stained glass) keep the terrain fallback path and never reach here, so
-    their matID stays non-water and they get no SSR this phase.
+    any translucent draws, so overwriting colortex2/3 for translucent pixels here
+    does not corrupt opaque shading. Later fullscreen passes that read colortex2/3
+    (fog's sky-lightmap gate, TAA) then see the translucent surface's normal/
+    lightmap, which is fine for those effects.
+
+    NON-WATER TRANSLUCENTS (stained glass, ice, slime, honey, nether portal) ALSO
+    draw through this program (Iris routes ALL translucent terrain here — the
+    terrain fallback applies only when the program is absent). They are
+    discriminated via mc_Entity (block.properties, sentinel ID 10001) into the
+    `isWater` varying and take the else-branch: their own colour/alpha, geometric
+    normal, and matID AL_MATID_TRANSLUCENT — so the composite pass gives them NO
+    SSR / absorption / caustics.
 
  Sampler count: gtexture + shadow samplers via lib/shadow.glsl (SHADOWS):
    Mac fallback = 3 (gtexture, shadowtex1, noisetex);
@@ -52,57 +58,87 @@ in vec2 lmcoord;
 in vec4 glcolor;
 in vec3 wnormal;
 in vec3 playerPos;
+flat in float isWater;   // 1 = real water, 0 = other translucent (glass/ice/...)
 
 /* RENDERTARGETS: 0,2,3 */
-layout(location = 0) out vec4 outColor;      // colortex0 (blended lit water)
-layout(location = 1) out vec4 outNormalLm;   // colortex2 (ripple normal + lm)
-layout(location = 2) out vec4 outMaterial;   // colortex3 (matID WATER)
+layout(location = 0) out vec4 outColor;      // colortex0 (blended lit surface)
+layout(location = 1) out vec4 outNormalLm;   // colortex2 (surface normal + lm)
+layout(location = 2) out vec4 outMaterial;   // colortex3 (matID)
 
+/*
+ CRITICAL (MAJOR-1/2 review fixes):
+   * ALL translucent terrain (stained glass, ice, slime, honey, nether portal)
+     routes through THIS program in Iris. Only mc_Entity.x == 10001 (isWater=1,
+     mapped in block.properties) is treated as water — everything else keeps its
+     own texture colour/alpha, its geometric normal, and a NON-water matID, so
+     the composite pass never SSR/absorb/caustic-treats glass or ice.
+   * colortex2/3 here are the aux draw buffers of an MRT whose colortex0 target
+     is alpha-blended. Vanilla blend state applies to EVERY MRT target, which
+     would corrupt the matID (alpha*encode decodes to the wrong ID at low alpha)
+     and blend octahedral normals into garbage. shaders.properties therefore
+     sets `blend.gbuffers_water.1 = off` and `.2 = off`, making these two writes
+     AUTHORITATIVE OVERWRITES (colortex0 keeps blending). Both branches below
+     write fully-formed values because they now land verbatim.
+*/
 void main() {
     vec4 tex = texture(gtexture, texcoord) * glcolor;
 
-    // Biome water colour comes through glcolor. Decode to linear, apply a gentle
-    // cool blue-green deepening for the dreamy identity.
-    vec3 albedoLin = alSrgbToLinear(tex.rgb) * vec3(0.55, 0.80, 0.90);
-
-    // --- Ripple normal --------------------------------------------------------
-    vec3 Ng = normalize(wnormal);
-    vec3 N  = Ng;
-#ifdef WATER_WAVES
-    // Only perturb near-horizontal surfaces (the vast majority of water); the
-    // detail normal is computed in a world Y-up frame, flipped for undersides.
-    if (abs(Ng.y) > 0.5) {
-        vec3 worldPos = playerPos + cameraPosition;
-        vec3 nd = alWaterWaveNormal(worldPos, frameTimeCounter, AL_WATER_WAVE_AMP);
-        nd.y *= sign(Ng.y);
-        N = normalize(nd);
-    }
-#endif
-
-    // --- Fresnel-driven opacity ----------------------------------------------
-    // View direction toward the camera in world space. cos small at grazing.
-    vec3  Vw    = normalize(-playerPos);
-    float cosV  = alSaturate(dot(Vw, N));
-    float fres  = AL_WATER_F0 + (1.0 - AL_WATER_F0) * pow(1.0 - cosV, 5.0);
-    // More transparent looking down (low Fresnel), more opaque at grazing.
-    float alpha = mix(AL_WATER_ALPHA_MIN, AL_WATER_ALPHA_MAX, alSaturate(fres));
-    alpha *= tex.a;   // keep vanilla water density
-
-    // --- Forward lighting (shared model) -------------------------------------
-    vec3 wLightDir = normalize(mat3(gbufferModelViewInverse) * shadowLightPosition);
-    vec3 wSunDir   = normalize(mat3(gbufferModelViewInverse) * sunPosition);
+    vec3  Ng = normalize(wnormal);
+    vec3  wLightDir = normalize(mat3(gbufferModelViewInverse) * shadowLightPosition);
+    vec3  wSunDir   = normalize(mat3(gbufferModelViewInverse) * sunPosition);
     float dayFactor = alDayFactor(wSunDir);
 
-    float NdotL = max(dot(N, wLightDir), 0.0);
-    float shadowVis = alShadowVisibility(playerPos, N, NdotL);
+    if (isWater > 0.5) {
+        // ================= REAL WATER =================
+        // Biome water colour comes through glcolor. Decode to linear, apply a
+        // gentle cool blue-green deepening for the dreamy identity.
+        vec3 albedoLin = alSrgbToLinear(tex.rgb) * vec3(0.55, 0.80, 0.90);
 
-    vec3 color = alLightPhase1(albedoLin, N, lmcoord, shadowVis, wLightDir, wSunDir,
-                               playerPos + cameraPosition, dayFactor);
+        // --- Ripple normal ---
+        vec3 N = Ng;
+#ifdef WATER_WAVES
+        // Only perturb near-horizontal surfaces (the vast majority of water);
+        // the detail normal is in a world Y-up frame, flipped for undersides.
+        if (abs(Ng.y) > 0.5) {
+            vec3 worldPos = playerPos + cameraPosition;
+            vec3 nd = alWaterWaveNormal(worldPos, frameTimeCounter, AL_WATER_WAVE_AMP);
+            nd.y *= sign(Ng.y);
+            N = normalize(nd);
+        }
+#endif
+        // --- Fresnel-driven opacity ---
+        vec3  Vw   = normalize(-playerPos);
+        float cosV = alSaturate(dot(Vw, N));
+        float fres = AL_WATER_F0 + (1.0 - AL_WATER_F0) * pow(1.0 - cosV, 5.0);
+        // More transparent looking down (low Fresnel), opaque at grazing.
+        float alpha = mix(AL_WATER_ALPHA_MIN, AL_WATER_ALPHA_MAX, alSaturate(fres));
+        alpha *= tex.a;   // keep vanilla water density
 
-    outColor = vec4(color, alpha);
+        float NdotL = max(dot(N, wLightDir), 0.0);
+        float shadowVis = alShadowVisibility(playerPos, N, NdotL);
+        vec3 color = alLightPhase1(albedoLin, N, lmcoord, shadowVis, wLightDir,
+                                   wSunDir, playerPos + cameraPosition, dayFactor);
 
-    // --- G-buffer surface data for the composite water pass ------------------
-    outNormalLm = vec4(alEncodeNormal(N), lmcoord);
-    outMaterial = vec4(alEncodeMatID(AL_MATID_WATER),
-                       alEncodeFlags(AL_FLAG_NONE), 0.0, 0.0);
+        outColor    = vec4(color, alpha);
+        outNormalLm = vec4(alEncodeNormal(N), lmcoord);      // ripple normal
+        outMaterial = vec4(alEncodeMatID(AL_MATID_WATER),
+                           alEncodeFlags(AL_FLAG_NONE), 0.0, 0.0);
+    } else {
+        // ============ OTHER TRANSLUCENT (glass / ice / slime / honey / ...) ===
+        // 0.3.x behaviour: own texture colour + alpha (NO blue-green tint, NO
+        // Fresnel remap, NO waves), forward-lit with the shared model, own
+        // geometric normal + lightmap, and a NON-water matID so composite skips
+        // it. Alpha-test is not needed here (translucents blend, not cutout).
+        vec3 albedoLin = alSrgbToLinear(tex.rgb);
+
+        float NdotL = max(dot(Ng, wLightDir), 0.0);
+        float shadowVis = alShadowVisibility(playerPos, Ng, NdotL);
+        vec3 color = alLightPhase1(albedoLin, Ng, lmcoord, shadowVis, wLightDir,
+                                   wSunDir, playerPos + cameraPosition, dayFactor);
+
+        outColor    = vec4(color, tex.a);                    // keep glass colour+alpha
+        outNormalLm = vec4(alEncodeNormal(Ng), lmcoord);     // geometric normal
+        outMaterial = vec4(alEncodeMatID(AL_MATID_TRANSLUCENT),
+                           alEncodeFlags(AL_FLAG_NONE), 0.0, 0.0);
+    }
 }

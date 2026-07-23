@@ -28,6 +28,12 @@
 #define AL_MATID_BLOCK    5   // block entities (chests, signs, ...)
 #define AL_MATID_WEATHER  6
 #define AL_MATID_BASIC    7   // untextured geometry (selection box, etc.)
+// Phase 4: NON-WATER translucents (stained glass, ice, slime, honey, nether
+// portal) all route through gbuffers_water in Iris (the terrain fallback only
+// applies when the program is ABSENT). gbuffers_water discriminates real water
+// via mc_Entity and tags everything else AL_MATID_TRANSLUCENT so the composite
+// water pass leaves it alone (no SSR / absorption / caustics).
+#define AL_MATID_TRANSLUCENT 8
 
 // Flag bits (colortex3.g). Reserved for later phases (emissive, subsurface,
 // wetness). Phase 1 writes AL_FLAG_NONE everywhere.

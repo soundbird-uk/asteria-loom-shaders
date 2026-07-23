@@ -569,11 +569,17 @@ const vec3 AL_UW_SNOW_TINT  = vec3(0.82, 0.86, 0.94);
 #define BLOOM_STRENGTH 1.0 // [0.5 0.75 1.0 1.25 1.5]
 
 // --- Bloom shaping (internal, not GUI) ------------------------------------
-// Base mix weight w in `mix(scene, bloomSum, w)`, before BLOOM_STRENGTH. Kept
-// small so noon barely changes while night torches/glowstone (HDR > 1) glow.
-// bloomSum is a normalised weighted AVERAGE of the 6 levels, so this is a true
-// energy-conserving crossfade — output never exceeds the brightest input.
-#define AL_BLOOM_MIX 0.06
+// ADDITIVE bloom weight w in `scene + bloomSum * w`, before BLOOM_STRENGTH.
+// Additive (not a crossfade): bright emissives GAIN a soft halo and NOTHING is
+// dimmed (the brief's "generous bloom / emissive spill"). bloomSum is a
+// normalised weighted average of the 6 levels, so the added energy is bounded;
+// AgX's soft highlight rolloff in final absorbs it without clipping. Tuned
+// (numeric sim through the AgX path) so a night torch halo gains ~2.1x while a
+// noon midtone shifts <2%: scene L=0.18 + bloomSum~0.18 -> +1.7% display; a
+// torch-lit dark halo (scene~0.02 + bloomSum~1.0) -> ~2.1x brighter; the torch
+// CORE (already saturated) is unchanged. BLOOM_STRENGTH scales this (1.5 ->
+// halo ~2.5x, noon ~+2.5%).
+#define AL_BLOOM_ADD 0.04
 
 // Exposure user bias. Multiplies the auto-adapted exposure in final (auto
 // exposure now does the metering; this is the manual trim on top). 1.0 = no
