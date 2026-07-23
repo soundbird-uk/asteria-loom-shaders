@@ -51,9 +51,14 @@ void main() {
     // horizon line sits BEHIND terrain, melting into the aerial fog. It tracks time
     // of day for free (the horizon sample darkens at night), so it never glows.
     if (dir.y < 0.0) {
-        vec3  horizonHaze = alSkySample(vec3(dir.x, 0.015, dir.z));
-        float below = smoothstep(0.0, -0.22, dir.y);      // 0 at horizon -> 1 down
-        sky = mix(sky, horizonHaze, below * 0.9);
+        // Sample the haze just ABOVE the horizon and fill the whole below-horizon
+        // hemisphere with it, fully by ~9 deg down, so the world sits against a
+        // continuous haze band (no dark void) and the horizon sits behind terrain.
+        // Tracks time of day for free (dark at night). 0.4.4: strengthened to a
+        // full seal (was 0.9 partial) so the void is never visible.
+        vec3  horizonHaze = alSkySample(vec3(dir.x, 0.02, dir.z));
+        float below = smoothstep(0.0, -0.16, dir.y);      // 0 at horizon -> 1 down
+        sky = mix(sky, horizonHaze, below);
     }
 
     // --- Procedural night sky (additive, fades in as the sun sets) --------

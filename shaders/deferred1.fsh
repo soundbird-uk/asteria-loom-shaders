@@ -148,5 +148,15 @@ void main() {
     vec3 color = alLightPhase1(albedoLin, N, lm, shadowVis, wLightDir, wSunDir,
                                worldPos, dayFactor, ao);
 
+    // Emissive light sources self-illuminate from their OWN texture colour, so a
+    // redstone torch glows red, a torch orange, glowstone yellow, lava orange.
+    // The HDR add blooms in composite4/5, spreading that colour as a halo onto the
+    // surroundings (screen-space stand-in for coloured block light). Modulated by
+    // the block lightmap so a redstone torch that has been turned OFF (lightmap
+    // drops) stops glowing.
+    if (matID == AL_MATID_EMISSIVE) {
+        color += albedoLin * (AL_EMISSIVE_STRENGTH * (0.35 + 0.65 * lm.x));
+    }
+
     outColor = vec4(color, 1.0);
 }

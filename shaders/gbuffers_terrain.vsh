@@ -25,9 +25,15 @@ out vec2 texcoord;
 out vec2 lmcoord;
 out vec4 glcolor;
 out vec3 wnormal;
+flat out float emissive;   // 1.0 for light-emitting blocks (block.properties 10040)
 
 void main() {
     vec4 viewPos = gl_ModelViewMatrix * gl_Vertex;
+
+    // Emissive classification (self-illuminating light sources). Independent of
+    // the foliage wind; the fragment stage tags matID EMISSIVE so deferred1 adds
+    // the glow from the block's own texture colour.
+    emissive = (mc_Entity.x == 10040.0) ? 1.0 : 0.0;
 
 #ifdef AL_WAVING_FOLIAGE
     // --- Foliage wind (ISSUE 5) ------------------------------------------------

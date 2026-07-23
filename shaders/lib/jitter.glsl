@@ -67,10 +67,14 @@ vec2 alHaltonOffset(int i) {
  so a TAA-off build renders with no jitter and no cost.
 */
 vec4 alJitter(vec4 clipPos) {
-#ifdef TAA
-    vec2 offset = alHaltonOffset(frameCounter % 8);
-    clipPos.xy += offset * vec2(2.0 / viewWidth, 2.0 / viewHeight) * clipPos.w;
-#endif
+    // 0.4.4: the sub-pixel camera jitter is DISABLED. Field testing found the
+    // jittered-TAA path visibly SHAKING distant terrain (the reprojection could
+    // not track the sub-pixel wobble on far, high-contrast silhouettes), which is
+    // exactly the shimmer the brief calls out. Anti-aliasing is now handled by an
+    // FXAA edge pass plus an (unjittered, therefore exact) temporal stabilisation
+    // in composite3 — smooth edges with NO geometry wobble. This function stays a
+    // no-op wrapper so every gbuffers vsh can keep calling it unchanged; re-enable
+    // the block below only if a fully reworked jitter+reproject lands later.
     return clipPos;
 }
 

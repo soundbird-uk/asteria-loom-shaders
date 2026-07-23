@@ -7,6 +7,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.4] - 2026-07-23
+
+Second field-fix wave from screenshot review — AA, lighting punch, fog/void,
+water, and coloured emissive light sources.
+
+### Fixed
+
+- **Anti-aliasing shimmer.** The sub-pixel camera jitter is disabled (it shook
+  distant terrain — the reprojection couldn't track the wobble on far high-
+  contrast silhouettes). AA is now **FXAA** edge smoothing + an unjittered
+  temporal stabilisation in `composite3` — smooth edges, no geometry shimmer.
+- **Horizon drawn in front of terrain.** Removed the fog's convergence-to-sky and
+  edge-insurance strip, which blended raw sky onto terrain pixels on a distance
+  ring (the false horizon band). Terrain now fades **only** toward the dark scene
+  haze; the real sky is drawn behind it and correctly occluded — no band at any
+  render distance.
+- **Fog too weak / void under horizon.** Density raised `0.0016 → 0.0030` and the
+  below-horizon sky fully sealed with horizon haze, so the void is covered.
+- **Lighting felt flat / sun too weak / shadows not dark enough.** Direct key
+  boosted (`1.45 → 1.95`), daytime ambient cut (`×0.55`), AgX exposure lowered +
+  contrast raised, auto-exposure tightened. Sun-facing surfaces clearly brighten;
+  shadow-facing surfaces clearly darken.
+- **Enclosed spaces too bright.** Indirect bounce floor cut ~65% and auto-exposure
+  clamped so caves/night no longer lift toward daylight.
+- **Night felt like no shader.** Night ambient lift `0.90 → 0.42`, moon key and
+  night floor lowered — genuinely dark and moody.
+- **Water looked patterned / "circles" / weak caustics.** Wave normals rewritten
+  as a randomised ocean spectrum (hash-random directions, geometric long-swell→
+  ripple band — no symmetric fan, no patch rotation, non-repeating lapping), and
+  caustics rewritten as a looping-domain **web of thin filaments** instead of
+  round cells.
+- **God-ray streaks.** The screen-space shafts drew hard radial lines near the
+  sun; disabled by default until a properly blurred march lands.
+
+### Added
+
+- **Emissive coloured light sources.** Light-emitting blocks (torch, redstone
+  torch, glowstone, lava, sea lantern, froglights, …) self-illuminate from their
+  own texture colour — a redstone torch glows red, a torch orange, glowstone
+  yellow — and bloom spreads that colour as a halo onto nearby surfaces. Block
+  light is also much brighter/wider. (A screen-space stand-in: true voxel-
+  propagated coloured light needs compute shaders / GL 4.3, which the macOS
+  GL 4.1 target — and Complementary Unbound's own colour path — cannot run; that
+  remains reserved for the non-Mac `AL_ADVANCED_TIER`.)
+
 ## [0.4.3] - 2026-07-23
 
 Cinematic pass — a broad field-fix sweep across atmosphere, lighting, water,

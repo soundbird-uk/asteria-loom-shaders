@@ -107,7 +107,10 @@ vec3 alLightPhase1(vec3 albedoLin, vec3 worldN, vec2 lm,
     // not nearly dark enough"). NIGHT_BRIGHTNESS is the user-facing multiplier on
     // this night term; NOON is provably unchanged (dayFactor == 1 -> factor 1.0).
     float nightLift = mix(AL_NIGHT_AMBIENT_LIFT * NIGHT_BRIGHTNESS, 1.0, dayFactor);
-    vec3  ambient = hemiCol * (skyLm * wrap) * AMBIENT_INTENSITY * nightLift;
+    // AL_AMBIENT_SCALE (0.4.4): trims the cool sky fill so the shadowed side goes
+    // properly dark against the boosted direct key (lit-vs-shadow contrast).
+    vec3  ambient = hemiCol * (skyLm * wrap) * AMBIENT_INTENSITY * nightLift
+                  * AL_AMBIENT_SCALE;
 
     // --- Night floor ------------------------------------------------------
     // A cool-blue minimum, gated by sky exposure so caves stay dark but open

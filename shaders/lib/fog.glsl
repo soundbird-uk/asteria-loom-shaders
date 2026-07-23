@@ -57,16 +57,13 @@
 
 // Extinction coefficient at sea level, per world-metre, at FOG_DENSITY = 1 and
 // in a neutral biome/clear weather.
-// 0.4.3 FIELD FIX (ISSUE 15: "fog far too thick / whole mid-distance washes to
-// haze / forms a band"): the 0.3.3 value of 0.0068 put HALF extinction at only
-// ~102 m, so at a 20-24 chunk (320-384 block) render distance everything beyond a
-// hundred blocks drowned in haze and the flat horizon blew out to a bright band.
-// Dropped ~4.3x to 0.0016: half extinction now at ln2/0.0016 ≈ 433 m, i.e. at
-// 320 blocks a flat sea-level horizon reaches ~40% haze (gentle, seals the seam)
-// while mid-scene terrain at 120-150 m sits at ~17-21% — subtle aerial depth, not
-// a wall. Elevated terrain (mountains) fogs even less (height falloff). GUI
-// FOG_DENSITY still scales this for anyone who wants a soupier look.
-#define AL_FOG_SEA_DENSITY 0.0016
+// 0.4.4 FIELD RETUNE: 0.4.3 (0.0016) over-corrected — fog read as "non-existent"
+// and the void below the horizon was no longer covered. Raised to 0.0030 (half
+// extinction ~231 m): a flat sea-level horizon now reaches ~62% haze at 320
+// blocks (seals the far seam / void) while mid-scene terrain at 120-150 m sits at
+// ~30-36% — clearly atmospheric but still not the 0.4.2 wall. Elevated terrain
+// fogs less (height falloff). GUI FOG_DENSITY scales this.
+#define AL_FOG_SEA_DENSITY 0.0030
 
 // Scale height (metres): altitude over which density falls by 1/e. Larger =
 // fog climbs higher up mountains before thinning.
@@ -171,10 +168,12 @@
 // Edge-insurance strip: kept only as a razor-thin seam seal at the very far plane
 // and gated harder on fog thickness, so mountain silhouettes at the edge keep
 // their colour and the strip never reads as a coloured band/ring.
-#define AL_FOG_EDGE_START   0.985    // edge-insurance strip start (fraction of far)
+// 0.4.4: widened + softened so the far flat horizon/void is reliably sealed while
+// low-tau peaks are still excluded (no band across mountains).
+#define AL_FOG_EDGE_START   0.94     // edge-insurance strip start (fraction of far)
 #define AL_FOG_EDGE_END     0.999    // edge-insurance strip end
-#define AL_FOG_EDGE_FOG_LO  0.60     // fog-thickness gate: below -> excluded (peaks)
-#define AL_FOG_EDGE_FOG_HI  0.85     // fog-thickness gate: above -> converge (ground)
+#define AL_FOG_EDGE_FOG_LO  0.55     // fog-thickness gate: below -> excluded (peaks)
+#define AL_FOG_EDGE_FOG_HI  0.82     // fog-thickness gate: above -> converge (ground)
 
 // Biome-modulation master switch. All biome_category / temperature / rainfall
 // reads (verified Iris uniforms — see composite1.fsh header for evidence) are
@@ -452,39 +451,23 @@ vec3 alApplyAerialFog(vec3 sceneColor, float camY, vec3 worldDir, float dist,
     float totalDesat = alSaturate(desat + AL_FOG_HORIZON_DESAT * groundy);
     fogTone = mix(fogTone, vec3(alLuminance(fogTone)), totalDesat);
 
-    // --- PRIMARY convergence to sky by OPTICAL DEPTH (ISSUE 1, 0.4.2) ------
-    // As the ray becomes heavily extincted the in-scatter COLOUR approaches the
-    // RAW sky, so distant/grazing terrain merges into the sky asymptotically —
-    // no distance plane, no bright band, at any render distance. Mid haze stays
-    // the dark fogTone; ELEVATED terrain (mountains) has low tau -> stays dark
-    // (no band across it — haze rises smoothly up a slope instead).
-    float hTau = smoothstep(AL_FOG_CONVERGE_A, AL_FOG_CONVERGE_B, fogF);
-    vec3  inscatter = mix(fogTone, sky, hTau);
-
-    // ISSUE 14 ("night distance too white/grey"): crush + cool the WHOLE in-scatter
-    // at night. The raw sky sample and scene tone still carry a dim grey that, once
-    // terrain is fogged, reads as pale mist over distant hills; multiplying by a
-    // cool, dim night factor turns that into dark, desaturated, moonlit silhouettes.
+    // ISSUE 14 ("night distance too white/grey"): crush + cool the in-scatter at
+    // night so fogged distance darkens into moonlit silhouettes, not pale mist.
     // mix(...,1.0,dayF) makes noon provably untouched.
     vec3  nightHaze = mix(vec3(0.60, 0.70, 1.00), vec3(1.0), dayF)   // cool by night
                     * mix(AL_FOG_NIGHT_DIM, 1.0, dayF);              // dim by night
-    inscatter *= nightHaze;
 
-    vec3 aerial = sceneColor * ext + inscatter * fogF;
-
-    // --- EDGE INSURANCE (thin, low-render-distance only) ------------------
-    // Where even the horizon ground can't reach convergence tau (small render
-    // distance), a thin strip [START,END]·far closes the residual seam. Gated by
-    // skyGate AND a SHARP fog-thickness gate so ONLY the heavily-fogged flat
-    // horizon converges — low-tau silhouettes (mountain peaks) at the very edge
-    // are excluded and keep their colour, so this can never paint a band either.
-    float f = max(farDist, 1.0);
-    float edge = smoothstep(AL_FOG_EDGE_START, AL_FOG_EDGE_END, dist / f)
-               * skyGate
-               * smoothstep(AL_FOG_EDGE_FOG_LO, AL_FOG_EDGE_FOG_HI, fogF);
-    // Converge the seam seal to the SAME night-dimmed haze, not the raw (brighter)
-    // sky, so the far edge stays dark at night instead of glowing.
-    vec3  result = mix(aerial, sky * nightHaze, edge);
+    // --- PURE AERIAL PERSPECTIVE (0.4.4 — kill the "horizon in front of terrain")
+    // The false horizon LINE painted across terrain was the old convergence-to-sky
+    // + edge-insurance strip: both blended the raw BRIGHT sky ONTO terrain pixels
+    // on a distance ring, so a sky-coloured band appeared in front of the world.
+    // REMOVED. Terrain now fades ONLY toward the dark, scene-referenced haze
+    // (fogTone) — it is never overpainted with sky. The real sky is drawn behind,
+    // on depth==1 pixels (with the skybasic below-horizon void fill), so terrain
+    // correctly OCCLUDES the horizon and no band can form at any render distance.
+    // `farDist`/`skyGate` are still accepted for signature stability (unused here).
+    vec3 inscatter = fogTone * nightHaze;
+    vec3 result    = sceneColor * ext + inscatter * fogF;
 
     return max(result, vec3(0.0));
 }

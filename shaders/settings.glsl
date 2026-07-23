@@ -81,9 +81,17 @@
 //   FALLOFF  perceptual power on the lightmap; lowered from 2.2 so the mid range
 //            (grass a few blocks from the fire) reads instead of dying out
 //   TAIL     blend toward a gentler quadratic so distant grass keeps a glow
-#define AL_BLOCKLIGHT_BASE    0.92
-#define AL_BLOCKLIGHT_FALLOFF 1.70
+// 0.4.4 FIELD FIX ("light sources have no luminosity / don't illuminate"): base
+// lifted 0.92 -> 1.55 and falloff eased 1.70 -> 1.45 so torches throw a much
+// brighter, wider warm pool instead of a faint patch.
+#define AL_BLOCKLIGHT_BASE    1.55
+#define AL_BLOCKLIGHT_FALLOFF 1.45
 #define AL_BLOCKLIGHT_TAIL    0.35
+
+// Self-illumination strength for emissive light-source blocks (matID EMISSIVE):
+// added as albedo * this in deferred1, so the block glows in its OWN texture
+// colour and blooms a coloured halo. HDR — AgX rolls it off, bloom spreads it.
+#define AL_EMISSIVE_STRENGTH  4.5
 
 // Night brightness — how readable open terrain stays after dark. Master
 // multiplier on the whole NIGHT ambient (both the cool sky fill's night lift and
@@ -103,14 +111,23 @@
 // direct + night floor were cut alongside — see AL_NIGHT_DIRECT_SCALE and
 // AL_NIGHT_FLOOR). NOON is provably unchanged (dayFactor==1 -> factor 1.0). Edit
 // + hot-reload; NIGHT_BRIGHTNESS is the user-facing multiplier on top.
-#define AL_NIGHT_AMBIENT_LIFT 0.90
+// 0.4.4: dropped 0.90 -> 0.42 so night is genuinely dark/moody (the moon key +
+// stars carry it), not "looks like no shader on".
+#define AL_NIGHT_AMBIENT_LIFT 0.42
+
+// Daytime ambient (cool sky fill) scale (internal). 0.4.4 ("sun does nothing /
+// shadows not dark enough"): the shadowed side was lit almost as much as the lit
+// side by a strong blue ambient. Cutting the ambient to 0.55 while the direct key
+// is boosted gives real lit-vs-shadow CONTRAST. Open up-facing shade still reads
+// (wrap=1 there); vertical/backfacing surfaces go properly dark.
+#define AL_AMBIENT_SCALE 0.55
 
 // Moon direct-key scale at night (internal, not GUI). Multiplies ONLY the direct
 // sun/moon term via mix(this, 1.0, dayFactor), so moonlight is dimmed after dark
 // (part of the 0.3.2 darker-night retune) while NOON direct is untouched
 // (dayFactor==1 -> 1.0). Keeps a soft directional moon key for silhouettes
 // without lifting the whole scene toward daylight. Edit + hot-reload.
-#define AL_NIGHT_DIRECT_SCALE 0.55
+#define AL_NIGHT_DIRECT_SCALE 0.40
 
 // Direct-key contrast boost (internal, not GUI). Multiplies ONLY the direct
 // sun/moon term in lib/lighting.glsl (never ambient), on top of SUN_INTENSITY.
@@ -119,7 +136,7 @@
 // barely moves but the lit-vs-shadow CONTRAST rises — the sun now reads as a real
 // key light with a bright side and a dark side. AgX rolls the extra highlight off
 // softly, so noon does not clip. Edit + hot-reload.
-#define AL_DIRECT_BOOST 1.45
+#define AL_DIRECT_BOOST 1.95
 
 // Fake indirect-bounce floor. A tiny lift so unlit coloured faces are never
 // pure black (real GI arrives in a later phase).
@@ -500,7 +517,11 @@ const float sunPathRotation = -35.0;
 // off-screen, and its strength rises at LOW sun and in HAZY weather (per the
 // brief). Additive in HDR (AgX rolls it off) and bounded so it never washes the
 // whole screen. Comment out AL_GOD_RAYS to compile it away entirely.
-#define AL_GOD_RAYS
+// 0.4.4: DISABLED by default — the low-tap screen-space march drew hard radial
+// LINES across the screen when looking near the sun (under-sampled shafts). Left
+// here (commented) until it can be reworked with a proper blurred/high-tap march;
+// re-enable by uncommenting the next line.
+//#define AL_GOD_RAYS
 #define AL_GODRAY_SAMPLES   24     // march taps toward the sun (perf vs smoothness)
 #define AL_GODRAY_DECAY     0.94   // per-step weight decay (concentrates near sun)
 #define AL_GODRAY_INTENSITY 0.55   // master strength of the additive shafts
@@ -714,12 +735,12 @@ const vec3 AL_UW_SNOW_TINT  = vec3(0.82, 0.86, 0.94);
 // Calibration exposure baked into AgX. Tuned (numeric sim vs the outgoing
 // placeholder) so mid-grey noon L=0.18 and darker night L=0.05 land within
 // ~10% of the old levels. See lib/tonemap.glsl for the full calibration table.
-#define AL_AGX_EXPOSURE 0.98
-// Look: midtone slope + power lift the AgX mids back toward the (punchier)
-// placeholder at the anchors while keeping AgX's soft highlight rolloff (kept
-// deliberately gentle so the HDR sun/torches roll off softly, never hard-clip).
-#define AL_AGX_SLOPE 1.12
-#define AL_AGX_POWER 1.15
+// 0.4.4 ("lighting feels flat"): exposure trimmed 0.98 -> 0.93 (deeper shadows)
+// and the slope/power raised for a punchier, higher-contrast midtone so lit vs
+// shadowed reads strongly, while AgX still rolls the HDR sun/torches off softly.
+#define AL_AGX_EXPOSURE 0.93
+#define AL_AGX_SLOPE 1.24
+#define AL_AGX_POWER 1.28
 // Saturation about luminance (+5% — gentle, per the pack identity).
 #define AL_AGX_SAT 1.05
 // Warm channel tilt (amber bias carried into the tonemap; subtle).
@@ -740,19 +761,33 @@ const vec3 AL_UW_SNOW_TINT  = vec3(0.82, 0.86, 0.94);
 //   STRENGTH  how far toward the metered target vs a neutral 1.0 (subtle)
 //   TAU       adaptation time constant (seconds) for the temporal smoothing
 //   ADAPT_MIN floor on the per-frame blend rate (keeps metering effective)
+// 0.4.4 ("dark areas too light"): tightened the auto-exposure so it can't lift
+// caves/night toward daylight (MAX 1.16 -> 1.04, STRENGTH 0.5 -> 0.30).
 #define AL_EXPOSURE_KEY 0.26
 #define AL_EXPOSURE_MIN 0.80
-#define AL_EXPOSURE_MAX 1.16
-#define AL_EXPOSURE_STRENGTH 0.5
+#define AL_EXPOSURE_MAX 1.04
+#define AL_EXPOSURE_STRENGTH 0.30
 #define AL_EXPOSURE_TAU 1.0
 #define AL_EXPOSURE_ADAPT_MIN 0.35
 
-// Temporal Anti-Aliasing. Jitters the camera by a Halton(2,3) sub-pixel pattern
-// each frame (lib/jitter.glsl, applied in every gbuffers vertex shader) and
-// resolves the jittered frames in composite3 with reprojection + a neighbourhood
-// clamp, giving smooth edges and steady sub-pixel detail with no visible grain.
-// On in every preset except POTATO (brief §3). Off = raw aliased edges, no cost.
+// Anti-Aliasing. 0.4.4: the camera JITTER is disabled (it visibly shook distant
+// terrain — the reprojection could not track the sub-pixel wobble on far, high-
+// contrast silhouettes). composite3 now does FXAA edge smoothing PLUS an
+// unjittered temporal stabilisation (exact reprojection + variance clip) — smooth
+// edges with no geometry shimmer. This master toggle still gates the whole AA
+// pass; on in every preset except POTATO. Off = raw aliased edges, no cost.
+// (Name kept `TAA` so the profiles / screen / lang stay valid.)
 #define TAA // [TAA]
+
+// --- FXAA shaping (internal, not GUI — composite3.fsh) --------------------
+// Lottes console-FXAA thresholds. EDGE_MIN/EDGE_MUL gate which luma steps count
+// as an edge; REDUCE_* damp the search direction in near-flat areas; SPAN caps
+// the blur reach (texels). Defaults are the widely-used values.
+#define AL_FXAA_EDGE_MIN   0.0312   // ~1/32: ignore edges below this abs luma step
+#define AL_FXAA_EDGE_MUL   0.125    // 1/8:  relative edge threshold vs local max
+#define AL_FXAA_REDUCE_MUL 0.125    // 1/8:  direction reduce (bright-area damping)
+#define AL_FXAA_REDUCE_MIN 0.0078   // ~1/128
+#define AL_FXAA_SPAN       8.0      // max blur span (texels)
 
 // --- TAA resolve shaping (internal, not GUI — composite3.fsh) --------------
 // Max fraction of the reprojected history kept per frame, scaled by confidence.
@@ -851,12 +886,18 @@ const vec3 AL_TORCH_EMBER  = vec3(1.00, 0.40, 0.14);
 // ~48% from (0.030,0.045,0.085) so the floor reads as "moonlit gloom" rather than
 // "daylight-lite" — nights are clearly darker while silhouettes/nearby detail stay
 // readable. Hue kept cool-blue. Scaled by the NIGHT_BRIGHTNESS GUI slider.
-const vec3 AL_NIGHT_FLOOR = vec3(0.015, 0.022, 0.043);
+// 0.4.4: lowered ~45% so night open ground reads as moonlit gloom, not lit.
+const vec3 AL_NIGHT_FLOOR = vec3(0.008, 0.012, 0.026);
 
 // Faint indirect-bounce lift added to the light sum so coloured faces never
 // read as pure black. Kept near-neutral (only a whisper cool): this is the ONLY
 // light an unlit cave face receives, so any saturation here would tint the cave.
 // Field fix #2 wants caves free of a colour cast, so this stays essentially grey.
-const vec3 AL_BOUNCE = vec3(0.020, 0.020, 0.022);
+// 0.4.4 ("enclosed spaces too light / looks like no shader in the dark"): the
+// bounce floor is the ONLY light an unlit cave face gets, so it set the cave
+// floor brightness. Cut ~65% (0.020 -> 0.006) so caves are genuinely dark and
+// torches read as the light source. Still non-zero so coloured faces aren't pure
+// black. (BOUNCE_INTENSITY scales it; AO multiplies it.)
+const vec3 AL_BOUNCE = vec3(0.006, 0.006, 0.008);
 
 #endif // AL_SETTINGS

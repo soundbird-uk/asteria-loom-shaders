@@ -113,37 +113,40 @@ float alWaterMicro(vec2 wp, float t) {
     return alWaterValue2D(q + 4.0 * w2) * 2.0 - 1.0;
 }
 
-// Irregular multi-directional ripple normal (world Y-up frame). `strength`
-// scales the horizontal slope (ripple amplitude); `dist` is the fragment's
-// distance from the camera (blocks) and fades the micro layer out.
+// Ocean-like ripple normal (world Y-up frame). `strength` scales the horizontal
+// slope; `dist` fades the micro layer out with range (anti-sparkle).
+//
+// 0.4.4 REWRITE ("water looks terrible / circles / not random"): the old model's
+// EVENLY-spaced component directions + per-patch ROTATION produced radially-
+// symmetric, circular interference ("circles going in"). This is a proper OCEAN
+// SPECTRUM instead: many waves whose DIRECTIONS are hash-randomised (never a
+// symmetric fan) across a wide GEOMETRIC frequency band — long swells (~15 blk)
+// down to short ripples (~1 blk) — with amplitude falling and speed following
+// dispersion. The sum of many incommensurate directional waves NEVER repeats, so
+// the surface laps and swells randomly everywhere. A very-low-frequency patch
+// field only modulates overall CHOPPINESS (calm vs choppy areas), never rotation,
+// and a faint domain-warped micro layer adds the fine "micro water interaction"
+// texture up close. Big-wave normal is analytic (exact gradient, alias-free).
 vec3 alWaterWaveNormal(vec3 worldPos, float t, float strength, float dist) {
     vec2 wp = worldPos.xz;
 
-    // --- Layer 2: per-patch rotation + weight seed (low freq, once) ----------
-    float patchNoise = alWaterValue2D(wp * AL_WATER_PATCH_SCALE);
-    float patchRot   = (alWaterValue2D(wp * AL_WATER_PATCH_SCALE + 31.7) - 0.5)
-                     * AL_WATER_PATCH_ROT;
+    // Large-scale choppiness field (calm patches vs choppy patches). No rotation.
+    float chop = mix(0.55, 1.35, alWaterValue2D(wp * AL_WATER_PATCH_SCALE));
 
-    // --- Layer 1: big waves, analytic gradient (one pass) --------------------
     float dhdx = 0.0, dhdz = 0.0, norm = 0.0;
-    float invN = 1.0 / float(AL_WATER_WAVE_COMPONENTS);
     for (int i = 0; i < AL_WATER_WAVE_COMPONENTS; i++) {
         float fi = float(i);
-        // Spread angle + irregular per-component jitter + per-patch rotation.
-        float ang = fi * invN * AL_TAU
-                  + fract(sin(fi * 12.9898) * 43758.5453) * 1.4
-                  + patchRot;
-        vec2  dir = vec2(cos(ang), sin(ang));
-
-        float kmul = 1.0 + fract(fi * 0.618034) * 1.6;   // non-monotonic freq spread
-        float k    = AL_WATER_WAVE_K * kmul;
-        float omega = AL_WATER_WAVE_SPEED * sqrt(k);      // dispersion (long = faster)
-        float amp   = inversesqrt(kmul)
-                    * mix(0.35, 1.0, fract(patchNoise + fi * 0.37));   // per-patch weight
-        float phase = fract(sin(fi * 78.233) * 24634.6345) * AL_TAU;
-
+        // Hash-randomised direction (NOT an even fan) -> no circular symmetry.
+        float a  = alWaterHash21(vec2(fi * 1.7, 4.3)) * AL_TAU;
+        vec2  dir = vec2(cos(a), sin(a));
+        // Geometric frequency band: long swells -> short ripples.
+        float k    = AL_WATER_WAVE_K * pow(1.34, fi);
+        float amp  = pow(0.80, fi) * chop;               // falling amplitude
+        float omega = AL_WATER_WAVE_SPEED * sqrt(k);     // dispersion
+        float phase = alWaterHash21(vec2(fi * 2.1, 9.7)) * AL_TAU;
+        // Gentle steepening (Gerstner-ish) so crests sharpen, troughs flatten.
         float th = dot(wp, dir) * k + t * omega + phase;
-        float c  = cos(th);                               // d/d(theta) sin = cos
+        float c  = cos(th);
         dhdx += amp * k * c * dir.x;
         dhdz += amp * k * c * dir.y;
         norm += amp;
@@ -152,7 +155,7 @@ vec3 alWaterWaveNormal(vec3 worldPos, float t, float strength, float dist) {
     dhdx *= inv;
     dhdz *= inv;
 
-    // --- Layer 3: micro detail (finite diff, distance-faded) -----------------
+    // Micro detail (finite diff, distance-faded): the fine surface texture.
     float microAmt = alSaturate(1.0 - dist / AL_WATER_MICRO_FADE);
     if (microAmt > 0.001) {
         float e  = AL_WATER_NORMAL_EPS;
@@ -169,34 +172,31 @@ vec3 alWaterWaveNormal(vec3 worldPos, float t, float strength, float dist) {
 }
 
 // --- Animated caustics ------------------------------------------------------
-// Projected along the sun direction onto the submerged surface point. The
-// projection offset (sunDir.xz / sunDir.y * worldY) slides the pattern with the
-// sun's arc so caustics "cast" from above, dreamy and slow. Returns [0,1] with
-// bright thin lines near 1.0. 2 octaves x a 3x3 voronoi search (pure math).
+// 0.4.4 REWRITE ("no real caustics / just circles"): the old voronoi produced
+// round cell blobs. This is the classic looping-domain caustic — a few iterations
+// of a self-referential trig fold that yields the characteristic WEB of thin,
+// curved, interlocking bright filaments real underwater caustics have. Projected
+// along the sun direction so the pattern "casts" from above and slides with the
+// sun's arc. Pure math, GL3.30-safe (divisors guarded so no NaN/Inf). Returns
+// [0,1], bright filaments near 1.0.
 float alWaterCaustic(vec3 worldPos, vec3 sunDir, float t) {
-    vec2 base = worldPos.xz + (sunDir.xz / max(sunDir.y, 0.30)) * worldPos.y;
-    float c = 0.0, amp = 1.0, scl = AL_CAUSTIC_SCALE, norm = 0.0;
-    for (int o = 0; o < 2; o++) {
-        vec2 p = base * scl + vec2(float(o) * 17.3);
-        vec2 n = floor(p);
-        vec2 f = fract(p);
-        float md = 8.0;
-        for (int y = -1; y <= 1; y++) {
-            for (int x = -1; x <= 1; x++) {
-                vec2 g = vec2(float(x), float(y));
-                vec2 off = alWaterHash22(n + g);
-                off = 0.5 + 0.5 * sin(t + AL_TAU * off);       // animate feature pts
-                vec2 r = g + off - f;
-                md = min(md, dot(r, r));
-            }
-        }
-        float d = sqrt(md);
-        c    += amp * (1.0 - smoothstep(0.0, 0.7, d));         // thin bright network
-        norm += amp;
-        amp  *= 0.5;
-        scl  *= 2.0;
+    vec2 uv = (worldPos.xz + (sunDir.xz / max(sunDir.y, 0.30)) * worldPos.y)
+            * AL_CAUSTIC_SCALE;
+    float tt0 = t;
+    vec2  p   = mod(uv * AL_TAU, AL_TAU) - 250.0;
+    vec2  ii  = p;
+    float c   = 1.0;
+    float inten = 0.0045;
+    for (int n = 0; n < 3; n++) {
+        float tw = tt0 * (1.0 - 3.5 / float(n + 1));
+        ii = p + vec2(cos(tw - ii.x) + sin(tw + ii.y),
+                      sin(tw - ii.y) + cos(tw + ii.x));
+        float sx = sin(ii.x + tw); sx = (abs(sx) < 1e-3) ? 1e-3 : sx;
+        float cy = cos(ii.y + tw); cy = (abs(cy) < 1e-3) ? 1e-3 : cy;
+        c += 1.0 / length(vec2(p.x / (sx / inten), p.y / (cy / inten)));
     }
-    return alSaturate(c / max(norm, 1e-4));
+    c = 1.17 - pow(max(c / 3.0, 0.0), 1.4);
+    return alSaturate(pow(abs(c), 8.0));
 }
 
 #endif // AL_LIB_WATER

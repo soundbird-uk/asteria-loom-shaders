@@ -34,9 +34,16 @@
 // via mc_Entity and tags everything else AL_MATID_TRANSLUCENT so the composite
 // water pass leaves it alone (no SSR / absorption / caustics).
 #define AL_MATID_TRANSLUCENT 8
+// 0.4.4: light-emitting blocks (torches, redstone torch, glowstone, lava, sea
+// lantern, ...). Tagged via block.properties (IDs 10040+) so deferred1 adds
+// SELF-ILLUMINATION using the block's OWN texture colour — a redstone torch glows
+// red, a torch orange, glowstone yellow — and the bloom pass spreads that colour
+// as a coloured halo onto nearby surfaces. (A screen-space approximation of
+// coloured light; true voxel-propagated colour needs the compute/GL4.3 advanced
+// tier, which the macOS GL4.1 path cannot run.)
+#define AL_MATID_EMISSIVE 9
 
-// Flag bits (colortex3.g). Reserved for later phases (emissive, subsurface,
-// wetness). Phase 1 writes AL_FLAG_NONE everywhere.
+// Flag bits (colortex3.g). Reserved for later phases (subsurface, wetness).
 #define AL_FLAG_NONE 0
 
 float alEncodeMatID(int id)   { return float(id) / 255.0; }
