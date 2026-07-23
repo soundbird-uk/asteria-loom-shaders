@@ -98,6 +98,9 @@ value.STARS_DENSITY.2.00 = Very Dense
 option.AURORA = Aurora
 option.AURORA.comment = Woven curtains of aurora light on clear cold nights only (snowy biomes, no rain, deep night). Soft green-teal with violet fringes, kept below the moon so it stays dreamy rather than neon.
 
+option.ADVANCED_TIER = Advanced Tier (Windows/Linux)
+option.ADVANCED_TIER.comment = Enables GPU-compute effects that require compute shaders, SSBOs and custom images — currently a luminance-histogram auto-exposure. Has NO effect on macOS (OpenGL 4.1 lacks these capabilities), where the pack always uses the portable path. Turn off on Windows/Linux to force the portable path.
+
 option.END_BLACKHOLE_SIZE = End Black Hole Size
 option.END_BLACKHOLE_SIZE.comment = Apparent size of the procedural black hole that hangs in the End sky. Lower is a distant pinpoint; higher looms large.
 value.END_BLACKHOLE_SIZE.0.50 = Distant

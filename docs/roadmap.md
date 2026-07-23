@@ -76,11 +76,17 @@ hardening notes will be added once 0.4.0 ships._
 
 ## Phase 6 — Advanced tier (Windows/Linux)
 
+- [x] `AL_ADVANCED_TIER` gate + `[ADVANCED]` options; CI compiles `.csh` on the
+      `advanced` target only; Mac matrix proven byte-identical (compiles out)
+- [x] Compute histogram auto-exposure (Mac fallback: mipmap-average)
 - [ ] Flood-fill colored voxel light (LPV-style, 3D image ping-pong)
 - [ ] Voxel ray-traced shadows / GI
-- [ ] Compute histogram auto-exposure (Mac fallback: mipmap-average)
 - [ ] 3D-image-cached volumetric upgrades
-- [ ] All gated behind `AL_ADVANCED_TIER`; Mac build verified unaffected
+
+_Advanced-tier features are syntax-validated by the CI compile gate only — no GPU
+in CI, maintainer on macOS — so they are compute-capable scaffolding, not yet
+runtime-verified. All gated behind `AL_ADVANCED_TIER`; the portable path (macOS
+included) is unaffected. See `docs/architecture/phase6-contract.md`._
 
 ## Phase 7 — Tuning & release
 

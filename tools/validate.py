@@ -788,7 +788,10 @@ def discover_programs(shaders_root):
     progs = []
     seen = set()
     for world, base in roots:
-        for ext, stage in (("*.vsh", "vert"), ("*.fsh", "frag")):
+        # .csh = Iris compute programs (Phase 6 advanced tier). They exist only on
+        # the compute-capable (advanced) path — the compile plan restricts them to
+        # the `advanced` target, since compute genuinely cannot exist on Mac GL4.1.
+        for ext, stage in (("*.vsh", "vert"), ("*.fsh", "frag"), ("*.csh", "comp")):
             for path in sorted(glob.glob(os.path.join(base, ext))):
                 if os.sep + "lib" + os.sep in path:
                     continue
@@ -1387,6 +1390,12 @@ def run_validation(shaders_root, out_dir, profile_filter=None, program_glob=None
         for profile in profile_names:
             state = profiles[profile]
             for rel, path, stage, _world in programs:
+                # Compute programs (.csh) exist ONLY on the compute-capable path:
+                # compile them under `advanced` only. On mac/mac-hw they are absent
+                # (Iris never loads compute without the feature), so skipping them
+                # here mirrors reality and keeps the Mac matrix honest.
+                if stage == "comp" and target != "advanced":
+                    continue
                 _compile(target, macro_stubs, rel, path, stage, state, profile,
                          dh=program_is_dh(rel))
 
@@ -1400,6 +1409,8 @@ def run_validation(shaders_root, out_dir, profile_filter=None, program_glob=None
             for rel, path, stage, _world in programs:
                 if program_is_dh(rel):
                     continue  # dh_* already compiled with DH in every target
+                if stage == "comp":
+                    continue  # compute is advanced-only; never on the mac+DH path
                 _compile(variant, macro_stubs, rel, path, stage, state, profile, dh=True)
                 did_spot = True
         if did_spot:
@@ -1990,6 +2001,27 @@ def self_test():
                       "DH: shared file compiles under plain mac (DH branch compiled out)")
                 check(not wr.compile_results[("mac+DH", "HIGH", "world0/composite.fsh")][0],
                       "DH: mac+DH spot-check catches the DH-guarded syntax error in a shared file")
+
+            # --- Phase 6: compute (.csh) discovered + advanced-target-only ---
+            # A .csh is an Iris compute program. It must be discovered, compiled
+            # on the `advanced` target, and NEVER on mac/mac-hw (compute genuinely
+            # cannot exist on GL 4.1 — compiling it there would be a false PASS).
+            _write(os.path.join(wsh, "world0", "composite.csh"),
+                   "#version 460 compatibility\n"
+                   "layout(local_size_x = 1) in;\nconst ivec3 workGroups = ivec3(1);\n"
+                   "void main(){}\n")
+            wc = run_validation(wsh, os.path.join(wtmp, "outc"), keep=False,
+                                require_glslang=False, verbose=False,
+                                targets=["mac", "advanced"])
+            check("world0/composite.csh" in wc.programs,
+                  "compute: .csh program discovered")
+            check(("advanced", "HIGH", "world0/composite.csh") in wc.compile_results,
+                  "compute: .csh compiled on the advanced target")
+            check(("mac", "HIGH", "world0/composite.csh") not in wc.compile_results,
+                  "compute: .csh NOT compiled on mac (compute absent on GL 4.1)")
+            if have_glslang:
+                check(wc.compile_results[("advanced", "HIGH", "world0/composite.csh")][0],
+                      "compute: trivial .csh compiles green on the advanced target")
         finally:
             shutil.rmtree(wtmp, ignore_errors=True)
 
