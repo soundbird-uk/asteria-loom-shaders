@@ -101,7 +101,10 @@ void main() {
         // the detail normal is in a world Y-up frame, flipped for undersides.
         if (abs(Ng.y) > 0.5) {
             vec3 worldPos = playerPos + cameraPosition;
-            vec3 nd = alWaterWaveNormal(worldPos, frameTimeCounter, AL_WATER_WAVE_AMP);
+            // length(playerPos) = camera-relative distance -> fades the micro
+            // detail layer with range (anti-sparkle; see lib/water.glsl).
+            vec3 nd = alWaterWaveNormal(worldPos, frameTimeCounter,
+                                        AL_WATER_WAVE_AMP, length(playerPos));
             nd.y *= sign(Ng.y);
             N = normalize(nd);
         }

@@ -483,15 +483,31 @@ const float sunPathRotation = -35.0;
 #define WATER_CAUSTICS // [WATER_CAUSTICS]
 
 // --- Wave shaping (internal, not GUI) --------------------------------------
-// Gentle, dreamy ripples — NOT an ocean storm (brief §3). SCALE maps world XZ
-// into the noise domain (bigger = shorter wavelength ripples); SPEED is the
-// wind-drift rate; AMP scales the normal perturbation (kept subtle); NORMAL_EPS
-// is the central-difference step (world metres) for the normal.
-#define AL_WATER_WAVE_OCTAVES 3
-#define AL_WATER_WAVE_SCALE   0.16
-#define AL_WATER_WAVE_SPEED   0.55
-#define AL_WATER_WAVE_AMP     0.28
-#define AL_WATER_NORMAL_EPS   0.10
+// Reworked (0.4.2 field fix — "too uniform, one direction"): the surface is NOT
+// a single wind-aligned marching front. It is a SUPERPOSITION of
+// AL_WATER_WAVE_COMPONENTS directional sine waves at spread angles (roughly-
+// opposing pairs form standing / criss-cross chop, not a front), varied
+// frequencies (kmul spread), and DISPERSION-flavoured speeds (long waves travel
+// faster: omega = SPEED*sqrt(k)). A very-low-frequency PATCH field rotates +
+// reweights the components per lake patch so different areas visibly move
+// differently, and a high-frequency 2-warp domain-warped noise MICRO layer adds
+// the fine "physical 3D texture", faded out with distance to kill sparkle. The
+// big-wave normal is ANALYTIC (one pass, exact gradient — cheaper AND alias-free
+// than finite differences); only the micro layer uses central differences.
+#define AL_WATER_WAVE_COMPONENTS 6      // superposed directional waves (>=2 opposing)
+#define AL_WATER_WAVE_K          0.85   // base spatial wavenumber (longest wave)
+#define AL_WATER_WAVE_SPEED      0.55   // dispersion time-rate (omega = SPEED*sqrt(k))
+#define AL_WATER_WAVE_AMP        0.30   // overall normal-perturbation strength (subtle)
+#define AL_WATER_NORMAL_EPS      0.08   // micro-layer central-difference step (world m)
+// Spatial variation: patch field frequency (very low) + local rotation range.
+#define AL_WATER_PATCH_SCALE     0.015  // ~66-block patches move differently
+#define AL_WATER_PATCH_ROT       2.0    // radians of local component rotation
+// Micro detail (2-warp domain-warped value noise): frequency, amplitude, its own
+// (off-sync) drift rate, and the distance over which it fades to nothing.
+#define AL_WATER_MICRO_SCALE     1.55   // high freq (~0.65-block wavelength)
+#define AL_WATER_MICRO_AMP       0.16   // small
+#define AL_WATER_MICRO_SPEED     1.30   // off-sync from the big waves
+#define AL_WATER_MICRO_FADE      26.0   // blocks; micro gone beyond (anti-sparkle)
 
 // --- Water surface opacity (internal, not GUI) -----------------------------
 // Fresnel-driven alpha: near-transparent looking straight down (see through to
