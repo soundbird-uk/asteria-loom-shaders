@@ -18,8 +18,8 @@
     colour).
 
  2. WRITE THE WATER SURFACE INTO THE G-BUFFER for the new `composite` water
-    pass to reflect + depth-tint:
-       /* RENDERTARGETS: 0,2,3 */
+    pass to reflect + depth-tint (RENDERTARGETS: 0,2,3 — see the directive
+    below the includes):
        colortex0 = forward-lit water colour (blended)
        colortex2 = octahedral ripple normal .rg + lightmap .ba (SAME encoding as
                    opaques, lib/encoding.glsl) — this is what SSR reflects off
