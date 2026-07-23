@@ -1,5 +1,10 @@
 #version 330 compatibility
 #include "/settings.glsl"
+// END (world1): no volumetric clouds. Undefine the option for THIS file so the
+// cloud path compiles out while the AO-history copy still runs (temporal chain).
+#ifdef VOLUMETRIC_CLOUDS
+#undef VOLUMETRIC_CLOUDS
+#endif
 #include "/lib/common.glsl"
 #include "/lib/space.glsl"
 #ifdef VOLUMETRIC_CLOUDS

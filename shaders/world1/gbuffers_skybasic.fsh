@@ -4,6 +4,7 @@
 #include "/lib/color.glsl"
 #include "/lib/atmosphere.glsl"
 #include "/lib/nightsky.glsl"
+#include "/lib/blackhole.glsl"   // world1 End: procedural black-hole sky
 
 /*
  gbuffers_skybasic (fragment) — the physically based sky. Replaces the Phase-1
@@ -32,10 +33,13 @@ in vec3 worldDir;
 layout(location = 0) out vec4 outColor;
 
 void main() {
-    // Kill ONLY the vanilla stars — the procedural night sky replaces them.
-    if (renderStage == MC_RENDER_STAGE_STARS) {
-        discard;
-    }
+    // END (world1): the sky is the procedural black hole + starfield + purple haze
+    // (lib/blackhole.glsl). Suppress vanilla End stars/void; terrain occludes the
+    // hole normally (this only draws sky pixels). frameTimeCounter comes from
+    // lib/nightsky.glsl (drives the disc turbulence).
+    if (renderStage == MC_RENDER_STAGE_STARS) discard;
+    outColor = vec4(alEndBlackHoleSky(worldDir, END_BLACKHOLE_SIZE, frameTimeCounter), 1.0);
+    return;
 
     vec3 dir    = normalize(worldDir);
     vec3 sunDir = normalize(mat3(gbufferModelViewInverse) * sunPosition);
