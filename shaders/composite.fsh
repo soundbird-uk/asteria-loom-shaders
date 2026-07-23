@@ -108,6 +108,14 @@ void main() {
     vec3  curScatter = alFiniteRGB(cloud.rgb, vec3(0.0));
     float curTrans   = (cloud.a >= 0.0 && cloud.a <= 1.0) ? cloud.a : 1.0;
 
+    // Cloud mid-plane intersection distance along the ray — reused for BOTH the
+    // temporal reprojection AND the aerial distance-dissolve below. > 0 means the
+    // ray meets the cumulus mid-plane ahead of the camera (i.e. cloud may exist).
+    float midAlt  = 0.5 * (AL_CLOUD_CUMULUS_BOT + AL_CLOUD_CUMULUS_TOP);
+    bool  planeOk = abs(worldDir.y) > 1e-3;
+    float tmRaw   = planeOk ? (midAlt - cameraPosition.y) / worldDir.y : -1.0;
+    float tm      = (tmRaw > 0.0) ? min(tmRaw, AL_CLOUD_MAX_DIST) : -1.0;
+
     // ---- Temporal accumulation (BUG-1 hardened) ---------------------------
     // Clouds live only on SKY pixels. Blending history onto TERRAIN pixels was
     // the "dark box" veil (a reprojected cloud transmittance < 1 darkening a
@@ -118,14 +126,9 @@ void main() {
     float outTrans   = curTrans;
     bool  isSky      = depth1 >= 1.0;
 
-    if (isSky) {
-        // Planar reprojection at the cumulus mid-plane. Plane sanity: the ray
-        // must meet the plane AHEAD of the camera (not parallel, not behind).
-        float midAlt = 0.5 * (AL_CLOUD_CUMULUS_BOT + AL_CLOUD_CUMULUS_TOP);
-        bool  planeOk = abs(worldDir.y) > 1e-3;
-        float tm      = planeOk ? (midAlt - cameraPosition.y) / worldDir.y : -1.0;
-        if (planeOk && tm > 0.0) {
-            vec3 cloudPlayer = worldDir * min(tm, AL_CLOUD_MAX_DIST);
+    if (isSky && tm > 0.0) {
+        {
+            vec3 cloudPlayer = worldDir * tm;
             vec3 prevView    = alPlayerToPrevView(cloudPlayer);
             if (prevView.z < 0.0) {                    // in front of prev camera
                 vec3  prevScr = alPrevViewToScreen(prevView);
@@ -157,12 +160,31 @@ void main() {
     outScatter = alFiniteRGB(outScatter, curScatter);
     outTrans   = (outTrans >= 0.0 && outTrans <= 1.0) ? outTrans : 1.0;
     // Store with transmittance floored to the validity epsilon so a real write
-    // is never mistaken for the invalid sentinel next frame.
+    // is never mistaken for the invalid sentinel next frame. HISTORY IS RAW (no
+    // distance fade) — the fade is view-dependent and must not enter reprojection.
     outCloud   = vec4(outScatter, max(outTrans, AL_CLOUD_TRANS_EPS));
 
-    // Composite over the scene: background shows through by transmittance, plus
-    // the cloud's in-scattered radiance.
-    vec3 composited = scene * outTrans + outScatter;
+    // ---- Aerial distance-dissolve (post-temporal; 0.3.3 field fix) --------
+    // Distant clouds DISSOLVE: both opacity and scattering fade toward zero,
+    // revealing the background atmosphere sky — which equals lib/fog.glsl's own
+    // far-fade target — so cloud and terrain fog converge with NO seam. Reuses
+    // fog.glsl's optical-depth model (not duplicated) with a cloud density boost;
+    // for clouds above the fog layer that depth is ~linear in distance, giving a
+    // dreamy distance haze. No-op where there is no cloud (outTrans==1).
+    float dispTrans   = outTrans;
+    vec3  dispScatter = outScatter;
+    if (tm > 0.0) {
+        float beta0 = AL_FOG_SEA_DENSITY * max(FOG_DENSITY, 0.0)
+                    * AL_CLOUD_AERIAL_DENSITY
+                    * mix(1.0, AL_CLOUD_AERIAL_RAINBOOST, alSaturate(rainStrength));
+        float extFog = exp(-alFogOpticalDepth(cameraPosition.y, worldDir, tm, beta0));
+        dispTrans   = 1.0 - (1.0 - outTrans) * extFog;   // opacity dissolves
+        dispScatter = outScatter * extFog;               // in-scatter fades to 0
+    }
+
+    // Composite over the scene: background shows through by the (dissolved)
+    // transmittance, plus the (distance-faded) in-scattered radiance.
+    vec3 composited = scene * dispTrans + dispScatter;
 #if DEBUG_VIEW == 0
     outColor = vec4(max(composited, vec3(0.0)), 1.0);
 #else

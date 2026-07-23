@@ -338,11 +338,20 @@ const float shadowDistance = 128.0; // [64.0 96.0 128.0 192.0 256.0]
 #define AL_CLOUD_SHADOW_STORM 0.80  // stronger under storm cloud
 
 // --- Distance fade / aerial perspective ------------------------------------
-// Clouds must melt into the same horizon haze as terrain fog (fog.glsl leaves
-// sky pixels untouched, so the cloud pass fades itself). We reuse lib/fog.glsl's
-// optical-depth model + AL_FOG_* constants so the fade RATE matches terrain fog
-// exactly, and recolour the cloud toward alSkySample(viewDir) — the SAME sky-LUT
-// in-scatter fog uses — so both converge to one horizon value (no seam).
+// Clouds DISSOLVE with distance (opacity AND scattering fade toward zero) so
+// distant clouds genuinely melt away instead of persisting as recoloured shapes
+// (0.3.2 field fix). What's revealed is the background atmosphere sky, which is
+// exactly alFogSkyInscatter(dir) = lib/fog.glsl's own far-fade target, so cloud
+// and terrain fog converge to ONE horizon value with no seam. The fade uses
+// fog.glsl's height-floored optical-depth model (reused, not duplicated): for
+// clouds well above the fog layer that optical depth is ~linear in distance, so
+// with the density boost below the fade reads as a dreamy distance haze —
+// ~50% dissolved by ~1.2 km, ~85% by ~3 km, mostly gone at the horizon.
+// Multiplier on terrain fog's own AL_FOG_SEA_DENSITY. >1 makes clouds dissolve a
+// touch faster than terrain hazes (they melt INTO the haze the terrain becomes),
+// while reusing fog's density means clouds AUTO-TRACK the fog agent's thickness
+// tuning, keeping the horizon convergence stable across their edits.
+#define AL_CLOUD_AERIAL_DENSITY   1.3   // cloud fog density vs terrain fog
 #define AL_CLOUD_AERIAL_RAINBOOST 1.8   // matches fog.glsl rain density mult
 
 // --- Temporal accumulation --------------------------------------------------

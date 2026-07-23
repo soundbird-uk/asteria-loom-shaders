@@ -375,7 +375,12 @@ vec3 alApplyAerialFog(vec3 sceneColor, float camY, vec3 worldDir, float dist,
     // target (one colortex6 read).
     vec3 sky = alFogSkyInscatter(worldDir);
 
-    // --- Time-of-day factors (matched to lighting / atmosphere_common) ----
+    // --- Time-of-day factors ---------------------------------------------
+    // SOURCE OF TRUTH: lib/lighting.glsl `alDayFactor` (the pack's canonical
+    // day/night ramp). fog.glsl does not include lighting.glsl, so the exact
+    // same expression is replicated here VERBATIM — fog and lighting therefore
+    // transition at identical sun elevations. Do NOT diverge this smoothstep; if
+    // alDayFactor changes, mirror the change here.
     float dayF   = alSmooth(smoothstep(-0.06, 0.16, worldSunDir.y));
     float nightF = 1.0 - dayF;
 

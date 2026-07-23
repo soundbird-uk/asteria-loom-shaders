@@ -241,37 +241,18 @@ vec4 alCirrus(vec3 camPos, vec3 worldDir, vec3 sunDir, vec3 sunColor,
 }
 
 /*
- Aerial perspective on one cloud layer (BUG-3 fix). fog.glsl leaves sky pixels
- untouched, so the cloud pass must fade itself. We reuse lib/fog.glsl's optical-
- depth model with the SAME AL_FOG_* constants (so the fade RATE matches terrain
- fog) and recolour the layer toward `inscatter` = alSkySample(viewDir) — the SAME
- sky-LUT in-scatter the fog pass adds — so cloud and terrain fog converge to one
- horizon value with no seam. Opacity is preserved and the in-scatter is recoloured
- to haze*(1-trans): at the horizon (ext->0) a cloud region equals the surrounding
- sky, so the cloud melts in with no hard cutoff instead of vanishing abruptly.
- A layer that wasn't hit ((0,0,0,1)) stays exactly identity.
-*/
-vec4 alCloudAerial(vec4 layer, vec3 camPos, vec3 worldDir, float entryDist,
-                   vec3 inscatter) {
-    float beta0 = AL_FOG_SEA_DENSITY * max(FOG_DENSITY, 0.0)
-                * mix(1.0, AL_CLOUD_AERIAL_RAINBOOST, alSaturate(rainStrength));
-    float tau = alFogOpticalDepth(camPos.y, worldDir, entryDist, beta0);
-    float ext = exp(-tau);                       // 1 near, ->0 toward the horizon
-    layer.rgb = mix(inscatter * (1.0 - layer.a), layer.rgb, ext);
-    return layer;
-}
-
-/*
- Full 2-layer cloud render for one view ray.
+ Full 2-layer cloud render for one view ray. Returns the RAW cloud
+ vec4(in-scattered radiance, transmittance) with NO distance fade — the aerial
+ dissolve is applied in composite.fsh AFTER temporal accumulation, so the history
+ buffer stores view-independent cloud (a view-dependent fade must not be baked
+ into reprojected history). Layers are composited front-over-back by entry
+ distance so camera-above-cloud still orders right.
    camPos      : world-space camera position (cameraPosition)
    worldDir    : normalised world-space view direction
    sunDir      : world-space dominant-light direction (sun by day / moon night)
    sunColor    : dominant-light colour (alDirectColor)
    terrainDist : world distance to the nearest opaque surface (sky = huge)
    dither      : [0,1) march-start offset for temporal convergence
- Returns vec4(in-scattered radiance, transmittance). Layers are composited
- front-over-back by their entry distance so camera-above-cloud still orders
- right; each layer is aerial-perspective faded by its entry distance first.
 */
 vec4 alCloudsRender(vec3 camPos, vec3 worldDir, vec3 sunDir, vec3 sunColor,
                     float terrainDist, float dither) {
@@ -304,12 +285,8 @@ vec4 alCloudsRender(vec3 camPos, vec3 worldDir, vec3 sunDir, vec3 sunColor,
     float tCir;
     vec4  cirrus = alCirrus(camPos, worldDir, sunDir, sunColor, maxDist, tCir);
 
-    // --- Aerial perspective: melt each layer into the horizon haze ---------
-    vec3 inscatter = alSkySample(worldDir);      // SAME LUT read fog in-scatters
-    cumulus = alCloudAerial(cumulus, camPos, worldDir, tCumNear, inscatter);
-    cirrus  = alCloudAerial(cirrus,  camPos, worldDir, tCir,     inscatter);
-
     // --- Composite front-over-back by entry distance ----------------------
+    // (Aerial distance-dissolve is applied post-temporal in composite.fsh.)
     vec4 nearL, farL;
     if (tCir < tCumNear) { nearL = cirrus; farL = cumulus; }
     else                 { nearL = cumulus; farL = cirrus; }
