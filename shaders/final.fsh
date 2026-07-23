@@ -96,10 +96,26 @@ uniform sampler2D colortex1;
 uniform sampler2D colortex2;
 uniform sampler2D colortex3;
 uniform sampler2D colortex4;   // GTAO term (DEBUG_VIEW 6)
+uniform sampler2D colortex5;   // .a(0,0) = adapted exposure (from composite5)
 uniform sampler2D depthtex0;
 
 uniform float near;
 uniform float far;
+
+// Weather storytelling (verified Iris uniforms — see composite2.fsh header for
+// provenance of rainStrength/wetness/thunderStrength/biome_category/temperature
+// /rainfall). Drive the biome/weather grade in lib/grade.glsl.
+uniform float rainStrength;
+uniform float wetness;
+uniform float thunderStrength;
+uniform int   biome_category;
+uniform float temperature;
+uniform float rainfall;
+
+// Lightning bolt position (Iris). .w > 0.5 when a bolt currently exists in the
+// world — used for a brief cool-white full-frame flash lift (deferred1 stays
+// untouched; the flash is approximated here in the grade, per contract §6).
+uniform vec4 lightningBoltPosition;
 
 in vec2 texcoord;
 
@@ -152,14 +168,34 @@ void main() {
     fragColor = vec4(texture(colortex0, texcoord).rgb, 1.0);
     return;
 #else
-    // ---- Normal path: exposure -> tonemap -> sRGB -----------------------
+    // ---- Normal path: exposure -> AgX -> grade -> sRGB -------------------
     vec3 hdr = texture(colortex0, texcoord).rgb;
-    hdr *= EXPOSURE;
 
-    vec3 mapped = alTonemapPlaceholder(hdr);   // PHASE 4: replace with AgX
-    vec3 srgb   = alLinearToSrgb(mapped);
+    // Adapted auto-exposure (composite5 wrote it to colortex5.a at texel (0,0)).
+    // NaN-law: range-validate [0.2,5.0] (NaN fails the comparisons) else 1.0.
+    float adaptedExp = texelFetch(colortex5, ivec2(0, 0), 0).a;
+    adaptedExp = (adaptedExp >= 0.2 && adaptedExp <= 5.0) ? adaptedExp : 1.0;
 
-    fragColor = vec4(srgb, 1.0);
+    // exposure = auto-adaptation x EXPOSURE user bias. (The fixed calibration
+    // exposure that carries the field-approved levels lives inside AgX as
+    // AL_AGX_EXPOSURE — see lib/tonemap.glsl.)
+    hdr *= adaptedExp * EXPOSURE;
+    hdr = max(hdr, vec3(0.0));
+
+    // AgX soft-filmic tonemap -> display-linear [0,1].
+    vec3 mapped = alTonemapAgX(hdr);
+
+    // Biome-adaptive grade then weather storytelling (subtle, display-linear).
+    mapped = alGradeBiome(mapped, biome_category, temperature, rainfall);
+    float flash = alSaturate((lightningBoltPosition.w - 0.5) * 2.0);
+    mapped = alGradeWeather(mapped, rainStrength, thunderStrength, wetness, flash);
+
+    vec3 srgb = alLinearToSrgb(mapped);
+
+    // Final NaN guard — a non-finite result falls back to mid-grey rather than
+    // flashing a black/NaN frame to the screen.
+    bool ok = (srgb.r >= 0.0) && (srgb.g >= 0.0) && (srgb.b >= 0.0);
+    fragColor = vec4(ok ? srgb : vec3(0.5), 1.0);
     return;
 #endif
 }

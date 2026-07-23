@@ -548,12 +548,74 @@ const vec3 AL_UW_SNOW_TINT  = vec3(0.82, 0.86, 0.94);
 
 
 /* =========================================================================
-   POST
+   POST  (bloom + AgX tonemap + auto-exposure — Phase 4)
+   -------------------------------------------------------------------------
+   Bloom is a threshold-free energy-conserving mip pyramid (composite4 builds a
+   6-level tile atlas in colortex9; composite5 sums + mixes it into the scene).
+   final then does auto-exposure (mip-average, metered in composite5 and read
+   from colortex5.a) -> AgX soft-filmic tonemap (lib/tonemap.glsl) -> biome +
+   weather grade (lib/grade.glsl) -> sRGB. The AgX defaults are calibrated so
+   the noon/night LEVELS carry over from the old placeholder within ~10%.
    ========================================================================= */
 
-// Fixed exposure multiplier applied before the placeholder tonemap. Auto
-// exposure arrives in a later phase; this is the manual override for now.
+// Master bloom toggle. Also gates the downsample pass itself via
+// `program.composite4.enabled = BLOOM` (POTATO off — real perf win). composite5
+// still runs for auto-exposure; its bloom-combine is `#ifdef BLOOM` so with
+// bloom off the scene passes through untouched.
+#define BLOOM // [BLOOM]
+
+// Bloom strength. Scales the scene<->bloom mix weight (energy-conserving lerp).
+// 1.0 is the tuned dreamy baseline; higher blooms harder, lower is subtle.
+#define BLOOM_STRENGTH 1.0 // [0.5 0.75 1.0 1.25 1.5]
+
+// --- Bloom shaping (internal, not GUI) ------------------------------------
+// Base mix weight w in `mix(scene, bloomSum, w)`, before BLOOM_STRENGTH. Kept
+// small so noon barely changes while night torches/glowstone (HDR > 1) glow.
+// bloomSum is a normalised weighted AVERAGE of the 6 levels, so this is a true
+// energy-conserving crossfade — output never exceeds the brightest input.
+#define AL_BLOOM_MIX 0.06
+
+// Exposure user bias. Multiplies the auto-adapted exposure in final (auto
+// exposure now does the metering; this is the manual trim on top). 1.0 = no
+// trim; the calibration exposure that sets the base levels is AL_AGX_EXPOSURE.
 #define EXPOSURE 1.0 // [0.25 0.50 0.75 1.00 1.25 1.50 2.00]
+
+// --- AgX tonemap (internal, not GUI — edit + hot-reload) ------------------
+// Calibration exposure baked into AgX. Tuned (numeric sim vs the outgoing
+// placeholder) so mid-grey noon L=0.18 and darker night L=0.05 land within
+// ~10% of the old levels. See lib/tonemap.glsl for the full calibration table.
+#define AL_AGX_EXPOSURE 0.98
+// Look: midtone slope + power lift the AgX mids back toward the (punchier)
+// placeholder at the anchors while keeping AgX's soft highlight rolloff (kept
+// deliberately gentle so the HDR sun/torches roll off softly, never hard-clip).
+#define AL_AGX_SLOPE 1.12
+#define AL_AGX_POWER 1.15
+// Saturation about luminance (+5% — gentle, per the pack identity).
+#define AL_AGX_SAT 1.05
+// Warm channel tilt (amber bias carried into the tonemap; subtle).
+#define AL_AGX_WARM 0.006
+
+// --- Auto-exposure (internal, not GUI) ------------------------------------
+// Mac-path auto-exposure: composite5 meters the deep-mip average scene
+// luminance and adapts colortex5.a. Deliberately GENTLE and asymmetric so it
+// never undoes the field-approved dark nights (see composite5.fsh for the loop
+// design + the composite1 alpha-clobber limitation).
+//   KEY       target average luminance (drives KEY/avgLum metering)
+//   MIN/MAX   clamp on the metered multiplier. Combined with STRENGTH below the
+//             FINAL exposure multiplier is bounded to mix(1,MIN,STRENGTH) ..
+//             mix(1,MAX,STRENGTH) = ~[0.90, 1.08] — i.e. auto-exposure can never
+//             push the image more than ~10% off the CALIBRATED base level, so
+//             the field-approved noon/night levels always carry over (contract
+//             §0). It is a gentle correction, not a full metering.
+//   STRENGTH  how far toward the metered target vs a neutral 1.0 (subtle)
+//   TAU       adaptation time constant (seconds) for the temporal smoothing
+//   ADAPT_MIN floor on the per-frame blend rate (keeps metering effective)
+#define AL_EXPOSURE_KEY 0.26
+#define AL_EXPOSURE_MIN 0.80
+#define AL_EXPOSURE_MAX 1.16
+#define AL_EXPOSURE_STRENGTH 0.5
+#define AL_EXPOSURE_TAU 1.0
+#define AL_EXPOSURE_ADAPT_MIN 0.35
 
 // Temporal Anti-Aliasing. Jitters the camera by a Halton(2,3) sub-pixel pattern
 // each frame (lib/jitter.glsl, applied in every gbuffers vertex shader) and

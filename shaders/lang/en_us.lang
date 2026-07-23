@@ -154,8 +154,18 @@ option.WATER_CAUSTICS = Caustics
 option.WATER_CAUSTICS.comment = Dancing light patterns cast onto the submerged scene, projected along the sun and faded with depth and time of day. Off on Potato.
 
 # ---- Post ------------------------------------------------------------------
-option.EXPOSURE = Exposure
-option.EXPOSURE.comment = Manual brightness multiplier before tone mapping. Auto exposure arrives later.
+option.BLOOM = Bloom
+option.BLOOM.comment = Soft, threshold-free glow that spills from bright emissives (torches, glowstone, the sun) and gives the dreamy filmic look. Energy-conserving, so noon barely changes while lights glow against dark nights. Off on Potato.
+option.BLOOM_STRENGTH = Bloom Strength
+option.BLOOM_STRENGTH.comment = How strongly the glow blends into the scene. 1.0 is the tuned dreamy baseline; higher blooms harder, lower keeps it subtle.
+value.BLOOM_STRENGTH.0.5 = Subtle
+value.BLOOM_STRENGTH.0.75 = Light
+value.BLOOM_STRENGTH.1.0 = Default
+value.BLOOM_STRENGTH.1.25 = Strong
+value.BLOOM_STRENGTH.1.5 = Heavy
+
+option.EXPOSURE = Exposure Bias
+option.EXPOSURE.comment = Manual brightness trim on top of auto exposure, applied before the AgX tone map. 1.0 leaves the calibrated levels untouched; nudge it if you want the whole image brighter or darker.
 
 option.TAA = Temporal Anti-Aliasing
 option.TAA.comment = Smooths jagged edges and steadies sub-pixel detail by jittering the camera and blending across frames. Soft, grain-free, and reactive. On everywhere except Potato; off gives raw aliased edges at no cost.

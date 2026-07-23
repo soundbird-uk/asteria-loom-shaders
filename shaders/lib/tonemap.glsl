@@ -22,10 +22,11 @@
  night (L=0.05) land within ~10% of the placeholder's display luminance:
 
      L(lin)  placeholder  AgX    ratio
-     0.05    0.2425       0.2597  1.07   <- night anchor  (+7.1%)
-     0.18    0.5486       0.5084  0.93   <- noon  anchor  (-7.3%)
-     0.50    0.8025       0.7318  0.91          (softer midtone = the AgX look)
-     2.00    0.9604       0.9639  1.00          (highlight rolloff matches)
+     0.05    0.2425       0.2612  1.08   <- night anchor  (+7.7%)
+     0.18    0.5486       0.5066  0.92   <- noon  anchor  (-7.6%)
+     0.50    0.8025       0.7279  0.91          (softer midtone = the AgX look)
+     1.20    0.9237       0.8990  0.97          (gentle highlight rolloff)
+     2.00    0.9604       0.9794  1.02          (HDR never hard-clips)
 
  Defaults live in settings.glsl (AL_AGX_EXPOSURE / _SLOPE / _POWER / _SAT /
  _WARM); edit + hot-reload to retune.
