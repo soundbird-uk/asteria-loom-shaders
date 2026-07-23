@@ -894,6 +894,98 @@ def lint_format_canonical(shaders_root):
     return errs
 
 
+# --- blend directive validation ---------------------------------------------
+# Iris' shaders.properties `blend.<program>[.<buffer>] = ...` directives. A bad
+# buffer token (e.g. a bare index `blend.gbuffers_water.1`) makes Iris throw
+# "Failed to parse buffer blend! index = -1" and refuse to load the ENTIRE pack.
+# glslang never sees properties directives, so this is validator-lint territory.
+
+# Iris LEGACY_RENDER_TARGETS (the OptiFine legacy buffer names, colortex0-7).
+# NOTE: mirrored from OptiFine/Iris' PackRenderTargetDirectives — the standard,
+# stable 8-name set. (Could not fetch the Iris source in this environment; the
+# proxy blocks raw.githubusercontent, so this is the well-established OptiFine
+# set. If Iris ever extends it, add the names here.)
+LEGACY_RENDER_TARGETS = {
+    "gcolor",     # colortex0
+    "gdepth",     # colortex1
+    "gnormal",    # colortex2
+    "composite",  # colortex3
+    "gaux1",      # colortex4
+    "gaux2",      # colortex5
+    "gaux3",      # colortex6
+    "gaux4",      # colortex7
+}
+
+# colortex0 .. colortex15 (Iris exposes up to 16 on the Mac path).
+COLORTEX_BUFFER_RE = re.compile(r"^colortex([0-9]|1[0-5])$")
+
+# GL blend factor names OptiFine/Iris accept in a `blend.<program> = a b c d`.
+BLEND_FACTORS = {
+    "ZERO", "ONE",
+    "SRC_COLOR", "ONE_MINUS_SRC_COLOR",
+    "DST_COLOR", "ONE_MINUS_DST_COLOR",
+    "SRC_ALPHA", "ONE_MINUS_SRC_ALPHA",
+    "DST_ALPHA", "ONE_MINUS_DST_ALPHA",
+    "SRC_ALPHA_SATURATE",
+}
+
+
+def _valid_blend_buffer(tok):
+    return tok in LEGACY_RENDER_TARGETS or COLORTEX_BUFFER_RE.match(tok) is not None
+
+
+def lint_blend_directives(entries, program_stems):
+    """Validate every `blend.<program>[.<buffer>] = ...` directive:
+      (a) the buffer token, when present, must be colortex0-15 or a legacy name;
+      (b) the program name must correspond to a real program file (typos like
+          `blend.water` silently no-op in Iris);
+      (c) the value must be `off` or a valid 4-token GL blend-factor list.
+    """
+    errs = []
+    for key, val in entries:
+        if key != "blend" and not key.startswith("blend."):
+            continue
+        parts = key.split(".")
+        if len(parts) < 2:
+            errs.append("shaders.properties: `%s` is not a valid blend directive "
+                        "(expected blend.<program> or blend.<program>.<buffer>)" % key)
+            continue
+        program = parts[1]
+        buffer_tok = parts[2] if len(parts) >= 3 else None
+        if len(parts) > 3:
+            errs.append("shaders.properties: `%s` has too many dotted segments "
+                        "(expected blend.<program>[.<buffer>])" % key)
+
+        # (b) program must exist as a real program file
+        if program not in program_stems:
+            errs.append("shaders.properties: `%s` targets program '%s', which has no "
+                        ".vsh/.fsh in shaders/ (typo? Iris silently no-ops it)"
+                        % (key, program))
+
+        # (a) buffer token, if present, must be a valid render target
+        if buffer_tok is not None and not _valid_blend_buffer(buffer_tok):
+            errs.append("shaders.properties: `%s` — buffer token '%s' is not a valid "
+                        "render target. Iris throws \"Failed to parse buffer blend! "
+                        "index = -1\" and refuses to load the pack. Use colortex0-15 "
+                        "or a legacy name (gcolor gdepth gnormal composite gaux1-4)."
+                        % (key, buffer_tok))
+
+        # (c) value must be `off` or exactly four valid blend factors
+        v = val.strip()
+        if v.lower() == "off":
+            continue
+        toks = v.split()
+        bad = [t for t in toks if t.upper() not in BLEND_FACTORS]
+        if len(toks) != 4 or bad:
+            if bad:
+                detail = "unknown factor(s): %s" % ", ".join(bad)
+            else:
+                detail = "expected 4 factors, got %d" % len(toks)
+            errs.append("shaders.properties: `%s` value '%s' is neither 'off' nor a "
+                        "valid 4-factor blend list (%s)." % (key, v, detail))
+    return errs
+
+
 def lint_option_consistency(options, profile_refs, screen_refs, lang_option_keys):
     """Cross-check options between settings.glsl, shaders.properties and lang.
     Returns (fail_errors, warnings)."""
@@ -1004,6 +1096,8 @@ def run_validation(shaders_root, out_dir, profile_filter=None, program_glob=None
     result.lint_fails += lint_render_stages(all_programs, shaders_root)
     result.lint_fails += lint_format_live(all_programs, shaders_root)
     result.lint_fails += lint_format_canonical(shaders_root)
+    program_stems = {os.path.splitext(os.path.basename(rel))[0] for rel, _p, _s in all_programs}
+    result.lint_fails += lint_blend_directives(entries, program_stems)
     of, ow = lint_option_consistency(options, profile_refs, screen_refs, lang_keys)
     result.lint_fails += of
     result.lint_warns += ow
@@ -1494,6 +1588,34 @@ def self_test():
                   "mac-hw: advanced also has the flag (HW branch compiles)")
         os.remove(os.path.join(sh, "hwtest.fsh"))
         os.remove(os.path.join(sh, "hwtest.vsh"))
+
+        # --- Regression: blend directive validation (shaders.properties) ---
+        # (deferred is a real program in this pack; water is not.)
+        def _run_with_props(extra):
+            _write(os.path.join(sh, "shaders.properties"), SELFTEST_PROPERTIES + extra)
+            return run_validation(sh, out_dir, keep=False, require_glslang=False, verbose=False)
+
+        rB1 = _run_with_props("\nblend.deferred.1 = off\n")
+        check(any("blend.deferred.1" in e and "buffer token" in e for e in rB1.lint_fails),
+              "blend: bare-index buffer token (blend.<prog>.1) is caught")
+
+        rB2 = _run_with_props("\nblend.deferred.colortex2 = off\n")
+        check(not any("blend.deferred.colortex2" in e for e in rB2.lint_fails),
+              "blend: valid colortex2 buffer token passes")
+
+        rB3 = _run_with_props("\nblend.water.colortex2 = off\n")
+        check(any("blend.water" in e and "no .vsh/.fsh" in e for e in rB3.lint_fails),
+              "blend: unknown program name (typo) is caught")
+
+        rB4 = _run_with_props("\nblend.deferred = SRC_ALPHA BOGUS ONE ZERO\n")
+        check(any("blend.deferred" in e and "BOGUS" in e for e in rB4.lint_fails),
+              "blend: malformed blend-factor value is caught")
+
+        rB5 = _run_with_props("\nblend.deferred = SRC_ALPHA ONE_MINUS_SRC_ALPHA ONE ZERO\n")
+        check(not any("blend.deferred" in e for e in rB5.lint_fails),
+              "blend: a valid 4-factor blend list passes")
+
+        _write(os.path.join(sh, "shaders.properties"), SELFTEST_PROPERTIES)
 
         print("")
         if failures:
