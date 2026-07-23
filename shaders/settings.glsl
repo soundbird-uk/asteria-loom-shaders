@@ -85,19 +85,32 @@
 #define AL_BLOCKLIGHT_FALLOFF 1.70
 #define AL_BLOCKLIGHT_TAIL    0.35
 
-// Night ambient floor — how readable open terrain stays after dark. Keeps a
-// cool-blue minimum so nothing goes pitch black under the night sky.
+// Night brightness — how readable open terrain stays after dark. Master
+// multiplier on the whole NIGHT ambient (both the cool sky fill's night lift and
+// the cool-blue floor); noon is never affected. Default 1.0 = the intended dark,
+// moody, moonlit look (0.3.2 retune); raise it if you want brighter nights.
 #define NIGHT_BRIGHTNESS 1.0 // [0.25 0.50 0.75 1.00 1.25 1.50 2.00]
 
-// Night ambient re-lift (internal, not GUI). The Phase-3 atmosphere-driven
-// ambient (alAmbientColor) bottoms out at 0.18x its day value after dark; the
-// 0.1.1 model that the field confirmed as "correct night" held open-sky ambient
-// at ~0.35x. lib/lighting.glsl multiplies the sky ambient by mix(this, 1.0,
-// dayFactor) so NIGHT rises back to the 0.1.1 level (open snow within ~5% of
-// 0.1.1) while NOON is provably unchanged (dayFactor==1 -> factor 1.0). Lives
-// here (not the atmosphere core, which this fix must not touch) as the single
-// scoped knob. 1.9 ~= 0.35/0.18. Edit + hot-reload.
-#define AL_NIGHT_AMBIENT_LIFT 1.9
+// Night ambient level (internal, not GUI). The Phase-3 atmosphere-driven ambient
+// (alAmbientColor) bottoms out at 0.18x its day value after dark; lib/lighting.glsl
+// multiplies the sky ambient by mix(this * NIGHT_BRIGHTNESS, 1.0, dayFactor).
+//
+// 0.3.2 FIELD RETUNE: the 0.3.1 value of 1.9 (chasing the old 0.1.1 "correct
+// night") overshot — the user reports nights "look exactly like vanilla, not
+// nearly dark enough". The brief wants atmospheric shader-pack nights: clearly
+// darker and moodier than vanilla, cool-blue readable but NOT daylight-lite.
+// Dropped to 0.90 so the open-ground night sits at ~0.54x the 0.3.1 level (moon
+// direct + night floor were cut alongside — see AL_NIGHT_DIRECT_SCALE and
+// AL_NIGHT_FLOOR). NOON is provably unchanged (dayFactor==1 -> factor 1.0). Edit
+// + hot-reload; NIGHT_BRIGHTNESS is the user-facing multiplier on top.
+#define AL_NIGHT_AMBIENT_LIFT 0.90
+
+// Moon direct-key scale at night (internal, not GUI). Multiplies ONLY the direct
+// sun/moon term via mix(this, 1.0, dayFactor), so moonlight is dimmed after dark
+// (part of the 0.3.2 darker-night retune) while NOON direct is untouched
+// (dayFactor==1 -> 1.0). Keeps a soft directional moon key for silhouettes
+// without lifting the whole scene toward daylight. Edit + hot-reload.
+#define AL_NIGHT_DIRECT_SCALE 0.55
 
 // Fake indirect-bounce floor. A tiny lift so unlit coloured faces are never
 // pure black (real GI arrives in a later phase).
@@ -502,8 +515,12 @@ const vec3 AL_TORCH_TINT = vec3(1.00, 0.58, 0.26);
 const vec3 AL_TORCH_CANDLE = vec3(1.00, 0.66, 0.32);
 const vec3 AL_TORCH_EMBER  = vec3(1.00, 0.40, 0.14);
 
-// Cool-blue night minimum. Terrain under open sky never falls below this.
-const vec3 AL_NIGHT_FLOOR = vec3(0.030, 0.045, 0.085);
+// Cool-blue night minimum. Terrain under OPEN SKY (gated by sky lightmap, so
+// caves get none) never falls below this after dark. 0.3.2 field retune: dropped
+// ~48% from (0.030,0.045,0.085) so the floor reads as "moonlit gloom" rather than
+// "daylight-lite" — nights are clearly darker while silhouettes/nearby detail stay
+// readable. Hue kept cool-blue. Scaled by the NIGHT_BRIGHTNESS GUI slider.
+const vec3 AL_NIGHT_FLOOR = vec3(0.015, 0.022, 0.043);
 
 // Faint indirect-bounce lift added to the light sum so coloured faces never
 // read as pure black. Kept near-neutral (only a whisper cool): this is the ONLY

@@ -13,16 +13,18 @@
  and drown caves in bright sky haze. Aerial fog is also gated by sky exposure
  (see alApplyAerialFog) so enclosed spaces get none. Along the view ray we
  integrate the floored density analytically to an optical depth tau;
- extinction = exp(-tau) darkens
- the scene toward the distance while in-scattered light — sampled from the
- atmosphere's own sky LUT in the view direction, alSkySample(viewDir) — is
- added back in. Because the in-scatter colour IS the sky, distance naturally
- shifts bluer + desaturated with a warm hazy horizon, and the whole thing
- tracks time of day for free (the LUT already encodes sun elevation). Biome
- and weather nudge density and tint the in-scatter (tables below). Sky pixels
- (depth == 1) are left untouched — the clouds pass already carries the sky's
- own transmittance and must not be fogged twice — and underwater is skipped
- entirely (Phase 4 owns it).
+ extinction = exp(-tau) darkens the scene toward the distance while in-scattered
+ light is added back in. RE-TONE (0.3.3): the in-scatter is NOT the raw sky — it
+ is the sky sample blended toward a DARKER, desaturated SCENE tone (analytic
+ hemisphere ambient + a luminance cut of the sky), so fog reads as atmospheric
+ DEPTH that darkens+desaturates distance (hazy-blue-grey by day, muted-warm at
+ sunset) instead of a bright glow painted in front of terrain. A dim cool
+ moon-tinted NIGHT FLOOR keeps depth-haze visible after dark (the raw sky sample
+ goes black at night). The tone still tracks time of day (sun elevation drives
+ both the sky sample and the scene tone). Biome and weather modulate density and
+ tint. Sky pixels (depth == 1) are left untouched — the clouds pass already
+ carries the sky's own transmittance and must not be fogged twice — and
+ underwater is skipped entirely (Phase 4 owns it).
 
  Pure-math + one texture read helper. The only sampler touched here is
  colortex6, and only indirectly via alSkySample() — that sampler is declared
@@ -42,6 +44,11 @@
 
 #include "/lib/common.glsl"
 #include "/lib/color.glsl"
+// Sampler-free atmosphere core: alAmbientColor() (scene-ambient tone for the
+// re-toned in-scatter) and the identity tints. Guard-safe double-include (the
+// includer already pulls it via lib/atmosphere.glsl); alSkySample() itself still
+// comes from the includer's lib/atmosphere.glsl (the sampler side).
+#include "/lib/atmosphere_common.glsl"
 
 /* -------------------------------------------------------------------------
    Tunables (internal, not GUI — edit + hot-reload). The GUI FOG_DENSITY
@@ -49,10 +56,12 @@
    ------------------------------------------------------------------------- */
 
 // Extinction coefficient at sea level, per world-metre, at FOG_DENSITY = 1 and
-// in a neutral biome/clear weather. Tuned so a horizontal view reaches ~half
-// extinction near ~150 m of clear air (ln2 / 0.0046 ≈ 150) — a soft dreamy
-// haze, not soup.
-#define AL_FOG_SEA_DENSITY 0.0046
+// in a neutral biome/clear weather. THICKER re-tone (0.3.3): raised from 0.0046
+// so haze is obviously atmospheric at a few hundred blocks (half extinction at
+// ln2 / 0.0068 ≈ 102 m of clear air). GUI FOG_DENSITY = 1.00 now == this thicker
+// look; the in-scatter is DARKENED + scene-toned (below) so thicker reads as
+// depth, not white glow.
+#define AL_FOG_SEA_DENSITY 0.0068
 
 // Scale height (metres): altitude over which density falls by 1/e. Larger =
 // fog climbs higher up mountains before thinning.
@@ -92,16 +101,38 @@
 #define AL_FOG_GROUND_LO    -0.08   // at/below this: full softening (ground-ward)
 #define AL_FOG_HORIZON_DESAT 0.30
 
-// --- Far-plane convergence (BUG B: hard terrain/sky seam) --------------------
+// --- In-scatter RE-TONE (0.3.3, ISSUE 2: darker / scene-coloured haze) -------
+// The old in-scatter was the raw bright sky, which read as a white glow "painted
+// in front of" terrain. Instead blend the sky sample toward a DARKER scene tone:
+// the analytic hemisphere ambient (cool blue-purple day / mauve dusk / cool moon
+// night, from alAmbientColor) mixed with a LUMINANCE CUT of the sky, then dimmed.
+// Fog then reads as atmospheric DEPTH that darkens+desaturates distance, not glow.
+//   TONE_MIX   — how far the in-scatter moves from raw sky toward the scene tone
+//   TONE_LUMCUT— fraction of the scene tone that is the desaturated (grey) sky
+//   TONE_DIM   — overall darkening of the scene tone
+#define AL_FOG_TONE_MIX    0.55
+#define AL_FOG_TONE_LUMCUT 0.50
+#define AL_FOG_TONE_DIM    0.75
+
+// --- NIGHT fog floor (0.3.3, ISSUE 3: no fog at night) -----------------------
+// At night alSkySample is ~black, so the sky-derived in-scatter vanishes. Add a
+// dim, cool, moon-tinted haze floor scaled by the SAME night factor the lighting
+// uses (1 - dayFactor, dayFactor = alSmooth(smoothstep(-0.06,0.16,sunDir.y)) —
+// matched to lib/lighting.glsl / atmosphere_common so night stays consistent).
+// AL_MOON_TINT is the shared identity moon colour. Kept dim: visible depth-haze,
+// never a glow. Auto-gated by extinction (caves get beta0=0 -> no night fog).
+#define AL_FOG_NIGHT_LEVEL 0.085
+
+// --- Far-plane convergence (BUG B / ISSUE 1a: hard seam, but TIGHTER) ---------
 // Distant terrain must converge to the SAME sky shown past the far plane, or the
-// render-distance edge shows as a hard cutoff. Over the last band of the view
-// frustum we ramp the fogged result toward the raw sky sample so the boundary is
-// invisible at ANY render distance. Fractions of the `far` uniform (composite1
-// computes the ramp weight and passes it in). START..END span ~20% (reviewer's
-// 15-25%); END just under 1.0 so the farthest fragments (dist ~ far, and screen
-// corners where dist > far) are pure sky.
-#define AL_FOG_FARFADE_START 0.78
-#define AL_FOG_FARFADE_END   0.97
+// render-distance edge shows as a hard cutoff. ISSUE 1a: the old [0.78,0.97] band
+// was far too WIDE — it painted sky over legitimately-visible mid-distance
+// terrain (mountains). Tightened to a thin skyline strip [0.92,0.985]·far, and
+// the fade is additionally SCALED BY HOW FOGGED the pixel already is (fogFactor =
+// 1-extinction) so a barely-fogged high mountain peak near the edge does NOT get
+// sky painted onto it — only genuinely hazed pixels converge.
+#define AL_FOG_FARFADE_START 0.92
+#define AL_FOG_FARFADE_END   0.985
 
 // Biome-modulation master switch. All biome_category / temperature / rainfall
 // reads (verified Iris uniforms — see composite1.fsh header for evidence) are
@@ -317,13 +348,16 @@ vec3 alFogSoftKnee(vec3 c, float amt) {
                     caves/interiors (sky-lm ~0) get none. See AL_FOG_SKY_GATE_*.
      farDist      — the `far` uniform (render distance, blocks); drives the
                     far-plane convergence ramp that hides the terrain/sky seam.
+     worldSunDir  — world-space unit sun direction; drives the time-of-day scene
+                    tone and the night factor for the night fog floor.
      (biome/weather uniform values passed through to alFogModulation)
    Returns the fogged linear HDR colour.
    ------------------------------------------------------------------------- */
 vec3 alApplyAerialFog(vec3 sceneColor, float camY, vec3 worldDir, float dist,
                       float userDensity, float skyLightmap, float farDist,
-                      int biomeCategory, float temperature, float rainfall,
-                      float rainStrength, float wetness, float thunderStrength) {
+                      vec3 worldSunDir, int biomeCategory, float temperature,
+                      float rainfall, float rainStrength, float wetness,
+                      float thunderStrength) {
     float densityMul; vec3 scatterTint; float desat; float darken;
     alFogModulation(biomeCategory, temperature, rainfall,
                     rainStrength, wetness, thunderStrength,
@@ -335,34 +369,51 @@ vec3 alApplyAerialFog(vec3 sceneColor, float camY, vec3 worldDir, float dist,
     float beta0 = AL_FOG_SEA_DENSITY * max(userDensity, 0.0) * densityMul * skyGate;
     float tau   = alFogOpticalDepth(camY, worldDir, dist, beta0);
     float ext   = exp(-tau);                 // 1 = clear, 0 = fully fogged
+    float fogF  = 1.0 - ext;                 // how fogged this pixel is (0..1)
 
-    // Single NaN-safe sky read, reused for the in-scatter AND the far-fade
-    // target (so the seam matches the sky pixels exactly and we read colortex6
-    // once).
+    // Single NaN-safe sky read, reused for the in-scatter tone AND the far-fade
+    // target (one colortex6 read).
     vec3 sky = alFogSkyInscatter(worldDir);
 
-    // --- Aerial in-scatter (BUG A softening for ground-ward rays) ---------
-    // biome-tinted + thunder-darkened, then softened for rays at/below the
-    // horizon so bright sunrise/sunset sky never blows distant terrain to white.
-    // (Sky pixels are early-returned in composite1, so this never dims the sky.)
+    // --- Time-of-day factors (matched to lighting / atmosphere_common) ----
+    float dayF   = alSmooth(smoothstep(-0.06, 0.16, worldSunDir.y));
+    float nightF = 1.0 - dayF;
+
+    // --- RE-TONE the in-scatter (ISSUE 2: darker, scene-coloured) ---------
+    // Move the bright sky toward a muted SCENE tone: analytic hemisphere ambient
+    // (cool blue-purple day / mauve dusk / cool moon night) mixed with a
+    // luminance cut of the sky, then dimmed. Fog reads as depth, not white glow.
+    float skyLum   = alLuminance(sky);
+    vec3  sceneTone = mix(alAmbientColor(worldSunDir), vec3(skyLum), AL_FOG_TONE_LUMCUT)
+                    * AL_FOG_TONE_DIM;
+    vec3  fogColor  = mix(sky, sceneTone, AL_FOG_TONE_MIX);
+
+    // Night floor (ISSUE 3): a dim cool moon-tinted haze so distance still reads
+    // as depth after dark (sky sample is ~black at night). Auto-gated by ext via
+    // the (1-ext) weight below (no night fog in caves).
+    fogColor += AL_MOON_TINT * (AL_FOG_NIGHT_LEVEL * nightF);
+
+    // Biome tint + thunder darkening on the re-toned colour.
+    fogColor *= scatterTint * darken;
+
+    // Ground-ward softening (ISSUE 1b / old BUG A): compress any residual >1 for
+    // rays at/below the horizon (toward-sun haze) + gentle desaturation, so haze
+    // never reads as a bright layer painted in front of terrain.
     float groundy = 1.0 - smoothstep(AL_FOG_GROUND_LO, AL_FOG_GROUND_HI, worldDir.y);
-    vec3  inscatter = sky * scatterTint * darken;
-    inscatter = alFogSoftKnee(inscatter, groundy);
-    // Rain desaturation + a gentle ground-haze desaturation (softer than the sky).
+    fogColor = alFogSoftKnee(fogColor, groundy);
     float totalDesat = alSaturate(desat + AL_FOG_HORIZON_DESAT * groundy);
-    inscatter = mix(inscatter, vec3(alLuminance(inscatter)), totalDesat);
+    fogColor = mix(fogColor, vec3(alLuminance(fogColor)), totalDesat);
 
-    vec3 aerial = sceneColor * ext + inscatter * (1.0 - ext);
+    vec3 aerial = sceneColor * ext + fogColor * fogF;
 
-    // --- Far-plane convergence (BUG B: hide the terrain/sky seam) ---------
-    // Ramp the result toward the RAW sky (un-softened, un-tinted — exactly what
-    // the sky pixels past the far plane show) over the last band of the frustum.
-    // Works at any render distance because the band scales with `far`. Also
-    // gated by skyGate so it only converges where there IS open sky (the real
-    // terrain/sky horizon seam always has sky above it); a rare distant enclosed
-    // surface is never washed to sky.
+    // --- Far-plane convergence (ISSUE 1a: TIGHT + fog-scaled) -------------
+    // Ramp toward the RAW sky over a thin skyline strip [START,END]·far so the
+    // terrain/sky boundary is seamless — but ONLY where the pixel is already
+    // fogged (fogF) and under open sky (skyGate), so a barely-fogged mid-distance
+    // mountain peak keeps its own colour instead of getting sky painted on it.
     float f = max(farDist, 1.0);
-    float farFade = smoothstep(f * AL_FOG_FARFADE_START, f * AL_FOG_FARFADE_END, dist) * skyGate;
+    float edge = smoothstep(f * AL_FOG_FARFADE_START, f * AL_FOG_FARFADE_END, dist);
+    float farFade = edge * skyGate * fogF;
     vec3  result  = mix(aerial, sky, farFade);
 
     return max(result, vec3(0.0));

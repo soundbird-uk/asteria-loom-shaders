@@ -75,6 +75,11 @@ uniform int   isEyeInWater;
 // distant terrain into the sky so the render-distance edge is seamless.
 uniform float far;
 
+// Sun position (view/eye space, Iris/OptiFine standard). Transformed to world
+// space (via lib/space.glsl) for the fog's time-of-day scene tone and the night
+// factor that drives the night fog floor.
+uniform vec3 sunPosition;
+
 // Biome (verified Iris uniforms — see header). Used only behind
 // AL_FOG_BIOME_UNIFORMS in lib/fog.glsl; declared here unconditionally so the
 // program always compiles (Iris supplies them; unused declarations are legal).
@@ -134,10 +139,13 @@ void main() {
     // a stray value can't push the smoothstep out of [0,1].
     float skyLm = alSaturate(texture(colortex2, texcoord).a);
 
+    // World-space sun direction for the time-of-day scene tone / night factor.
+    vec3 worldSunDir = normalize(alViewDirToWorld(sunPosition));
+
     vec3 fogged = alApplyAerialFog(scene, cameraPosition.y, worldDir, dist,
-                                   FOG_DENSITY, skyLm, far, biome_category,
-                                   temperature, rainfall, rainStrength,
-                                   wetness, thunderStrength);
+                                   FOG_DENSITY, skyLm, far, worldSunDir,
+                                   biome_category, temperature, rainfall,
+                                   rainStrength, wetness, thunderStrength);
 
     // Clamp the output (NaN-safe: a non-finite result falls back to the raw
     // scene rather than propagating).

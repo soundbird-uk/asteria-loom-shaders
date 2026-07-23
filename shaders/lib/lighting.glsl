@@ -64,9 +64,14 @@ vec3 alLightPhase1(vec3 albedoLin, vec3 worldN, vec2 lm,
     // --- Direct sun / moon ------------------------------------------------
     // Colour is atmosphere-driven (warm amber bias baked into alDirectColor).
     // Cloud shadow softens the direct key where a cumulus passes the sun.
-    float NdotL   = max(dot(worldN, worldLDir), 0.0);
-    float cloudSh = alCloudShadow(worldPos);
-    vec3  direct  = alDirectColor(worldSunDir) * (NdotL * shadowVis * cloudSh);
+    // dayFactor (from alDayFactor — the pack's single shared day/night ramp, the
+    // same signal the night sky / fog agree on) dims the MOON key after dark via
+    // AL_NIGHT_DIRECT_SCALE: part of the 0.3.2 darker-night retune. NOON is
+    // untouched (dayFactor==1 -> scale 1.0).
+    float NdotL     = max(dot(worldN, worldLDir), 0.0);
+    float cloudSh   = alCloudShadow(worldPos);
+    float directNight = mix(AL_NIGHT_DIRECT_SCALE, 1.0, dayFactor);
+    vec3  direct  = alDirectColor(worldSunDir) * (NdotL * shadowVis * cloudSh * directNight);
 
     // --- Hemisphere sky ambient (the cool fill) ---------------------------
     // The upper-hemisphere sky colour now comes from the atmosphere model
@@ -84,14 +89,14 @@ vec3 alLightPhase1(vec3 albedoLin, vec3 worldN, vec2 lm,
 
     float wrap    = 0.6 + 0.4 * up;                       // soft wrap term
     float skyLm   = lm.y * lm.y;                          // sky lightmap, eased
-    // Day scaling lives inside alAmbientColor (0.18 at night .. 1.0 by day). That
-    // 0.18 night floor left open terrain ~30% darker than the 0.1.1 build the
-    // field confirmed as "correct night" (which held ~0.35x). Re-lift the NIGHT
-    // ambient here — the shared model, and NOT the atmosphere core this fix must
-    // not touch — by mix(AL_NIGHT_AMBIENT_LIFT, 1.0, dayFactor): night rises to
-    // the 0.1.1 level (open snow within ~5%) while NOON is provably unchanged
-    // (dayFactor == 1 -> factor 1.0).
-    float nightLift = mix(AL_NIGHT_AMBIENT_LIFT, 1.0, dayFactor);
+    // Day scaling lives inside alAmbientColor (0.18 at night .. 1.0 by day). We
+    // re-scale the NIGHT ambient here in the shared model (NOT the atmosphere core)
+    // by mix(AL_NIGHT_AMBIENT_LIFT * NIGHT_BRIGHTNESS, 1.0, dayFactor). 0.3.2 field
+    // retune: AL_NIGHT_AMBIENT_LIFT dropped 1.9 -> 0.90 so nights read clearly
+    // darker/moodier than vanilla (the user found 1.9 "looks exactly like vanilla,
+    // not nearly dark enough"). NIGHT_BRIGHTNESS is the user-facing multiplier on
+    // this night term; NOON is provably unchanged (dayFactor == 1 -> factor 1.0).
+    float nightLift = mix(AL_NIGHT_AMBIENT_LIFT * NIGHT_BRIGHTNESS, 1.0, dayFactor);
     vec3  ambient = hemiCol * (skyLm * wrap) * AMBIENT_INTENSITY * nightLift;
 
     // --- Night floor ------------------------------------------------------
