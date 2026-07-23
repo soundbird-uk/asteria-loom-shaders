@@ -153,45 +153,6 @@
 // noon is untouched.
 #define AL_FOG_NIGHT_DIM 0.40
 
-// --- Distance convergence to sky (0.4.2 REWORK, ISSUE 1: kill the band) ------
-// The terrain/sky boundary must be seamless WITHOUT a bright horizontal band.
-// Root cause of the 0.4.1 band: the old convergence blended toward the RAW BRIGHT
-// sky on a DISTANCE plane ([0.92,0.985]·far), painting bright sky over legitimate
-// mid-distance terrain (a horizontal line across mountains, since the fog tone is
-// darker than the sky). Fix — make convergence PRIMARILY a function of OPTICAL
-// DEPTH, not distance:
-//   * PRIMARY (CONVERGE_A/B): the in-scatter colour lerps fogTone -> raw sky by
-//     smoothstep(A, B, 1-ext). Mid haze (tau ~0.5-1.5, 1-ext < ~0.86) stays the
-//     dark scene tone; only heavily-extincted rays (tau >~2.5-3, 1-ext > ~0.9)
-//     approach the raw sky, so terrain converges to EXACTLY the sky colour
-//     asymptotically — no plane, no band, at ANY render distance. Crucially,
-//     ELEVATED terrain (mountains) has LOW optical depth, so it stays dark: the
-//     band across mountains cannot form. Haze instead rises smoothly up a slope
-//     (base fogs, peak stays crisp) — correct aerial perspective.
-//   * EDGE INSURANCE (EDGE_*): a thin strip [0.965,0.995]·far for LOW render
-//     distances, where even the horizon ground can't reach convergence tau. It is
-//     gated by skyGate AND a SHARP fog-thickness gate smoothstep(FOG_LO,FOG_HI,
-//     1-ext) so ONLY the heavily-fogged flat horizon converges — low-tau silhou-
-//     ettes (mountain peaks) at the very edge are excluded and keep their colour.
-// Numeric check (horizon terrain vs sky, 0.995·far): delta 0% at far>=256, ~5-7%
-// at far=192 — imperceptible, and no band at any distance.
-// 0.4.3 (ISSUE 13: "orange ring / skybox through terrain"): pushed the whole
-// convergence LATE (A 0.86->0.93, B 0.975->0.995) so terrain keeps the dark,
-// scene-referenced fogTone far longer and only the genuinely near-opaque flat
-// horizon (fogF -> ~1) reaches the raw sky. With the 4x thinner density this means
-// convergence happens ONLY at the true horizon line, never as a mid-distance ring
-// painted over legitimate terrain — so no orange circle follows the camera.
-#define AL_FOG_CONVERGE_A   0.93     // 1-ext where sky-convergence begins
-#define AL_FOG_CONVERGE_B   0.995    // 1-ext where it completes
-// Edge-insurance strip: kept only as a razor-thin seam seal at the very far plane
-// and gated harder on fog thickness, so mountain silhouettes at the edge keep
-// their colour and the strip never reads as a coloured band/ring.
-// 0.4.4: widened + softened so the far flat horizon/void is reliably sealed while
-// low-tau peaks are still excluded (no band across mountains).
-#define AL_FOG_EDGE_START   0.94     // edge-insurance strip start (fraction of far)
-#define AL_FOG_EDGE_END     0.999    // edge-insurance strip end
-#define AL_FOG_EDGE_FOG_LO  0.55     // fog-thickness gate: below -> excluded (peaks)
-#define AL_FOG_EDGE_FOG_HI  0.82     // fog-thickness gate: above -> converge (ground)
 
 // Biome-modulation master switch. All biome_category / temperature / rainfall
 // reads (verified Iris uniforms — see composite1.fsh header for evidence) are
