@@ -109,6 +109,8 @@ uniform float rainfall;
 // alSkySample().
 #include "/lib/atmosphere.glsl"
 #include "/lib/fog.glsl"
+// Loom light-weave: angular modulation of the god-ray shafts (bare include line).
+#include "/lib/rays.glsl"
 
 in vec2 texcoord;
 
@@ -264,6 +266,8 @@ void main() {
             float gate = alGodRayGate(wViewDir, wSunDir, sunUV);
             if (gate > 0.001) {
                 float shaft = alGodRayLum(texcoord, sunUV, alGodRayDither());
+                // Loom light-weave: same interwoven banding through the water.
+                shaft *= alRayWeave(texcoord, sunUV, frameTimeCounter);
                 // Cool, watery shaft colour; a touch stronger than in air since
                 // water makes the beams much more visible.
                 vec3  beam  = mix(alDirectColor(wSunDir), vec3(0.35, 0.6, 0.7),
@@ -333,6 +337,8 @@ void main() {
         float gate = alGodRayGate(worldDir, worldSunDir, sunUV);
         if (gate > 0.001) {
             float shaft = alGodRayAmount(texcoord, sunUV, alGodRayDither());
+            // Loom light-weave: interwoven angular bands over the shaft.
+            shaft *= alRayWeave(texcoord, sunUV, frameTimeCounter);
             fogged += alDirectColor(worldSunDir)
                     * (shaft * AL_GODRAY_INTENSITY * GODRAY_STRENGTH * gate);
         }

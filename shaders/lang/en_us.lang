@@ -95,6 +95,9 @@ value.STARS_DENSITY.0.75 = Light
 value.STARS_DENSITY.1.00 = Default
 value.STARS_DENSITY.1.50 = Dense
 value.STARS_DENSITY.2.00 = Very Dense
+option.AURORA = Aurora
+option.AURORA.comment = Woven curtains of aurora light on clear cold nights only (snowy biomes, no rain, deep night). Soft green-teal with violet fringes, kept below the moon so it stays dreamy rather than neon.
+
 option.END_BLACKHOLE_SIZE = End Black Hole Size
 option.END_BLACKHOLE_SIZE.comment = Apparent size of the procedural black hole that hangs in the End sky. Lower is a distant pinpoint; higher looms large.
 value.END_BLACKHOLE_SIZE.0.50 = Distant

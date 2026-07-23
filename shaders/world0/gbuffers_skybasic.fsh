@@ -4,6 +4,7 @@
 #include "/lib/color.glsl"
 #include "/lib/atmosphere.glsl"
 #include "/lib/nightsky.glsl"
+#include "/lib/aurora.glsl"
 
 /*
  gbuffers_skybasic (fragment) — the physically based sky. Replaces the Phase-1
@@ -25,6 +26,12 @@
 uniform int renderStage;
 uniform vec3 sunPosition;               // view space, toward the sun
 uniform mat4 gbufferModelViewInverse;
+
+// Aurora gating (verified Iris uniforms): `temperature` = biome base temperature
+// (snowy/cold ~0), `rainStrength` = precipitation 0..1. Declared here (nowhere in
+// the included libs — verified), so the aurora only lights clear cold nights.
+uniform float temperature;
+uniform float rainStrength;
 
 in vec3 worldDir;
 
@@ -91,6 +98,12 @@ void main() {
     // nightFactor: 0 in full day, 1 well after sunset.
     float nightFactor = smoothstep(0.04, -0.10, sunDir.y);
     sky += alNightSky(dir, nightFactor);
+
+    // --- Woven aurora (Loom motif — clear cold nights only) ---------------
+    // Additive over the atmosphere, next to the night sky. Self-gates on deep
+    // night + cold biome + clear sky and returns 0 otherwise, so it costs a few
+    // ops and never appears in warm biomes, daytime, or rain (lib/aurora.glsl).
+    sky += alAurora(dir, nightFactor, temperature, rainStrength);
 
     // --- Procedural HDR sun disc ------------------------------------------
     // Only above the horizon and only when the sun is up; limb-darkened so the

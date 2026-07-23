@@ -510,6 +510,17 @@ const float sunPathRotation = -35.0;
 // sky, higher for a dense field.
 #define STARS_DENSITY 1.00 // [0.50 0.75 1.00 1.50 2.00]
 
+// Aurora (Loom motif — GUI, gbuffers_skybasic via lib/aurora.glsl). Woven-band
+// aurora curtains on CLEAR COLD NIGHTS only (cold biome + no rain + deep night):
+// a few flowing green-teal curtains with violet fringes and slow undulation,
+// added over the atmosphere next to the night sky, kept BELOW the moon so it
+// stays dreamy rather than neon. Off removes it entirely.
+#define AURORA // [AURORA]
+
+// Aurora peak radiance (internal, not GUI). Deliberately below the star/moon
+// range so the curtains read as a soft glow, never a neon poster.
+#define AL_AURORA_STRENGTH 0.22
+
 
 // --- Horizon-band softening (internal, not GUI — gbuffers_skybasic.fsh) ----
 // 0.4.5b FIELD FIX (confirmed via Debug View 11): the analytic atmosphere makes a
@@ -560,6 +571,17 @@ const float sunPathRotation = -35.0;
 #define AL_GODRAY_INTENSITY 0.42   // base strength (GODRAY_STRENGTH multiplies this)
 #define AL_GODRAY_LOWSUN    2.2    // extra multiplier as the sun nears the horizon
 #define AL_GODRAY_RAINBOOST 1.6    // extra multiplier in rain/haze
+
+// --- Loom ray WEAVE (internal, not GUI — lib/rays.glsl) --------------------
+// The "light-weave" signature: the god-ray shafts are modulated by a slow
+// angular interference of two overlapping frequencies around the sun axis, so
+// the shafts read as gently interwoven bands rather than a uniform fan. DEPTH
+// is subtle (never fully cuts a ray); DRIFT slowly rotates the interference so
+// the weave breathes without per-pixel flicker (the shaft march stays stable).
+#define AL_RAY_WEAVE_FREQ_A 7.0    // first angular frequency (bands around the sun)
+#define AL_RAY_WEAVE_FREQ_B 11.0   // second angular frequency (interference partner)
+#define AL_RAY_WEAVE_DEPTH  0.32   // modulation depth (0 = off, 1 = full dark bands)
+#define AL_RAY_WEAVE_DRIFT  0.04   // slow angular drift (rad/s) — dreamy, not flicker
 
 // Overall fog density multiplier on top of the tuned sea-level baseline.
 // 1.00 is the intended look; lower for crisp long views, higher for a soupier,

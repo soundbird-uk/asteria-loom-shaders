@@ -527,7 +527,16 @@ def parse_screens(entries, options):
 INCLUDE_RE = re.compile(r'^\s*#include\s+"([^"]+)"\s*$')
 
 
-def resolve_includes(entry_path, shaders_root, missing=None):
+# A line that is clearly meant to be an #include directive (starts with
+# `#include` after optional whitespace) — used to catch MALFORMED include lines
+# that INCLUDE_RE rejects (e.g. a trailing comment after the closing quote).
+# Those neither inline nor register as "missing", so they slip through the
+# flattener verbatim and glslang chokes on the raw `#include` deep in the
+# concatenated output. This lets us flag them as a clean lint failure instead.
+INCLUDE_LINE_RE = re.compile(r'^\s*#include\b')
+
+
+def resolve_includes(entry_path, shaders_root, missing=None, malformed=None):
     """Return the fully-inlined source for entry_path.
 
     Iris rules: an include path starting with '/' is relative to the shaders/
@@ -541,6 +550,12 @@ def resolve_includes(entry_path, shaders_root, missing=None):
     (includer_path, line_no, include_string, resolved_target). Iris hard-fails
     the whole pack on a missing include, so callers turn a non-empty `missing`
     into a hard failure (see lint_includes).
+
+    If `malformed` is a list, every line that looks like an #include directive
+    but does NOT parse as one (INCLUDE_RE) — e.g. a trailing comment after the
+    quote — is appended as (includer_path, line_no, raw_line). Such a line would
+    otherwise pass through the flattener verbatim and only surface as an opaque
+    glslang preprocessor error, so callers treat it as a hard lint failure too.
     """
     out_lines = []
 
@@ -557,6 +572,8 @@ def resolve_includes(entry_path, shaders_root, missing=None):
         for i, line in enumerate(text.splitlines()):
             m = INCLUDE_RE.match(line)
             if not m:
+                if malformed is not None and INCLUDE_LINE_RE.match(line):
+                    malformed.append((path, i + 1, line))
                 out_lines.append(line)
                 continue
             inc = m.group(1)
@@ -890,16 +907,32 @@ def count_samplers(code):
 
 
 def lint_includes(programs, shaders_root):
-    """Iris hard-fails on a missing #include; so do we (F2)."""
+    """Iris hard-fails on a missing #include; so do we (F2). We also reject
+    MALFORMED include lines (F2b): a line the flattener can't parse as an include
+    (INCLUDE_RE) — most often a trailing comment after the closing quote — slips
+    through verbatim and only shows up as an opaque glslang preprocessor error
+    deep in the concatenated source, so catch it here with the real location."""
     errs = []
+    seen_malformed = set()
     for rel, path, stage, _world in programs:
         missing = []
-        resolve_includes(path, shaders_root, missing=missing)
+        malformed = []
+        resolve_includes(path, shaders_root, missing=missing, malformed=malformed)
         for includer, line_no, inc, target in missing:
             inc_rel = os.path.relpath(includer, shaders_root)
             tgt_rel = os.path.relpath(target, shaders_root)
             errs.append('%s: unresolved #include "%s" at %s:%d (looked for %s)'
                         % (rel, inc, inc_rel, line_no, tgt_rel))
+        for includer, line_no, raw in malformed:
+            inc_rel = os.path.relpath(includer, shaders_root)
+            key = (inc_rel, line_no)          # a shared lib is reached many times
+            if key in seen_malformed:
+                continue
+            seen_malformed.add(key)
+            errs.append('%s: malformed #include at %s:%d (must be exactly '
+                        '`#include "path"` with nothing after the quote — the '
+                        'flattener leaves this verbatim): %s'
+                        % (rel, inc_rel, line_no, raw.strip()))
     return errs
 
 
@@ -1689,6 +1722,21 @@ def self_test():
         check(any("composite.fsh" in e and "unresolved #include" in e and "does_not_exist" in e
                   for e in resF2.lint_fails),
               "F2: an unresolved #include is a hard lint failure (with includer:line)")
+        os.remove(os.path.join(sh, "composite.fsh"))
+        os.remove(os.path.join(sh, "composite.vsh"))
+
+        # --- Regression F2b: malformed #include (trailing comment) hard-fails ---
+        # This exact class caused 20 CI compile failures: a trailing comment on an
+        # `#include` line makes INCLUDE_RE reject it, so it neither inlines nor
+        # counts as missing — it reaches glslang verbatim. Must be a lint failure.
+        _write(os.path.join(sh, "composite.fsh"),
+               '#version 330 compatibility\n/* RENDERTARGETS: 0 */\n'
+               '#include "/lib/util.glsl"   // trailing comment breaks the flattener\n'
+               'out vec4 c;\nvoid main(){ c = vec4(1.0); }\n')
+        _write(os.path.join(sh, "composite.vsh"), SELFTEST_GOOD_VSH)
+        resF2b = run_validation(sh, out_dir, keep=False, require_glslang=False, verbose=False)
+        check(any("composite.fsh" in e and "malformed #include" in e for e in resF2b.lint_fails),
+              "F2b: a malformed #include (trailing comment) is a hard lint failure")
         os.remove(os.path.join(sh, "composite.fsh"))
         os.remove(os.path.join(sh, "composite.vsh"))
 
