@@ -7,6 +7,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-07-23
+
+Phase 4 — water & post-processing. The pack gains its final rendering identity:
+real water, temporal anti-aliasing, bloom, and the AgX filmic grade.
+
+### Added
+
+- **Water.** Animated wind-aligned ripples (matched to the clouds' wind), screen
+  space reflections with quality tiers and a sky fallback (softly capped — never
+  mirror-chrome), Beer-Lambert depth absorption, and animated voronoi caustics
+  dancing on submerged terrain. Real water is identified by block ID
+  (block.properties) — stained glass, ice, slime and other translucents keep
+  their own look. Underwater gets blue-green distance haze with gentle
+  refraction wobble; lava and powder snow get their own dense media.
+- **Temporal anti-aliasing** (all presets except Potato): Halton-jittered
+  geometry with a YCoCg-clamped, confidence-managed temporal resolve,
+  rotation-aware sky reprojection, HDR flicker weighting, and reduced hand
+  history to prevent weapon ghosting.
+- **Bloom** — threshold-free 6-level mip-atlas bloom, strictly additive
+  (a night torch halo brightens ~2x; noon scenes shift under 2%; nothing ever
+  dims). Emissive spill against the dark nights is the payoff.
+- **AgX filmic tonemap** with a soft look (gentle contrast, rolled highlights),
+  numerically calibrated so the field-approved noon and night levels carry over
+  within ~8%. Bounded auto-exposure from scene luminance (never undoes the dark
+  nights); EXPOSURE becomes a bias control.
+- **Biome-adaptive grading** (golden deserts, mossy swamps, crisp snow, lush
+  jungle — all subtle) and **weather storytelling**: rain desaturates and cools,
+  thunder pulls toward steel, post-rain wetness adds a fresh saturation lift,
+  and lightning strikes flash the frame.
+- New Water settings screen; Post screen gains TAA and Bloom controls.
+
+### Fixed (during phase review)
+
+- Stained glass/ice/slime rendered as wavy reflective water (no block ID guard).
+- Water's surface-data writes were alpha-blended, silently disabling SSR,
+  absorption and caustics on straight-down views (per-target blend disabled).
+- Bloom crossfade dimmed highlights; now purely additive.
+- Debug views bypass the TAA resolve for pixel-exact probing.
+
 ## [0.3.3] - 2026-07-23
 
 Tone and atmosphere rework from macOS 0.3.2 field feedback.
