@@ -111,6 +111,19 @@ vec3 alReinhardInv(vec3 c) { return c / max(1.0 - alLuminance(c), 1e-4); }
 void main() {
     vec3 current = alSanitizeRGB(texture(colortex0, texcoord).rgb);
 
+#if DEBUG_VIEW != 0
+    // Debug views (raw G-buffer channels + the deferred1 probes 7/8) must show
+    // EXACTLY what the upstream pass wrote — never a TAA round-trip (Reinhard
+    // compress/expand + neighbourhood clamp + history blend), which would violate
+    // the settings.glsl claim that the probes are raw. Pass colortex0 through
+    // untouched. Still write a VALID, non-stale history (current frame,
+    // confidence 0) so re-enabling normal mode doesn't inherit history captured
+    // while debug was active.
+    outColor   = vec4(texture(colortex0, texcoord).rgb, 1.0);
+    outHistory = vec4(current, 0.0);
+    return;
+#endif
+
 #ifndef TAA
     // TAA off: cheap passthrough. Still writes both targets (RENDERTARGETS 0,8).
     outColor   = vec4(current, 1.0);
