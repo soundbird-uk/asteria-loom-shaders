@@ -3,17 +3,28 @@
 #include "/lib/common.glsl"
 #include "/lib/color.glsl"
 #include "/lib/encoding.glsl"
+#include "/lib/tonemap.glsl"
+#include "/lib/grade.glsl"
 
 /*
  final (fragment) — output to the screen.
 
- Pipeline: exposure -> placeholder filmic tonemap -> linear->sRGB, with an
- optional DEBUG_VIEW that bypasses grading to inspect raw G-buffer channels.
- final writes to the default framebuffer, so it carries NO RENDERTARGETS
- directive (it is the documented exception, alongside the shadow pass).
+ Pipeline (Phase 4): colortex0 (HDR scene, post bloom-combine)
+   -> auto-exposure multiply  (adapted value from colortex5.a texel (0,0),
+      metered+smoothed by composite5) x EXPOSURE user bias
+   -> AgX tonemap             (lib/tonemap.glsl — soft-filmic, calibrated to
+      carry the field-approved noon/night levels within ~10%; replaces the old
+      placeholder ACES fit)
+   -> biome + weather grade    (lib/grade.glsl — subtle biome-adaptive nudges
+      and rain/thunder/wetness/lightning storytelling, <=10% shifts)
+   -> linear -> sRGB
+ with an optional DEBUG_VIEW that bypasses ALL grading to inspect raw G-buffer
+ channels. final writes to the default framebuffer, so it carries NO
+ RENDERTARGETS directive (it is the documented exception, alongside shadow).
 
- Sampler count: 6 (colortex0, colortex1, colortex2, colortex3, colortex4,
- depthtex0). colortex4 is read only by DEBUG_VIEW 6 (AO).
+ Sampler count: 7 (colortex0, colortex1, colortex2, colortex3, colortex4,
+ colortex5, depthtex0). colortex4 is read only by DEBUG_VIEW 6 (AO); colortex5
+ is read only for the exposure scalar at texel (0,0).
 
  ==========================================================================
  CANONICAL BUFFER-FORMAT DECLARATIONS
@@ -31,9 +42,12 @@
    colortex2    RGBA16   octahedral normal .rg, lightmap (block,sky) .ba
    colortex3    RGBA8    matID/255 .r, flags/255 .g, ba spare
    colortex4    RG16F    GTAO: r = AO (1 = unoccluded), g = confidence. Cleared.
-   colortex5    RGBA16F  AO history: r = AO, g = confidence, b = linear depth.
-                         `clear.colortex5 = false` (persists across frames for
-                         temporal accumulation — set in shaders.properties).
+   colortex5    RGBA16F  AO history: r = AO, g = confidence, b = linear depth,
+                         a = ADAPTED EXPOSURE (at texel (0,0) only — written by
+                         composite5, read here; elsewhere .a is AO-history spare
+                         and preserved byte-exact). `clear.colortex5 = false`
+                         (persists across frames for temporal accumulation — set
+                         in shaders.properties).
    colortex6    RGBA16F  Sky-view LUT: top-left 256x128 tile = analytic
                          atmosphere radiance (azimuth x horizon-biased
                          elevation, mapping documented in lib/atmosphere_common
