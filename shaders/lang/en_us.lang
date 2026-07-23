@@ -129,7 +129,7 @@ option.VANILLA_CLOUDS.comment = Draw Minecraft's flat forward-lit clouds instead
 # ---- Fog -------------------------------------------------------------------
 screen.FOG = Fog
 option.AERIAL_FOG = Aerial Fog
-option.AERIAL_FOG.comment = Distance haze that shifts the view bluer and more desaturated, with a warm hazy horizon. Colour and density follow the time of day, weather and biome. Off skips the pass entirely.
+option.AERIAL_FOG.comment = Distance haze that shifts the view bluer and more desaturated, with a warm hazy horizon. Colour and density follow the time of day, weather and biome. Off skips the pass entirely, which ALSO disables the underwater, lava and powder-snow haze (they share this pass).
 option.FOG_DENSITY = Fog Density
 option.FOG_DENSITY.comment = Overall thickness of the aerial fog. Lower gives crisp long views; higher gives a soupier, moodier haze.
 value.FOG_DENSITY.0.50 = Thin
