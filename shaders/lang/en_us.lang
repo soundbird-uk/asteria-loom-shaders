@@ -164,6 +164,19 @@ value.BLOOM_STRENGTH.1.0 = Default
 value.BLOOM_STRENGTH.1.25 = Strong
 value.BLOOM_STRENGTH.1.5 = Heavy
 
+option.GOD_RAYS = God Rays
+option.GOD_RAYS.comment = Screen-space sun shafts that fan out through gaps in leaves and around terrain toward the sun. Strongest at low sun and in haze; steady (no flicker) and gated so it never washes the screen. Off on Potato.
+option.GODRAY_STRENGTH = God Ray Strength
+option.GODRAY_STRENGTH.comment = How strong the sun shafts are. 0 turns them off, 1.0 is the tuned default, higher is more dramatic.
+value.GODRAY_STRENGTH.0.00 = Off
+value.GODRAY_STRENGTH.0.25 = Faint
+value.GODRAY_STRENGTH.0.50 = Subtle
+value.GODRAY_STRENGTH.0.75 = Light
+value.GODRAY_STRENGTH.1.00 = Default
+value.GODRAY_STRENGTH.1.50 = Strong
+value.GODRAY_STRENGTH.2.00 = Heavy
+value.GODRAY_STRENGTH.3.00 = Extreme
+
 option.EXPOSURE = Exposure Bias
 option.EXPOSURE.comment = Manual brightness trim on top of auto exposure, applied before the AgX tone map. 1.0 leaves the calibrated levels untouched; nudge it if you want the whole image brighter or darker.
 
@@ -182,3 +195,6 @@ value.DEBUG_VIEW.5 = Material ID
 value.DEBUG_VIEW.6 = Ambient Occlusion
 value.DEBUG_VIEW.7 = Pipeline Probe A
 value.DEBUG_VIEW.8 = Pipeline Probe B
+value.DEBUG_VIEW.9 = Sky Mask
+value.DEBUG_VIEW.10 = Fog Amount
+value.DEBUG_VIEW.11 = Raw Sky (LUT)

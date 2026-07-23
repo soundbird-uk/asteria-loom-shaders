@@ -43,6 +43,15 @@ void main() {
     // --- Base atmosphere (baked LUT) --------------------------------------
     vec3 sky = alSkySample(dir);
 
+#ifdef AL_DBG_FLATSKY
+    // DIAGNOSTIC: replace the whole sky with a flat dark grey. If the "horizon
+    // band" disappears with this on, the band IS the atmosphere sky LUT (and the
+    // other-dimension bleed is the overworld LUT drawn everywhere -> world folders).
+    outColor = vec4(vec3(0.03, 0.03, 0.05), 1.0);
+    return;
+#endif
+
+#ifndef AL_DBG_NO_SKYFILL
     // --- Ground / horizon haze fill (ISSUE 13: "void under the horizon") --
     // Below the horizon the analytic atmosphere goes dim (ground-scattered), which
     // reads as a dark VOID band under the world and a hard seam behind distant
@@ -60,6 +69,7 @@ void main() {
         float below = smoothstep(0.0, -0.16, dir.y);      // 0 at horizon -> 1 down
         sky = mix(sky, horizonHaze, below);
     }
+#endif // AL_DBG_NO_SKYFILL
 
     // --- Procedural night sky (additive, fades in as the sun sets) --------
     // nightFactor: 0 in full day, 1 well after sunset.

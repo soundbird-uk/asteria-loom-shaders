@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.5] - 2026-07-23
+
+Diagnostics + fixes: horizon debug tooling, held light, stable adjustable god
+rays, contact-shadow grain.
+
+### Added
+
+- **Horizon diagnosis tools.** New in-game debug views (Debug screen → Debug View):
+  **9 Sky Mask** (white = sky, black = terrain — shows where sky is drawn vs
+  occluded), **10 Fog Amount** (how fogged the far field is), **11 Raw Sky (LUT)**
+  (the atmosphere sky band for the whole screen). Plus internal bisection toggles
+  in `settings.glsl` (`AL_DBG_NO_FOG`, `AL_DBG_NO_SKYFILL`, `AL_DBG_FLATSKY`) to
+  switch each horizon suspect off one at a time.
+- **Held light.** Carrying a torch/lantern/glowstone in the main hand or off hand
+  now illuminates nearby surfaces (a warm, distance-attenuated point light around
+  the camera driven by `heldBlockLightValue`).
+- **God rays are back and adjustable.** Re-enabled with a **stable** per-pixel
+  dither (no more frame-to-frame flicker — that was the "jittery screen" issue)
+  and more taps (no hard radial lines). New **God Rays** toggle + **God Ray
+  Strength** slider in the Post screen.
+
+### Fixed
+
+- **Contact-shadow grain on distant terrain.** Contact shadows now fade out past
+  ~22 blocks (the screen-space march went coarse and grainy far away).
+
+### Known / investigating
+
+- **Other dimensions show the overworld sky/horizon.** The pack has no per-
+  dimension shaders yet (no `worldN` folders), so the overworld atmosphere LUT is
+  drawn in the Nether/End. This is the same over-bright atmosphere horizon band
+  suspected in the overworld "horizon in front of terrain" report — use Debug View
+  11 to confirm. Proper per-dimension skies require the world-folder migration.
+
 ## [0.4.4] - 2026-07-23
 
 Second field-fix wave from screenshot review — AA, lighting punch, fog/void,

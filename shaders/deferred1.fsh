@@ -51,6 +51,12 @@ uniform sampler2D depthtex0;
 uniform vec3 sunPosition;          // view space
 uniform vec3 shadowLightPosition;  // view space, toward dominant light
 
+// Held-item light emission (Iris): the light value 0..15 of the item in the main
+// hand / off hand. Drives the held point light so a carried torch illuminates the
+// surroundings. Declared nowhere else here -> collision-free.
+uniform int heldBlockLightValue;
+uniform int heldBlockLightValue2;
+
 in vec2 texcoord;
 
 /* RENDERTARGETS: 0 */
@@ -122,10 +128,17 @@ void main() {
     // shadow map is too coarse to resolve. Hand exempt (its near projection makes
     // view reconstruction here invalid), same as the shadow-map path.
 #ifdef CONTACT_SHADOWS
+    // Distance-faded (0.4.4b): the screen-space march becomes coarse far away and
+    // its dithered taps read as GRAIN / false distant shadows, so fade it out past
+    // AL_CONTACT_MAX_DIST — contact shadows only matter for near contact detail.
     if (matID != AL_MATID_HAND && NdotL > 0.0) {
-        vec3  viewLightDir = normalize(shadowLightPosition);
-        float dither = texture(noisetex, gl_FragCoord.xy / 256.0).x;
-        shadowVis *= alContactShadow(depthtex0, viewPos, viewLightDir, dither);
+        float csFade = alSaturate(1.0 - length(viewPos) / AL_CONTACT_MAX_DIST);
+        if (csFade > 0.0) {
+            vec3  viewLightDir = normalize(shadowLightPosition);
+            float dither = texture(noisetex, gl_FragCoord.xy / 256.0).x;
+            float cs = alContactShadow(depthtex0, viewPos, viewLightDir, dither);
+            shadowVis *= mix(1.0, cs, csFade);
+        }
     }
 #endif
 
@@ -156,6 +169,20 @@ void main() {
     // drops) stops glowing.
     if (matID == AL_MATID_EMISSIVE) {
         color += albedoLin * (AL_EMISSIVE_STRENGTH * (0.35 + 0.65 * lm.x));
+    }
+
+    // Held light: a warm point light around the camera from the held item's light
+    // value, so carrying a torch/lantern/glowstone actually illuminates nearby
+    // surfaces (main hand OR off hand). Distance-attenuated, facing-weighted, and
+    // unshadowed (a local carried light). playerPos is camera-relative here.
+    float heldLevel = float(max(heldBlockLightValue, heldBlockLightValue2)) / 15.0;
+    if (heldLevel > 0.0) {
+        float reach = mix(3.0, 15.0, heldLevel);
+        float atten = alSaturate(1.0 - length(playerPos) / reach);
+        atten *= atten;
+        vec3  toCam = normalize(-playerPos);
+        float facing = max(dot(N, toCam), 0.0) * 0.75 + 0.25;
+        color += albedoLin * (AL_TORCH_TINT * (heldLevel * atten * facing * AL_HELD_LIGHT));
     }
 
     outColor = vec4(color, 1.0);

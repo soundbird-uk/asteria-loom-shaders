@@ -93,6 +93,12 @@
 // colour and blooms a coloured halo. HDR — AgX rolls it off, bloom spreads it.
 #define AL_EMISSIVE_STRENGTH  4.5
 
+// Held-light strength (0.4.4b — "a torch in offhand doesn't illuminate stuff").
+// A warm point light around the CAMERA driven by the held item's light value
+// (heldBlockLightValue / _2), so carrying a torch/lantern/glowstone lights the
+// nearby surroundings. deferred1 adds it, distance-attenuated and facing-weighted.
+#define AL_HELD_LIGHT 1.6
+
 // Night brightness — how readable open terrain stays after dark. Master
 // multiplier on the whole NIGHT ambient (both the cool sky fill's night lift and
 // the cool-blue floor); noon is never affected. Default 1.0 = the intended dark,
@@ -249,6 +255,11 @@ const float shadowDistance = 128.0; // [64.0 96.0 128.0 192.0 256.0]
 #define AL_CONTACT_LENGTH 0.75     // total march length, world metres
 #define AL_CONTACT_THICKNESS 0.50  // max occluder thickness (view-space metres)
 #define AL_CONTACT_BIAS 0.02       // ignore hits within this of the start
+// 0.4.4b FIELD FIX ("contact shadows make grainy false shadows on DISTANT
+// terrain"): the fixed-world-length screen-space march becomes many pixels wide
+// far away, so its dithered taps read as grain. Fade contact shadows out by this
+// camera distance (blocks) — they only matter for near contact detail anyway.
+#define AL_CONTACT_MAX_DIST 22.0
 
 
 /* =========================================================================
@@ -509,22 +520,23 @@ const float sunPathRotation = -35.0;
 // it off genuinely skips the pass (colortex0 passes straight through to final).
 #define AERIAL_FOG // [AERIAL_FOG]
 
-// --- Sun shafts / god rays (internal, not GUI — composite2.fsh, ISSUE 12) ---
-// Screen-space light scattering: from each pixel a short march toward the sun's
-// screen position accumulates UNOCCLUDED (sky / gap) samples, so warm shafts fan
-// out through gaps in leaves and around terrain silhouettes toward the sun. It is
-// gated to near-zero cost when the sun is behind the camera / below the horizon /
-// off-screen, and its strength rises at LOW sun and in HAZY weather (per the
-// brief). Additive in HDR (AgX rolls it off) and bounded so it never washes the
-// whole screen. Comment out AL_GOD_RAYS to compile it away entirely.
-// 0.4.4: DISABLED by default — the low-tap screen-space march drew hard radial
-// LINES across the screen when looking near the sun (under-sampled shafts). Left
-// here (commented) until it can be reworked with a proper blurred/high-tap march;
-// re-enable by uncommenting the next line.
-//#define AL_GOD_RAYS
-#define AL_GODRAY_SAMPLES   24     // march taps toward the sun (perf vs smoothness)
-#define AL_GODRAY_DECAY     0.94   // per-step weight decay (concentrates near sun)
-#define AL_GODRAY_INTENSITY 0.55   // master strength of the additive shafts
+// Sun shafts / god rays (GUI — composite2.fsh). Screen-space light scattering:
+// from each pixel a march toward the sun's screen position accumulates UNOCCLUDED
+// (sky / gap) samples, so warm shafts fan out through gaps in leaves and around
+// terrain silhouettes toward the sun. Gated to near-zero cost when the sun is
+// behind the camera / below the horizon / off-screen; stronger at low sun and in
+// haze. 0.4.4b: STABLE spatial dither (no temporal flicker — was the "jittery"
+// screen artifact) + more taps so it no longer draws hard radial lines. Additive
+// in HDR (AgX rolls it off); GODRAY_STRENGTH scales it.
+#define GOD_RAYS // [GOD_RAYS]
+
+// God-ray strength (GUI slider). 0 = off, 1.0 = tuned default, higher = stronger.
+#define GODRAY_STRENGTH 1.0 // [0.00 0.25 0.50 0.75 1.00 1.50 2.00 3.00]
+
+// --- God-ray shaping (internal, not GUI) ----------------------------------
+#define AL_GODRAY_SAMPLES   40     // march taps toward the sun (more = smoother)
+#define AL_GODRAY_DECAY     0.96   // per-step weight decay (concentrates near sun)
+#define AL_GODRAY_INTENSITY 0.42   // base strength (GODRAY_STRENGTH multiplies this)
 #define AL_GODRAY_LOWSUN    2.2    // extra multiplier as the sun nears the horizon
 #define AL_GODRAY_RAINBOOST 1.6    // extra multiplier in rain/haze
 
@@ -825,7 +837,34 @@ const vec3 AL_UW_SNOW_TINT  = vec3(0.82, 0.86, 0.94);
 // Probes 7/8 bypass ALL grading + the fog/cloud composite passes so they show
 // exactly what deferred1 wrote — a decisive check that the opaque shading pass
 // (not a later fullscreen pass) is producing correct per-pixel output.
-#define DEBUG_VIEW 0 // [0 1 2 3 4 5 6 7 8]
+//
+// HORIZON-DIAGNOSIS views (0.4.4b — computed in composite2, shown raw):
+//   9  SKY MASK        — white = sky pixels (depthtex0 == 1), black = terrain.
+//                        Shows EXACTLY where the sky is drawn vs where terrain
+//                        occludes it. If a "horizon band" shows over BLACK
+//                        (terrain) here, the band is being painted onto terrain.
+//   10 FOG AMOUNT      — greyscale fogF (0 clear .. 1 fully fogged) on terrain.
+//                        Shows whether fog is what brightens the far field.
+//   11 RAW SKY (LUT)   — the atmosphere sky sample along each pixel's view ray,
+//                        for the WHOLE screen (ignores depth). Shows the bright
+//                        horizon BAND the sky itself produces (the suspected
+//                        cause, and why other dimensions show the overworld sky).
+#define DEBUG_VIEW 0 // [0 1 2 3 4 5 6 7 8 9 10 11]
+
+/* =========================================================================
+   HORIZON DIAGNOSIS TOGGLES (internal, not GUI — edit + hot-reload)
+   -------------------------------------------------------------------------
+   Flip these ONE AT A TIME (uncomment) to bisect the "horizon visible through /
+   in front of terrain" artifact. Each isolates a single suspect; whichever one
+   makes the band disappear identifies the cause.
+   ========================================================================= */
+// composite2: skip aerial fog entirely (is the fog painting the band?).
+//#define AL_DBG_NO_FOG
+// gbuffers_skybasic: skip the below-horizon haze fill (is the fill the band?).
+//#define AL_DBG_NO_SKYFILL
+// gbuffers_skybasic: output a FLAT dark grey sky (is the atmosphere sky itself
+// the bright horizon band? if the band vanishes with a flat sky, it is the LUT).
+//#define AL_DBG_FLATSKY
 
 
 /* =========================================================================

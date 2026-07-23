@@ -115,11 +115,13 @@ in vec2 texcoord;
 /* RENDERTARGETS: 0 */
 layout(location = 0) out vec4 outColor;   // -> colortex0 (fogged scene)
 
-#ifdef AL_GOD_RAYS
+#ifdef GOD_RAYS
 // Screen-space sun shafts (ISSUE 12). March from this pixel toward the sun's
 // screen position, accumulating UNOCCLUDED (sky / gap) samples with a decaying
 // weight. Returns a normalised [0,1] shaft amount; the caller tints + gates it.
-// Reuses depthtex0 (no extra sampler). Dithered start kills banding.
+// Reuses depthtex0 (no extra sampler). The start offset uses a STABLE per-pixel
+// dither (interleaved gradient noise — NO time term) so the shafts don't flicker
+// frame-to-frame (that temporal jitter was the "affects my screen" artifact).
 float alGodRayAmount(vec2 uv, vec2 sunUV, float dither) {
     vec2  delta = (sunUV - uv) / float(AL_GODRAY_SAMPLES);
     vec2  p     = uv + delta * dither;
@@ -141,10 +143,34 @@ void main() {
     vec3  scene = texture(colortex0, texcoord).rgb;
     float depth = texture(depthtex0, texcoord).r;
 
-#if DEBUG_VIEW != 0
-    // Debug views inspect earlier buffers / the deferred1 probes — never fog the
-    // probe output. Pass colortex0 straight through so DEBUG_VIEW 7/8 (and any
-    // grading debug) see exactly what the upstream pass wrote.
+#if DEBUG_VIEW == 9
+    // SKY MASK: white = sky (depth==1), black = terrain. Reveals exactly where the
+    // sky is drawn vs where terrain occludes it (is a "band" over terrain?).
+    outColor = vec4(vec3(depth >= 1.0 ? 1.0 : 0.0), 1.0);
+    return;
+#elif DEBUG_VIEW == 10
+    // FOG AMOUNT: greyscale fogF on terrain (sky shown blue). How much the far
+    // field is fogged.
+    if (depth >= 1.0) { outColor = vec4(0.0, 0.0, 0.5, 1.0); return; }
+    vec3  vpD = alScreenToView(texcoord, depth);
+    vec3  ppD = alViewToPlayer(vpD);
+    float ddD = length(ppD);
+    vec3  wdD = (ddD > 1.0e-4) ? ppD / ddD : vec3(0.0, 1.0, 0.0);
+    float sgD = smoothstep(AL_FOG_SKY_GATE_LO, AL_FOG_SKY_GATE_HI,
+                           alSaturate(texture(colortex2, texcoord).a));
+    float b0D = AL_FOG_SEA_DENSITY * max(FOG_DENSITY, 0.0) * sgD;
+    float fogFD = 1.0 - exp(-alFogOpticalDepth(cameraPosition.y, wdD, ddD, b0D));
+    outColor = vec4(vec3(fogFD), 1.0);
+    return;
+#elif DEBUG_VIEW == 11
+    // RAW SKY (LUT): the atmosphere sky along each pixel's view ray for the WHOLE
+    // screen (ignores depth). Shows the bright horizon BAND the sky itself makes.
+    vec3 vdirD = normalize(alViewDirToWorld(alScreenToView(texcoord, 1.0)));
+    outColor = vec4(alFogSkyInscatter(vdirD), 1.0);
+    return;
+#elif DEBUG_VIEW != 0
+    // Other debug views inspect earlier buffers / the deferred1 probes — never fog
+    // them. Pass colortex0 straight through.
     outColor = vec4(scene, 1.0);
     return;
 #endif
@@ -226,18 +252,22 @@ void main() {
     // World-space sun direction for the time-of-day scene tone / night factor.
     vec3 worldSunDir = normalize(alViewDirToWorld(sunPosition));
 
+#ifdef AL_DBG_NO_FOG
+    vec3 fogged = scene;   // DIAGNOSTIC: aerial fog disabled
+#else
     vec3 fogged = alApplyAerialFog(scene, cameraPosition.y, worldDir, dist,
                                    FOG_DENSITY, skyLm, far, worldSunDir,
                                    biome_category, temperature, rainfall,
                                    rainStrength, wetness, thunderStrength);
+#endif
 
-#ifdef AL_GOD_RAYS
+#ifdef GOD_RAYS
     // --- Sun shafts / god rays (ISSUE 12) ---------------------------------
     // Additive warm shafts fanning from the sun through gaps in leaves/terrain.
     // Heavily gated so it costs ~nothing and never washes the screen: only when
     // the sun is in front of the camera, above the horizon, on/near screen, and
     // the view points roughly toward it; strongest at low sun and in haze.
-    {
+    if (GODRAY_STRENGTH > 0.0) {
         vec4 sc = gbufferProjection * vec4(sunPosition, 1.0);
         if (sc.w > 0.0 && worldSunDir.y > -0.02) {
             vec2  sunUV   = sc.xy / sc.w * 0.5 + 0.5;
@@ -251,11 +281,13 @@ void main() {
             float facing  = alSaturate(dot(worldDir, worldSunDir));
             float gate    = dayUp * onScr * lowSun * haze * (0.25 + 0.75 * facing);
             if (gate > 0.001) {
-                float dither = fract(frameTimeCounter * 61.8
-                                   + dot(gl_FragCoord.xy, vec2(0.0071, 0.0113)));
-                float shaft  = alGodRayAmount(texcoord, sunUV, dither);
+                // STABLE interleaved-gradient-noise dither (no time term) so the
+                // shafts are steady, not jittery, frame-to-frame.
+                float ign = fract(52.9829189 * fract(dot(gl_FragCoord.xy,
+                                  vec2(0.06711056, 0.00583715))));
+                float shaft = alGodRayAmount(texcoord, sunUV, ign);
                 fogged += alDirectColor(worldSunDir)
-                        * (shaft * AL_GODRAY_INTENSITY * gate);
+                        * (shaft * AL_GODRAY_INTENSITY * GODRAY_STRENGTH * gate);
             }
         }
     }

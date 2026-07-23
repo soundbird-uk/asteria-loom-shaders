@@ -160,11 +160,10 @@ void main() {
     float ao = texture(colortex4, texcoord).r;
     fragColor = vec4(vec3(ao), 1.0);
     return;
-#elif DEBUG_VIEW == 7 || DEBUG_VIEW == 8
-    // Pipeline probes A/B: show exactly what deferred1 wrote into colortex0 (the
-    // fog/cloud composite passes are made passthrough in debug), with NO exposure
-    // or tonemap so the raw probe values read true. Probe A = red(x)/green(y)/
-    // depth(b) gradient; probe B = green geometry / red sky.
+#elif DEBUG_VIEW == 7 || DEBUG_VIEW == 8 || DEBUG_VIEW == 9 || DEBUG_VIEW == 10 || DEBUG_VIEW == 11
+    // Pipeline probes A/B (7/8) and the horizon-diagnosis views (9/10/11, written
+    // by composite2): show colortex0 exactly as the upstream pass wrote it, with
+    // NO exposure/tonemap/grade so the raw diagnostic values read true.
     fragColor = vec4(texture(colortex0, texcoord).rgb, 1.0);
     return;
 #else
