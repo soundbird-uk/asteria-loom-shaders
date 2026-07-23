@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.7] - 2026-07-23
+
+### Fixed
+
+- **The horizon band on terrain — actual root cause.** Aerial fog sampled the sky
+  *in the view direction* for its in-scatter; looking at distant terrain the view
+  direction is the horizon (dir.y≈0, the bright band), so the fog reproduced that
+  band **on the terrain** (softening the sky couldn't fix it — the fog was
+  independently re-drawing it). The fog tone is now **direction-independent**: a
+  uniform, dark, time-of-day haze (like vanilla fog). Distant terrain fades to a
+  flat hazy silhouette; the bright horizon lives only in the sky, which terrain
+  masks — exactly the "same rules as the sky" behavior requested.
+
+### Added
+
+- **Underwater god rays.** When submerged, sun shafts now descend through the
+  water surface (a luminance-based screen-space march with a cool watery tint),
+  scaled by the same God Ray Strength slider.
+
 ## [0.4.6] - 2026-07-23
 
 ### Fixed

@@ -137,6 +137,48 @@ float alGodRayAmount(vec2 uv, vec2 sunUV, float dither) {
                / max(1.0 - AL_GODRAY_DECAY, 1e-4);
     return accum / max(wsum, 1e-4);
 }
+
+// LUMINANCE-based variant for UNDERWATER: there the light source is the bright
+// water surface / sky seen through it (not depth==1 sky), so accumulate BRIGHT
+// scene samples toward the sun -> visible shafts descending through the surface.
+float alGodRayLum(vec2 uv, vec2 sunUV, float dither) {
+    vec2  delta = (sunUV - uv) / float(AL_GODRAY_SAMPLES);
+    vec2  p     = uv + delta * dither;
+    float w     = 1.0;
+    float accum = 0.0;
+    for (int i = 0; i < AL_GODRAY_SAMPLES; i++) {
+        vec3  c = texture(colortex0, clamp(p, vec2(0.0015), vec2(0.9985))).rgb;
+        accum += alSaturate((alLuminance(c) - 0.35) / 0.9) * w;   // bright = light
+        w     *= AL_GODRAY_DECAY;
+        p     += delta;
+    }
+    float wsum = (1.0 - pow(AL_GODRAY_DECAY, float(AL_GODRAY_SAMPLES)))
+               / max(1.0 - AL_GODRAY_DECAY, 1e-4);
+    return accum / max(wsum, 1e-4);
+}
+
+// Shared gate: sun in front of camera, above horizon, on/near screen, view roughly
+// toward it. Returns 0 (no shafts) or the gate weight, and the sun screen UV.
+float alGodRayGate(vec3 worldDir, vec3 worldSunDir, out vec2 sunUV) {
+    sunUV = vec2(-1.0);
+    if (GODRAY_STRENGTH <= 0.0) return 0.0;
+    vec4 sc = gbufferProjection * vec4(sunPosition, 1.0);
+    if (!(sc.w > 0.0) || worldSunDir.y <= -0.02) return 0.0;
+    sunUV = sc.xy / sc.w * 0.5 + 0.5;
+    float dayUp  = smoothstep(-0.02, 0.12, worldSunDir.y);
+    float lowSun = mix(1.0, AL_GODRAY_LOWSUN, 1.0 - smoothstep(0.04, 0.35, worldSunDir.y));
+    float hazeM  = mix(1.0, AL_GODRAY_RAINBOOST, alSaturate(rainStrength));
+    vec2  q      = alSaturate((sunUV + 0.35) / 1.70);
+    float onScr  = alSaturate(16.0 * q.x * (1.0 - q.x) * q.y * (1.0 - q.y));
+    float facing = alSaturate(dot(worldDir, worldSunDir));
+    return dayUp * onScr * lowSun * hazeM * (0.25 + 0.75 * facing);
+}
+
+// Stable interleaved-gradient-noise dither (no time term -> no flicker).
+float alGodRayDither() {
+    return fract(52.9829189 * fract(dot(gl_FragCoord.xy,
+                 vec2(0.06711056, 0.00583715))));
+}
 #endif
 
 void main() {
@@ -211,6 +253,26 @@ void main() {
         float haze = alSaturate(1.0 - exp(-max(density, 0.0) * d));
         vec3  outc = mix(s, tint, haze);
 
+#ifdef GOD_RAYS
+        // UNDERWATER sun shafts: beams descending through the water surface from
+        // the sun. Uses the LUMINANCE-based march (the bright surface/sky above is
+        // the light source, not depth==1) and a cool watery tint. Only in water.
+        if (isEyeInWater == 1) {
+            vec3  wSunDir = normalize(alViewDirToWorld(sunPosition));
+            vec3  wViewDir = normalize(alViewDirToWorld(alScreenToView(texcoord, 1.0)));
+            vec2  sunUV;
+            float gate = alGodRayGate(wViewDir, wSunDir, sunUV);
+            if (gate > 0.001) {
+                float shaft = alGodRayLum(texcoord, sunUV, alGodRayDither());
+                // Cool, watery shaft colour; a touch stronger than in air since
+                // water makes the beams much more visible.
+                vec3  beam  = mix(alDirectColor(wSunDir), vec3(0.35, 0.6, 0.7),
+                                  0.5) * 1.4;
+                outc += beam * (shaft * AL_GODRAY_INTENSITY * GODRAY_STRENGTH * gate);
+            }
+        }
+#endif
+
         bool okU = all(greaterThanEqual(outc, vec3(0.0)));
         outColor = vec4(okU ? outc : s, 1.0);
         return;
@@ -262,33 +324,17 @@ void main() {
 #endif
 
 #ifdef GOD_RAYS
-    // --- Sun shafts / god rays (ISSUE 12) ---------------------------------
-    // Additive warm shafts fanning from the sun through gaps in leaves/terrain.
-    // Heavily gated so it costs ~nothing and never washes the screen: only when
-    // the sun is in front of the camera, above the horizon, on/near screen, and
-    // the view points roughly toward it; strongest at low sun and in haze.
-    if (GODRAY_STRENGTH > 0.0) {
-        vec4 sc = gbufferProjection * vec4(sunPosition, 1.0);
-        if (sc.w > 0.0 && worldSunDir.y > -0.02) {
-            vec2  sunUV   = sc.xy / sc.w * 0.5 + 0.5;
-            float dayUp   = smoothstep(-0.02, 0.12, worldSunDir.y);
-            float lowSun  = mix(1.0, AL_GODRAY_LOWSUN,
-                                1.0 - smoothstep(0.04, 0.35, worldSunDir.y));
-            float haze    = mix(1.0, AL_GODRAY_RAINBOOST, alSaturate(rainStrength));
-            // Soft on-screen window (a little off-screen still contributes edge rays).
-            vec2  q       = alSaturate((sunUV + 0.35) / 1.70);
-            float onScr   = alSaturate(16.0 * q.x * (1.0 - q.x) * q.y * (1.0 - q.y));
-            float facing  = alSaturate(dot(worldDir, worldSunDir));
-            float gate    = dayUp * onScr * lowSun * haze * (0.25 + 0.75 * facing);
-            if (gate > 0.001) {
-                // STABLE interleaved-gradient-noise dither (no time term) so the
-                // shafts are steady, not jittery, frame-to-frame.
-                float ign = fract(52.9829189 * fract(dot(gl_FragCoord.xy,
-                                  vec2(0.06711056, 0.00583715))));
-                float shaft = alGodRayAmount(texcoord, sunUV, ign);
-                fogged += alDirectColor(worldSunDir)
-                        * (shaft * AL_GODRAY_INTENSITY * GODRAY_STRENGTH * gate);
-            }
+    // --- Sun shafts / god rays (ISSUE 12) — above water -------------------
+    // Additive warm shafts fanning from the sun through gaps in leaves/terrain,
+    // heavily gated (see alGodRayGate) so it never washes the screen, and stable
+    // (spatial dither) so it never flickers.
+    {
+        vec2  sunUV;
+        float gate = alGodRayGate(worldDir, worldSunDir, sunUV);
+        if (gate > 0.001) {
+            float shaft = alGodRayAmount(texcoord, sunUV, alGodRayDither());
+            fogged += alDirectColor(worldSunDir)
+                    * (shaft * AL_GODRAY_INTENSITY * GODRAY_STRENGTH * gate);
         }
     }
 #endif

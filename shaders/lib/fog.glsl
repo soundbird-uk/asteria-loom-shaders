@@ -416,10 +416,6 @@ vec3 alApplyAerialFog(vec3 sceneColor, float camY, vec3 worldDir, float dist,
     float ext   = exp(-tau);                 // 1 = clear, 0 = fully fogged
     float fogF  = 1.0 - ext;                 // how fogged this pixel is (0..1)
 
-    // Single NaN-safe sky read, reused for the in-scatter tone AND the far-fade
-    // target (one colortex6 read).
-    vec3 sky = alFogSkyInscatter(worldDir);
-
     // --- Time-of-day factors ---------------------------------------------
     // SOURCE OF TRUTH: lib/lighting.glsl `alDayFactor` (the pack's canonical
     // day/night ramp). fog.glsl does not include lighting.glsl, so the exact
@@ -429,48 +425,29 @@ vec3 alApplyAerialFog(vec3 sceneColor, float camY, vec3 worldDir, float dist,
     float dayF   = alSmooth(smoothstep(-0.06, 0.16, worldSunDir.y));
     float nightF = 1.0 - dayF;
 
-    // --- RE-TONE the in-scatter (ISSUE 2: darker, scene-coloured) ---------
-    // Move the bright sky toward a muted SCENE tone: analytic hemisphere ambient
-    // (cool blue-purple day / mauve dusk / cool moon night) mixed with a
-    // luminance cut of the sky, then dimmed. Fog reads as depth, not white glow.
-    float skyLum   = alLuminance(sky);
-    vec3  sceneTone = mix(alAmbientColor(worldSunDir), vec3(skyLum), AL_FOG_TONE_LUMCUT)
-                    * AL_FOG_TONE_DIM;
-    vec3  fogColor  = mix(sky, sceneTone, AL_FOG_TONE_MIX);
+    // --- DIRECTION-INDEPENDENT HAZE (0.4.6b — THE real horizon fix) --------
+    // ROOT CAUSE (confirmed via the debug views): aerial fog used to sample the sky
+    // IN THE VIEW DIRECTION for its in-scatter. Looking at distant terrain the view
+    // direction IS the horizon (dir.y ~ 0) — the bright horizon band — so the fog
+    // reproduced that band ON the terrain. Softening the sky could never fix it
+    // because the fog was independently re-drawing the band. The bright horizon
+    // must live ONLY in the actual sky (which terrain masks), so the fog tone is now
+    // DIRECTION-INDEPENDENT: a uniform, dark, time-of-day haze (analytic hemisphere
+    // ambient, dimmed — like vanilla fog) + a dim cool night floor. Distant terrain
+    // now fades to a flat hazy SILHOUETTE; no horizon band is ever painted on it, at
+    // any view angle. `worldDir`/`farDist`/`skyGate` stay in the signature but no
+    // longer steer the tone (skyGate still gates DENSITY above).
+    vec3 haze = alAmbientColor(worldSunDir) * AL_FOG_TONE_DIM;          // uniform, TOD
+    haze += AL_MOON_TINT * (AL_FOG_NIGHT_LEVEL * nightF);              // night floor
+    haze *= scatterTint * darken;                                     // biome/weather
+    haze = mix(haze, vec3(alLuminance(haze)), alSaturate(desat));      // rain desat
 
-    // Night floor (ISSUE 3): a dim cool moon-tinted haze so distance still reads
-    // as depth after dark (sky sample is ~black at night). Auto-gated by ext via
-    // the (1-ext) weight below (no night fog in caves).
-    fogColor += AL_MOON_TINT * (AL_FOG_NIGHT_LEVEL * nightF);
+    // ISSUE 14: crush + cool the haze at night so fogged distance darkens into
+    // moonlit silhouettes, not pale mist. mix(...,1.0,dayF) leaves noon untouched.
+    vec3 nightHaze = mix(vec3(0.60, 0.70, 1.00), vec3(1.0), dayF)
+                   * mix(AL_FOG_NIGHT_DIM, 1.0, dayF);
 
-    // Biome tint + thunder darkening on the re-toned colour.
-    fogColor *= scatterTint * darken;
-
-    // Ground-ward softening (ISSUE 1b / old BUG A): compress any residual >1 for
-    // rays at/below the horizon (toward-sun haze) + gentle desaturation, so haze
-    // never reads as a bright layer painted in front of terrain. This is the
-    // MID-DISTANCE fog colour ("fogTone") — dark, scene-referenced.
-    float groundy = 1.0 - smoothstep(AL_FOG_GROUND_LO, AL_FOG_GROUND_HI, worldDir.y);
-    vec3  fogTone = alFogSoftKnee(fogColor, groundy);
-    float totalDesat = alSaturate(desat + AL_FOG_HORIZON_DESAT * groundy);
-    fogTone = mix(fogTone, vec3(alLuminance(fogTone)), totalDesat);
-
-    // ISSUE 14 ("night distance too white/grey"): crush + cool the in-scatter at
-    // night so fogged distance darkens into moonlit silhouettes, not pale mist.
-    // mix(...,1.0,dayF) makes noon provably untouched.
-    vec3  nightHaze = mix(vec3(0.60, 0.70, 1.00), vec3(1.0), dayF)   // cool by night
-                    * mix(AL_FOG_NIGHT_DIM, 1.0, dayF);              // dim by night
-
-    // --- PURE AERIAL PERSPECTIVE (0.4.4 — kill the "horizon in front of terrain")
-    // The false horizon LINE painted across terrain was the old convergence-to-sky
-    // + edge-insurance strip: both blended the raw BRIGHT sky ONTO terrain pixels
-    // on a distance ring, so a sky-coloured band appeared in front of the world.
-    // REMOVED. Terrain now fades ONLY toward the dark, scene-referenced haze
-    // (fogTone) — it is never overpainted with sky. The real sky is drawn behind,
-    // on depth==1 pixels (with the skybasic below-horizon void fill), so terrain
-    // correctly OCCLUDES the horizon and no band can form at any render distance.
-    // `farDist`/`skyGate` are still accepted for signature stability (unused here).
-    vec3 inscatter = fogTone * nightHaze;
+    vec3 inscatter = haze * nightHaze;
     vec3 result    = sceneColor * ext + inscatter * fogF;
 
     return max(result, vec3(0.0));
