@@ -28,6 +28,8 @@ out vec3 playerPos;
 // to interpolate. The fragment stage gates ALL water-specific behaviour on it.
 flat out float isWater;
 flat out float isNetherPortal;   // 1.0 for nether_portal (block.properties 10002)
+flat out float isEndPortal;      // 1.0 for end_portal / end_gateway (10003) — fallback
+                                 // route in case Iris draws it as a translucent
 
 void main() {
     vec4 viewPos = gl_ModelViewMatrix * gl_Vertex;
@@ -38,6 +40,7 @@ void main() {
     glcolor  = gl_Color;
     isWater        = (mc_Entity.x == 10001.0) ? 1.0 : 0.0;
     isNetherPortal = (mc_Entity.x == 10002.0) ? 1.0 : 0.0;
+    isEndPortal    = (mc_Entity.x == 10003.0) ? 1.0 : 0.0;
 
     vec3 viewN = normalize(gl_NormalMatrix * gl_Normal);
     wnormal = mat3(gbufferModelViewInverse) * viewN;

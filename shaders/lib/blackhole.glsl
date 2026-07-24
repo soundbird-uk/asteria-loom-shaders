@@ -19,10 +19,13 @@
 #include "/lib/color.glsl"
 #include "/lib/nightsky.glsl"
 
-// Dark purple End space: a smooth gradient, darker toward the zenith.
+// Purple End space: a clearly-visible smooth gradient — a richer violet along the
+// horizon fading to a deep near-black purple at the zenith. The smoothstep spans
+// the full visible dome (0.35..1.0 of the up factor, i.e. the horizon and above)
+// so the gradient reads across the whole sky rather than only in a thin band.
 vec3 alEndHaze(vec3 dir) {
     float up = alSaturate(dir.y * 0.5 + 0.5);
-    return mix(AL_END_SPACE_LOW, AL_END_SPACE_HIGH, alSmooth(smoothstep(0.10, 0.95, up)));
+    return mix(AL_END_SPACE_LOW, AL_END_SPACE_HIGH, alSmooth(smoothstep(0.35, 1.0, up)));
 }
 
 /*
@@ -47,21 +50,35 @@ float alEndWhispDensity(vec3 p, float time) {
  Raymarch the whisps from the camera along `dir`, BOUNDED by `marchDist` (the
  scene distance for terrain pixels, or the max reach for sky) so the End pillars
  and terrain correctly OCCLUDE whisps behind them — they no longer phase through.
- Pure additive glow (no extinction) for an ethereal look. `dither` offsets the
- first step to hide banding.
+
+ 5.0.8 REWORK: emission-with-absorption + self-occlusion (front-to-back), instead
+ of the old raw additive integral. The old version accumulated density*dt over the
+ whole ray so a long march blew the glow WAY past 1.0 -> clipped to white. Now each
+ step emits a soft light-purple glow that is attenuated by the transmittance
+ accumulated in FRONT of it, and the returned glow is a partition of (1 - trans),
+ so it is BOUNDED to AL_END_WHISP_COLOR * AL_END_WHISP_GLOW (< 1 => never white) and
+ thin whisps stay SEE-THROUGH (high transmittance => little glow). `dither` offsets
+ the first step to hide banding.
 */
 vec3 alEndWhispMarch(vec3 camPos, vec3 dir, float marchDist, float time, float dither) {
     marchDist = min(marchDist, AL_END_WHISP_MAXDIST);
     if (marchDist <= 1.0) return vec3(0.0);
-    const int STEPS = 14;
+    const int STEPS = 16;
     float dt = marchDist / float(STEPS);
     float t  = dt * dither;
-    float acc = 0.0;
+    float trans = 1.0;           // transmittance from the camera to the current step
+    float lit   = 0.0;           // accumulated (bounded) emission weight, <= 1
     for (int i = 0; i < STEPS; i++) {
-        acc += alEndWhispDensity(camPos + dir * t, time) * dt;
+        float d = alEndWhispDensity(camPos + dir * t, time);
+        if (d > 0.001) {
+            float a = 1.0 - exp(-d * AL_END_WHISP_DENSITY * dt);  // step opacity 0..1
+            lit   += trans * a;                                   // occluded by what's in front
+            trans *= (1.0 - a);
+            if (trans < 0.02) break;                              // fully saturated -> done
+        }
         t += dt;
     }
-    return AL_END_WHISP_COLOR * (acc * AL_END_WHISP_GLOW);
+    return AL_END_WHISP_COLOR * (lit * AL_END_WHISP_GLOW);
 }
 
 /*

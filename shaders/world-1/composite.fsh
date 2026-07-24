@@ -181,9 +181,15 @@ void main() {
     fres = min(alSaturate(fres), AL_WATER_REFLECT_MAX);
 
     // --- Reflection colour ---------------------------------------------------
+    // Sky-access gate: water with no open sky above it (caves, covered flowing
+    // water) must NOT reflect the sky — otherwise the bright horizon band shows in
+    // the water underground (field report). Fade the sky fallback to a dark cave
+    // reflection as the water's sky lightmap falls.
+    float wSkyLm  = alSaturate(texture(colortex2, texcoord).a);
+    float skyGate = smoothstep(0.0, 0.35, wSkyLm);
     vec3 Rv = reflect(I, Nv);
     vec3 Rw = normalize(alViewDirToWorld(Rv));
-    vec3 refl = alSkySample(Rw);                   // fallback (miss / SSR off)
+    vec3 refl = mix(vec3(0.015, 0.020, 0.035), alSkySample(Rw), skyGate);  // fallback
 
 #ifdef SSR
     // R2 low-discrepancy dither on the noisetex value, advanced by frameCounter.

@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (5.0.8)
+
+- **Fog now covers distant cave mouths / holes in the surface.** The sky-exposure
+  gate that keeps near caves clear now RELAXES with distance, so a cave entrance or
+  ravine seen from far away fogs like any other distant terrain instead of punching
+  an unfogged dark hole through the haze.
+- **Night far-fog matches the below-horizon sky.** The far/horizon fog colour is
+  crushed and cooled at night so it blends into the dark sky instead of reading as a
+  light grey band.
+- **Flowing / cave water no longer shows the horizon band.** The water SSR
+  sky-reflection fallback is gated by the water's own sky access, so water with no
+  open sky above it reflects a dark cave tone rather than the bright horizon.
+- **Sculk blocks emit light.** Sculk sensors, catalysts, shriekers and veins are
+  tagged emissive so their glowing bits bloom.
+- **End portal no longer renders black.** Richer nebula base + denser star
+  particles (never black), and the portal is now detected in the translucent path
+  as well as the block path so whichever route Iris uses catches it.
+- **Nether portal reads as deep, not a flat opaque sheet.** More parallax depth,
+  swirl-driven transparency (you see INTO it), glowing molten filaments, and a
+  Fresnel "reflection" sheen at grazing angles.
+- **End whisps are a soft light-purple glow, not white blobs.** The volumetric
+  march is now emission-with-absorption, bounded so it never clips to white and
+  thin whisps stay see-through.
+- **End sky gradient restored** — a clearly-visible richer violet horizon fading to
+  a deep near-black purple zenith.
+
 ### Added
 
 - **Dimensions (Phase 5).** World-folder split (`world0`/`world-1`/`world1`).

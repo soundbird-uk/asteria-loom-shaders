@@ -122,6 +122,16 @@
 #define AL_FOG_SKY_GATE_LO 0.00
 #define AL_FOG_SKY_GATE_HI 0.30
 
+// 5.0.8 DISTANCE-RELAXED GATE ("no fog when looking deep into distant caves").
+// The sky gate keeps NEAR caves/interiors clear (you can see into a cave right in
+// front of you), but a cave mouth / hole in the surface seen from FAR away must
+// fog like any other distant terrain — otherwise it punches an unfogged dark hole
+// through the haze. So the gate is forced open with distance: fully gated up to
+// RELAX_NEAR, fully open beyond RELAX_FAR (absolute blocks, render-distance
+// independent). This does NOT fill nearby caves — only distant low-sky pixels.
+#define AL_FOG_GATE_RELAX_NEAR 42.0
+#define AL_FOG_GATE_RELAX_FAR  120.0
+
 // --- Ground-haze in-scatter softening (BUG A: sunrise/sunset white-out) ------
 // The near-horizon sky is very bright at sunrise/sunset. Because distant terrain
 // is viewed along rays AT or BELOW the horizon, its in-scatter would blow out to
@@ -412,8 +422,11 @@ vec3 alFogFarColor(vec3 worldSunDir, float rainStrength, float wetness,
     float rain = alSaturate(max(rainStrength, wetness * 0.6));
     grey = mix(grey, vec3(alLuminance(grey)), rain * 0.22);        // rain desat
     grey *= mix(1.0, 0.80, alSaturate(thunderStrength));           // thunder darken
-    vec3 nightHaze = mix(vec3(0.60, 0.70, 1.00), vec3(1.0), dayF)  // cool at night
-                   * mix(AL_FOG_NIGHT_DIM, 1.0, dayF);
+    // Cool + strongly DARKEN at night so the far fog matches the dark below-horizon
+    // sky (they share this function) and blends in — day is untouched (dayF==1).
+    // 5.0.8: night far-fog was reading as a light grey; crushed to ~0.20x.
+    vec3 nightHaze = mix(vec3(0.55, 0.64, 1.00), vec3(1.0), dayF)
+                   * mix(0.20, 1.0, dayF);
     return max(grey * nightHaze, vec3(0.0));
 }
 
@@ -458,7 +471,11 @@ vec3 alApplyAerialFog(vec3 sceneColor, float camY, vec3 worldDir, float dist,
     return max(sceneColor * (1.0 - eFogF) + eInsc * eFogF, vec3(0.0));
 #else
     // Sky-exposure gate: no open sky above -> no aerial fog (caves/interiors).
-    float skyGate = smoothstep(AL_FOG_SKY_GATE_LO, AL_FOG_SKY_GATE_HI, skyLightmap);
+    // RELAXED with distance so distant cave mouths/holes still fog (see the tunable
+    // header): near caves stay clear, far low-sky pixels fog like any terrain.
+    float skyGate   = smoothstep(AL_FOG_SKY_GATE_LO, AL_FOG_SKY_GATE_HI, skyLightmap);
+    float gateRelax = smoothstep(AL_FOG_GATE_RELAX_NEAR, AL_FOG_GATE_RELAX_FAR, dist);
+    float effGate   = max(skyGate, gateRelax);
 
     float farD = max(farDist, 16.0);
 
@@ -483,7 +500,11 @@ vec3 alApplyAerialFog(vec3 sceneColor, float camY, vec3 worldDir, float dist,
     float wall = smoothstep(farD - AL_FOG_EDGE_CHUNKS * 16.0, farD - 8.0, dist);
     float edge = clamp(max(mid, wall), 0.0, 1.0);
 
-    float fogF = max(baseFog, edge) * skyGate;
+    // The NEAR base haze is sky-gated (caves/interiors stay clear), but the FAR
+    // patchy+wall fog is NOT — otherwise a distant cave mouth / hole in the surface
+    // (low sky lightmap) punches an unfogged dark hole through the far fog. At the
+    // render edge everything must drown in fog regardless of sky access.
+    float fogF = max(baseFog * effGate, edge);
 
     // --- Time-of-day factors ---------------------------------------------
     // SOURCE OF TRUTH: lib/lighting.glsl `alDayFactor` (the pack's canonical

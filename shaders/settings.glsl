@@ -1027,10 +1027,12 @@ const vec3 AL_END_AMBIENT = vec3(0.12, 0.075, 0.20);  // low purple fill (moody,
 const vec3 AL_END_FOG     = vec3(0.13, 0.05, 0.24);   // deep purple in-scatter
 #define AL_END_FOG_HALF 150.0
 
-// End procedural space backdrop — a dark purple gradient. LOW = near horizon,
-// HIGH = zenith (darker overall).
-const vec3 AL_END_SPACE_LOW  = vec3(0.09, 0.030, 0.17);
-const vec3 AL_END_SPACE_HIGH = vec3(0.03, 0.012, 0.075);
+// End procedural space backdrop — a purple gradient. LOW = near horizon (a
+// richer, clearly-visible violet), HIGH = zenith (deep near-black purple). The
+// contrast between the two is deliberately wide so the gradient READS as a
+// gradient (5.0.8 field: "you removed the gradient from the End skybox").
+const vec3 AL_END_SPACE_LOW  = vec3(0.155, 0.055, 0.290);
+const vec3 AL_END_SPACE_HIGH = vec3(0.022, 0.007, 0.060);
 
 // End VOLUMETRIC WHISPS (lib/blackhole.glsl + world1/composite2). Glowing violet
 // whisps that live in 3D world space (NOT the skybox) — sparse vertical columns
@@ -1040,8 +1042,15 @@ const vec3 AL_END_SPACE_HIGH = vec3(0.03, 0.012, 0.075);
 #define AL_END_WHISP_SCALE   0.030   // world-space frequency of the whisp field
 #define AL_END_WHISP_RISE    0.18    // vertical rise speed (whisps travel upward)
 #define AL_END_WHISP_MAXDIST 190.0   // how far the march reaches (blocks)
-#define AL_END_WHISP_GLOW    1.6      // emissive glow strength (HDR -> blooms)
-const vec3 AL_END_WHISP_COLOR = vec3(0.52, 0.20, 0.95);   // violet whisp glow
+// 5.0.8 FIELD ("whisps far too bright/white — should be a soft light-purple glow,
+// more see-through, casting light rather than being white"). The march now does
+// emission-absorption with self-occlusion (lib/blackhole.glsl), so the returned
+// glow is BOUNDED to AL_END_WHISP_COLOR * AL_END_WHISP_GLOW (< 1 => never clips to
+// white) and thin whisps stay see-through. GLOW is the peak brightness of a fully
+// opaque column; DENSITY is the absorption coefficient (higher = more solid/opaque).
+#define AL_END_WHISP_GLOW    0.85     // peak glow of a solid column (kept < 1: no white-out)
+#define AL_END_WHISP_DENSITY 1.15     // absorption per unit density (see-through control)
+const vec3 AL_END_WHISP_COLOR = vec3(0.62, 0.44, 0.86);   // soft light-purple glow
 // Procedural black-hole apparent size (angular radius multiplier). Small default.
 #define END_BLACKHOLE_SIZE 1.0 // [0.50 0.75 1.00 1.50 2.00]
 
