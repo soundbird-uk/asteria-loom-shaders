@@ -662,6 +662,11 @@ const float sunPathRotation = -35.0;
 #define AL_REFLECT_ICE   0.55   // glassy dielectric (Fresnel-shaped in composite)
 #define AL_REFLECT_METAL 0.90   // metal (strong at all angles, albedo-tinted)
 
+// Portals get water-like SSR reflections too (composite reflective path, gated by
+// REFLECTIVE_BLOCKS). Dielectric (metalness 0) -> Fresnel-shaped, deep reflections.
+#define AL_NETHER_PORTAL_REFLECT 0.55
+#define AL_END_PORTAL_REFLECT    0.45
+
 // --- Wave shaping (internal, not GUI) --------------------------------------
 // Reworked (0.4.2 field fix — "too uniform, one direction"): the surface is NOT
 // a single wind-aligned marching front. It is a SUPERPOSITION of

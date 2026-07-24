@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (5.0.12)
+
+- **Banners, sign text and translucent block-entity layers now render.** Added the
+  missing `gbuffers_block_translucent` program. Without it, translucent block-entity
+  draws (banner pattern layers, sign text glyphs) fell back to the opaque
+  `gbuffers_block` and were alpha-tested away — leaving a banner's plain base cloth
+  ("white banner") and no sign text. They now blend correctly, tinted by their dye
+  colour. Reverted the earlier non-standard `gbuffers_textured`→colortex0 hack in
+  favour of this correct routing.
+
+### Changed (5.0.12)
+
+- **Nether portal remastered.** A DARK, near-black violet body with remastered
+  multi-layer swirls and animated rising SPARKLE PARTICLES (a living 3D volume, not
+  a flat texture), much more see-through, plus true water-like SSR reflections added
+  via the composite reflective path.
+- **End portal remastered.** Mostly BLACK now, with beige + green particles twinkling
+  deep within across parallax layers (the Eye-of-Ender palette), plus deep water-like
+  SSR reflections.
+
 ### Changed (5.0.11)
 
 - **End whisps reworked into two ethereal layers.** A LARGE, sparse, very

@@ -36,75 +36,94 @@ float alPortFbm(vec2 p) {
 // view offset in the plane (drives the depth illusion); fres = Fresnel 0..1.
 // Returns linear HDR colour + alpha.
 //
-// 5.0.8 REWORK ("too opaque, no reflections, needs water-like tricks"): more
-// parallax DEPTH (4 layers, larger view-driven offsets => a real look INTO the
-// portal), a lower & swirl-driven ALPHA so the deep interior reads see-through
-// while the bright veins stay solid, and a stronger Fresnel-driven "reflection"
-// sheen (a specular-like violet rim at grazing angles, the water trick) plus a
-// bright inner core so the veins glow like molten light.
+// 5.0.12 REWORK ("too bright/opaque; want a DARK purple 3D particle effect, not a
+// flat set texture; reflective like water"). The body is now a DARK, near-black
+// violet driven by remastered multi-layer swirls (like the vanilla end-portal
+// swirl but nether-toned), with animated SPARKLE PARTICLES rising through parallax
+// depth layers so it reads as a living 3D volume rather than a static texture.
+// Emissive is kept low and the alpha is low (see-through); the water-like
+// REFLECTIONS are added by the composite SSR pass (colortex3.b), not baked here.
 vec4 alNetherPortal(vec2 planePos, vec2 parallax, float fres, float time) {
+    // Remastered swirl — layered parallax FBM (deeper layers drift faster).
     float swirl = 0.0;
     for (int i = 0; i < 4; i++) {
         float fi = float(i);
-        float depth = 0.18 + 0.55 * fi;                       // deeper parallax layers
+        float depth = 0.15 + 0.50 * fi;
         vec2 sc = planePos * 0.7 + parallax * depth
-                + vec2(0.03 * time, -time * (0.06 + 0.05 * fi));   // rising swirl
+                + vec2(0.02 * time, -time * (0.05 + 0.045 * fi));
         swirl += (0.6 / (fi + 1.0)) * alPortFbm(sc + fi * 3.1);
     }
-    swirl = alSaturate(swirl * 1.25);
-    // Fine bright filaments threading through the swirl (molten veins).
-    float veins = alSaturate(pow(swirl, 3.0) * 1.6);
+    swirl = alSaturate(swirl * 1.2);
 
-    // 5.0.10 ("not see-through, not pretty like water"): a DEEP dark-violet body
-    // (low emissive so it no longer reads as a flat glowing sheet), with only the
-    // veins genuinely glowing, and a LOW base alpha so you look INTO the depth like
-    // water — the veins/edges stay solid. The Fresnel sheen is the grazing
-    // "reflection" (water trick).
-    vec3 deep   = vec3(0.05, 0.012, 0.16);                    // very dark violet depth
-    vec3 mids   = vec3(0.38, 0.11, 0.70);
-    vec3 bright = vec3(0.85, 0.48, 1.00);
-    vec3 col = mix(deep, mids, swirl * swirl);                // deep body, NOT overbright
-    col += bright * (veins * 0.9);                            // glowing molten filaments
-    // Fresnel "reflection" sheen — a grazing-angle violet specular (water trick),
-    // moderate so the swirl still reads through it.
+    // DARK violet body — near-black in the deep, a muted violet in the swirl peaks.
+    vec3 deep = vec3(0.015, 0.004, 0.055);                    // near-black violet
+    vec3 mid  = vec3(0.170, 0.050, 0.360);                    // muted violet
+    vec3 col  = mix(deep, mid, swirl * swirl);
+
+    // 3D SPARKLE PARTICLES — sparse points rising through parallax depth layers,
+    // twinkling; the "particle effect" that replaces a flat texture look.
+    for (int i = 0; i < 3; i++) {
+        float fi = float(i);
+        float dp = 0.30 + 0.70 * fi;
+        vec2 sc = planePos * (3.2 + fi * 2.1) + parallax * dp
+                + vec2(0.0, -time * (0.14 + 0.10 * fi));      // rising
+        vec2 cell = floor(sc);
+        float h = alPortHash(cell + fi * 11.0);
+        if (h > 0.90) {
+            vec2  f = fract(sc) - 0.5;
+            float d = 1.0 - alSaturate(length(f) * 2.6);
+            float tw = 0.5 + 0.5 * sin(time * (1.0 + h * 4.0) + h * 30.0);
+            col += vec3(0.52, 0.26, 0.92) * (d * d * tw * 0.55);  // violet sparkle
+        }
+    }
+
+    // Subtle grazing rim (most reflection now comes from composite SSR).
     float f = fres * fres;
-    col += vec3(0.55, 0.40, 1.00) * (f * 0.9);
-    // Alpha: SEE-THROUGH in the dark deep (look into it), solid on the veins/edges.
-    float alpha = alSaturate(mix(0.30, 0.85, max(veins, f)) + swirl * 0.08);
+    col += vec3(0.35, 0.24, 0.62) * (f * 0.45);
+    // LOW, swirl-driven alpha so you look INTO the dark depth like water; the
+    // sparkle particles and swirl peaks read a touch more solid.
+    float alpha = alSaturate(0.26 + swirl * 0.30 + f * 0.20);
     return vec4(col, alpha);
 }
 
-// Revamped End portal — a deep parallax starfield with ethereal glow. planePos =
-// coords in the portal plane; parallax offsets the deeper star layers for a real
+// Revamped End portal — MOSTLY BLACK deep space with beige + green particles at
+// depth (the Eye-of-Ender palette), in a 3D parallax effect. planePos = coords in
+// the portal plane; parallax offsets the deeper particle layers for a real
 // 3D-into-the-floor look. Returns linear HDR colour.
 //
-// 5.0.8 REWORK ("end portal is completely black; needs more particles"): a richer
-// violet base + a swirling nebula glow so it is NEVER black, MORE and denser star
-// particles across 6 parallax layers (lower threshold + brighter twinkle), and a
-// soft additive purple bloom base. Even with zero stars in view the base + nebula
-// keep it clearly a glowing deep-space portal.
+// 5.0.12 REWORK ("make it much darker, basically black in most of it, with beige
+// and green particles deep within like the eye of ender"). The base is near-black;
+// beige/green particles twinkle across parallax depth layers; the water-like deep
+// REFLECTIONS are added by the composite SSR pass (colortex3.b), not baked here.
 vec3 alEndPortal(vec2 planePos, vec2 parallax, float time) {
-    // Swirling violet nebula base (guarantees it is never black, adds depth).
-    vec2  nb  = planePos * 0.9 + parallax * 0.25 + vec2(0.02 * time, -0.015 * time);
+    // NEAR-BLACK base (stays "basically black" as requested) — a faint FBM adds
+    // only a whisper of depth so it isn't a dead flat black.
+    vec2  nb  = planePos * 0.8 + parallax * 0.20 + vec2(0.015 * time, -0.012 * time);
     float neb = alPortFbm(nb);
-    vec3  col = mix(vec3(0.10, 0.03, 0.24), vec3(0.42, 0.18, 0.78), neb * neb);
+    vec3  col = mix(vec3(0.003, 0.004, 0.005), vec3(0.006, 0.012, 0.009), neb * neb);
 
+    // Beige + green particles deep within, across parallax layers (eye of ender).
+    // A SEPARATE hash picks the colour so the beige/green split is even (not tied
+    // to the sparsity threshold, which otherwise skews everything green).
     for (int i = 0; i < 6; i++) {
         float fi = float(i);
-        float depth = 0.10 + 0.50 * fi;
-        vec2 sc   = planePos * (2.0 + fi * 1.3) + parallax * depth;
+        float depth = 0.12 + 0.55 * fi;
+        vec2 sc   = planePos * (2.2 + fi * 1.5) + parallax * depth;
         vec2 cell = floor(sc);
         float h   = alPortHash(cell + fi * 7.3);
-        if (h > 0.86) {                                        // denser stars per layer
+        if (h > 0.92) {                                        // sparse deep particles
             vec2  f  = fract(sc) - 0.5;
-            float d  = 1.0 - alSaturate(length(f) * 2.4);
-            float tw = 0.55 + 0.45 * sin(time * (0.8 + h * 3.0) + h * 30.0);
-            vec3  sc2 = mix(vec3(0.55, 0.35, 1.00), vec3(1.00, 0.92, 1.00), h);
-            col += sc2 * (d * d * tw * (0.55 + 0.75 / (fi + 1.0)));
+            float d  = 1.0 - alSaturate(length(f) * 2.6);
+            float tw = 0.5 + 0.5 * sin(time * (0.7 + h * 3.0) + h * 30.0);
+            float ch = alPortHash(cell + fi * 3.7);           // independent colour pick
+            vec3  pcol = mix(vec3(0.86, 0.78, 0.52), vec3(0.32, 0.84, 0.46), ch);
+            col += pcol * (d * d * tw * (0.45 + 0.55 / (fi + 1.0)));
         }
     }
-    col += vec3(0.26, 0.10, 0.52) * 1.15;                      // ethereal purple bloom
-    return max(col * 1.35, vec3(0.0));                         // overall luminance lift
+    // A very faint teal depth glow so it reads as a portal, not a dead black —
+    // kept tiny so it stays mostly black.
+    col += vec3(0.004, 0.009, 0.007);
+    return max(col, vec3(0.0));
 }
 
 #endif // AL_LIB_PORTAL

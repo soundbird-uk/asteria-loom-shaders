@@ -49,10 +49,12 @@ void main() {
         vec2  par = vec2(dot(Vw, tang), dot(Vw, bit));
         vec3  star = alEndPortal(pc, par, frameTimeCounter);
         // Store sRGB so deferred1's BASIC pass-through (sRGB->linear) reproduces it.
+        // colortex3.b = reflectivity so the composite SSR pass adds deep water-like
+        // reflections onto the portal (BASIC stays unlit; reflection is added after).
         outAlbedo   = vec4(alLinearToSrgb(star), 1.0);
         outNormalLm = vec4(alEncodeNormal(N), lmcoord);
         outMaterial = vec4(alEncodeMatID(AL_MATID_BASIC),
-                           alEncodeFlags(AL_FLAG_NONE), 0.0, 0.0);
+                           alEncodeFlags(AL_FLAG_NONE), AL_END_PORTAL_REFLECT, 0.0);
         return;
     }
 

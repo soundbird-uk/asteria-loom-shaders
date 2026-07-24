@@ -103,8 +103,10 @@ void main() {
         vec4  pcol = alNetherPortal(pc, par, fres, frameTimeCounter);
         outColor    = pcol;
         outNormalLm = vec4(alEncodeNormal(N), lmcoord);
+        // colortex3.b = reflectivity so the composite SSR pass gives the portal
+        // water-like reflections (dielectric, metalness 0).
         outMaterial = vec4(alEncodeMatID(AL_MATID_TRANSLUCENT),
-                           alEncodeFlags(AL_FLAG_NONE), 0.0, 0.0);
+                           alEncodeFlags(AL_FLAG_NONE), AL_NETHER_PORTAL_REFLECT, 0.0);
         return;
     }
 
@@ -125,7 +127,7 @@ void main() {
         outColor    = vec4(star, 1.0);
         outNormalLm = vec4(alEncodeNormal(N), lmcoord);
         outMaterial = vec4(alEncodeMatID(AL_MATID_TRANSLUCENT),
-                           alEncodeFlags(AL_FLAG_NONE), 0.0, 0.0);
+                           alEncodeFlags(AL_FLAG_NONE), AL_END_PORTAL_REFLECT, 0.0);
         return;
     }
 
