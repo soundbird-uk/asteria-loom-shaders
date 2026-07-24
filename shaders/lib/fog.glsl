@@ -125,13 +125,21 @@
 
 // 5.0.8 DISTANCE-RELAXED GATE ("no fog when looking deep into distant caves").
 // The sky gate keeps NEAR caves/interiors clear (you can see into a cave right in
-// front of you), but a cave mouth / hole in the surface seen from FAR away must
-// fog like any other distant terrain — otherwise it punches an unfogged dark hole
-// through the haze. So the gate is forced open with distance: fully gated up to
-// RELAX_NEAR, fully open beyond RELAX_FAR (absolute blocks, render-distance
-// independent). This does NOT fill nearby caves — only distant low-sky pixels.
-#define AL_FOG_GATE_RELAX_NEAR 42.0
-#define AL_FOG_GATE_RELAX_FAR  120.0
+// front of you), but a cave mouth / hole in the surface seen from any distance
+// must fog like the terrain AROUND it — otherwise it punches an unfogged dark hole
+// through the haze (field report: "terrain around a cave opening is fogged but the
+// opening itself has no fog"). So the gate is forced open with distance: fully
+// gated up to RELAX_NEAR, fully open beyond RELAX_FAR (absolute blocks,
+// render-distance independent).
+// 5.2.5: pulled the relax window MUCH nearer (was 42..120). The old range only
+// opened the gate far past where terrain is already visibly fogged, so cave
+// mouths at normal viewing range stayed clear. Fog is negligible under ~10 blocks
+// regardless, so opening the gate from 10..40 costs nothing for a cave right in
+// front of you but fogs every cave opening by distance exactly like the terrain
+// framing it. Low-sky pixels still fog toward the DARK cave tone (openness blend
+// below), so the opening recedes into hazy darkness instead of a sharp black hole.
+#define AL_FOG_GATE_RELAX_NEAR 10.0
+#define AL_FOG_GATE_RELAX_FAR  40.0
 
 // 5.0.11 CAVE TONE. Where a pixel has little sky access (a HUGE cave / deep
 // underground that runs past the render distance), the far/mid fog converges to

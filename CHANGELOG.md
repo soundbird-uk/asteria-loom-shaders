@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (5.2.5) — cave openings now fog with distance like the terrain around them
+
+- **The unfogged dark hole at a cave mouth is gone.** Aerial fog is sky-gated
+  (cave/interior pixels with no sky access get none, so you can see into a cave in
+  front of you). The distance-relax that re-opens the gate for a distant cave mouth
+  only started at 42 blocks and finished at 120 — far past where the surrounding
+  terrain is already visibly fogged — so a cave opening at normal viewing range sat
+  as a sharp, unfogged black hole punched through the haze.
+- **Fix:** the relax window is pulled in to 10→40 blocks. Fog is negligible under
+  ~10 blocks anyway, so a cave right in front of you still reads clear, but every
+  cave opening past that now fogs by distance exactly like the terrain framing it.
+  Low-sky pixels still converge to the dark cave tone, so the opening recedes into
+  hazy darkness rather than a hard-edged void. Applies at all fog densities (the
+  relax is in absolute blocks; the amount scales with FOG_DENSITY).
+
 ### Fixed (5.2.4) — waves no longer blue-out the water (transparency follows view angle)
 
 - **The waves themselves were making the water an opaque blue sheet.** Surface
