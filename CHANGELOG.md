@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (5.2.4) — waves no longer blue-out the water (transparency follows view angle)
+
+- **The waves themselves were making the water an opaque blue sheet.** Surface
+  transparency (and the reflection blend) was driven by Fresnel computed from the
+  RIPPLED normal, so every wave tilt raised Fresnel — pushing the surface toward
+  its opaque/reflective end and painting the sky's blue over the whole lake, hiding
+  the bottom even looking straight down. With waves off the normal is flat, Fresnel
+  stays low, and the bottom shows — which is exactly the difference the field report
+  saw ("with waves off I can see beneath the surface like I should").
+- **Fix:** transparency and the transmitted-vs-reflected split now use the
+  GEOMETRIC water-plane angle (view direction vs world-up), not the rippled normal.
+  Looking down → low Fresnel → see-through to the depth-tinted bottom; only true
+  grazing angles go reflective. `gbuffers_water` alpha uses the flat normal `Ng`;
+  `composite` uses the flat-plane Fresnel for the mix. The rippled normal still
+  steers the reflection DIRECTION and the sun glint, so waves still sparkle and
+  catch light — they just don't force opacity anymore.
+
 ### Fixed (5.2.3) — water "grid grain" root cause: normal aliasing + tiling dither
 
 - **The real cause of the dark grainy grid on water from above.** Two things fed

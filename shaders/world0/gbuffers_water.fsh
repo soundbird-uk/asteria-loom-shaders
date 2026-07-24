@@ -198,8 +198,15 @@ void main() {
         }
 #endif
         // --- Fresnel-driven opacity ---
+        // Transparency must follow the VIEW ANGLE against the flat water plane, NOT
+        // the rippled normal. If it uses the rippled N, every wave tilt raises the
+        // Fresnel and pushes alpha toward opaque, so the whole surface goes flat
+        // blue and hides the bottom even looking straight down (field report: "the
+        // waves have a huge blue tint"). Ng is the geometric surface normal, so
+        // looking down always stays see-through; the rippled N is still written to
+        // the normal buffer for reflections/lighting.
         vec3  Vw   = normalize(-playerPos);
-        float cosV = alSaturate(dot(Vw, N));
+        float cosV = alSaturate(dot(Vw, Ng));
         float fres = AL_WATER_F0 + (1.0 - AL_WATER_F0) * pow(1.0 - cosV, 5.0);
         // More transparent looking down (low Fresnel), opaque at grazing.
         float alpha = mix(AL_WATER_ALPHA_MIN, AL_WATER_ALPHA_MAX, alSaturate(fres));

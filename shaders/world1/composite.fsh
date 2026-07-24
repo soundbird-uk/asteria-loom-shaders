@@ -314,10 +314,17 @@ void main() {
     vec3 Nw = alDecodeNormal(texture(colortex2, texcoord).rg);
     vec3 Nv = normalize(mat3(gbufferModelView) * Nw);
     vec3 I  = normalize(P0);                       // camera -> surface (view)
-    float cosI = alSaturate(dot(-I, Nv));
 
-    // Schlick Fresnel, capped a touch below 1 so water never chromes out.
-    float fres = AL_WATER_F0 + (1.0 - AL_WATER_F0) * pow(1.0 - cosI, 5.0);
+    // The transmitted-vs-reflected SPLIT is driven by the GEOMETRIC water-plane
+    // angle (view vs world-up), NOT the rippled normal. Using the rippled normal
+    // let every wave tilt raise Fresnel, so the surface reflected the blue sky
+    // everywhere and hid the bottom even looking straight down (field report). The
+    // flat-plane Fresnel keeps water see-through when you look down and reflective
+    // only at true grazing angles; the rippled normal still steers the reflection
+    // DIRECTION (Rv/Rw below) and the sun glint, so ripples still sparkle.
+    vec3  Iw     = normalize(alViewDirToWorld(I));
+    float cosGeo = alSaturate(-Iw.y);              // 1 looking straight down, 0 grazing
+    float fres = AL_WATER_F0 + (1.0 - AL_WATER_F0) * pow(1.0 - cosGeo, 5.0);
     fres = min(alSaturate(fres), AL_WATER_REFLECT_MAX);
 
     // Crest foam (baked into `base` by gbuffers_water, amount in colortex3.b) must
