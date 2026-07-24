@@ -700,7 +700,12 @@ const float sunPathRotation = -35.0;
 // Per-class base reflectivity (internal, not GUI). Glassy = ice / polished stone;
 // Metal = the metal block set. REFLECTIVE_STRENGTH scales both.
 #define AL_REFLECT_ICE   0.55   // glassy dielectric (Fresnel-shaped in composite)
-#define AL_REFLECT_METAL 0.90   // metal (strong at all angles, albedo-tinted)
+#define AL_REFLECT_METAL 0.55   // ROUGH metal (was 0.90 = chrome); albedo-tinted
+// 5.2.0 PBR roughness: iron/gold blocks are ROUGH metal, not mirrors. Roughness
+// blurs the environment reflection toward the soft zenith ambient and weights DOWN
+// the sharp SSR contribution, so metal reads as brushed metal, never chrome.
+#define AL_REFL_ROUGH_METAL      0.62
+#define AL_REFL_ROUGH_DIELECTRIC 0.12
 
 // Portals get water-like SSR reflections too (composite reflective path, gated by
 // REFLECTIVE_BLOCKS). Dielectric (metalness 0) -> Fresnel-shaped, deep reflections.
@@ -794,6 +799,11 @@ const vec3 AL_WATER_FOAM_COLOR = vec3(0.86, 0.92, 0.96);
 // dark instead of glowing white).
 #define AL_WATER_FOAM_CONTACT_STR 0.65
 #define AL_WATER_FOAM_NIGHT       0.14
+// 5.2.0 whispy fractal foam: a multi-octave domain-warped simplex mask breaks both
+// the crest and shoreline foam into chaotic, filamentary whiskers instead of a
+// uniform white band. SCALE = world frequency, WARP = domain-warp strength.
+#define AL_WATER_FOAM_SCALE 0.85
+#define AL_WATER_FOAM_WARP  1.30
 
 // --- Reflection: occluded-horizon fix + sun glint (5.1.2) ------------------
 // Near-horizontal reflected rays are almost always occluded by shore terrain /
@@ -803,7 +813,12 @@ const vec3 AL_WATER_FOAM_COLOR = vec3(0.86, 0.92, 0.96);
 // pointing rays show real sky. SSR still overrides with real on-screen geometry.
 #define AL_WATER_REFL_HORIZON_LO 0.00
 #define AL_WATER_REFL_HORIZON_HI 0.22
-const vec3 AL_WATER_REFL_OCCLUDED = vec3(0.020, 0.035, 0.055);
+// 5.2.0: this is the reflection an occluded/downward ray returns. It was near-black,
+// which — combined with sharp wave normals scattering rays every direction from an
+// overhead view — produced the griddy DARK PATCHES on water (image_6af8bc). Set to a
+// dim WATER tone so misses/downward rays read as the water reflecting itself, never
+// a black hole; SSR still overrides with real on-screen geometry.
+const vec3 AL_WATER_REFL_OCCLUDED = vec3(0.050, 0.100, 0.140);
 // Analytic SUN GLINT (the sun disc isn't in the depth buffer, so SSR can't reflect
 // it): a tight specular toward the sun so water sparkles with the sun/moon.
 #define AL_WATER_SUN_SPEC     9.0

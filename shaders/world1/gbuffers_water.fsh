@@ -180,6 +180,9 @@ void main() {
             // negative where crests pinch/overhang -> whitecap foam there.
             crestFoam = 1.0 - smoothstep(AL_WATER_FOAM_JAC_LO, AL_WATER_FOAM_JAC_HI, jac);
             crestFoam *= microAmt;                     // fade the fine foam with range
+            // WHISPY FRACTAL breakup: modulate by a domain-warped noise so crest foam
+            // reads as chaotic whiskers, not a smooth uniform cap.
+            crestFoam *= 0.15 + 0.85 * alWaterFoamNoise(waterRefXZ, frameTimeCounter);
 #endif
         }
 #endif

@@ -169,36 +169,60 @@ vec3 alReflectiveBlock(vec3 base, float reflAmt, float metal) {
     vec3  I  = normalize(P0);
     float cosI = alSaturate(dot(-I, Nv));
 
-    float f0   = mix(0.04, 0.90, metal);
+    // Schlick Fresnel with a metal/dielectric F0 (metals reflect more head-on).
+    float f0   = mix(0.04, 0.75, metal);
     float fres = f0 + (1.0 - f0) * pow(1.0 - cosI, 5.0);
 
-    // Sky-access gate: indoor reflective blocks reflect a dark tone, not bright sky.
+    // Roughness: iron/gold BLOCKS are rough metal, not chrome. Roughness blurs the
+    // environment (toward the soft zenith ambient) and weights DOWN the sharp SSR.
+    float rough = mix(AL_REFL_ROUGH_DIELECTRIC, AL_REFL_ROUGH_METAL, metal);
+
     float skyLm   = alSaturate(texture(colortex2, texcoord).a);
     float skyGate = smoothstep(0.0, 0.35, skyLm);
     vec3  Rv = reflect(I, Nv);
     vec3  Rw = normalize(alViewDirToWorld(Rv));
-    vec3  refl = mix(vec3(0.015, 0.020, 0.035), alSkySample(Rw), skyGate);
 
-    // SSR: reflect nearby on-screen geometry when the toggle's march finds a hit.
-    vec2  noiseUV = gl_FragCoord.xy / 256.0;
-    float dither  = fract(texture(noisetex, noiseUV).r + float(frameCounter) * 0.61803398875);
-    vec2  hitUV;
-    if (alTraceSSR(P0, Rv, dither, hitUV)) {
-        vec3 hitCol = texture(colortex0, hitUV).rgb;
-        vec2 e = smoothstep(vec2(0.0), vec2(AL_SSR_EDGE_FADE), hitUV)
-               * (1.0 - smoothstep(vec2(1.0 - AL_SSR_EDGE_FADE), vec2(1.0), hitUV));
-        float edgeFade = e.x * e.y;
-        bool okHit = all(greaterThanEqual(hitCol, vec3(0.0)))
-                  && all(lessThan(hitCol, vec3(65000.0)));
-        refl = mix(refl, okHit ? hitCol : refl, edgeFade);
+    // OCCLUDED-HORIZON FIX ("horizon bar reflected INSIDE the block"): a near-
+    // horizontal reflected ray almost always hits terrain, not the bright sky
+    // horizon band. Fade it to the soft zenith ambient as Rw nears the horizon.
+    float upCut    = smoothstep(0.0, 0.20, Rw.y);
+    vec3  skySharp = alSkySample(Rw);
+    vec3  ambient  = alSkySample(vec3(0.0, 1.0, 0.0));   // soft zenith env (rough blur)
+    vec3  envRefl  = mix(skySharp, ambient, rough);      // rough -> blurred env
+    envRefl = mix(ambient * 0.4, envRefl, upCut);        // occluded horizon -> dim ambient
+    vec3  refl = mix(vec3(0.02, 0.03, 0.04), envRefl, skyGate);
+
+#ifdef SSR
+    // Sharp SSR only meaningfully contributes for SMOOTH surfaces; a mirror-sharp
+    // reflection on rough iron reads as chrome, so weight it by (1-rough).
+    float ssrW = 1.0 - rough;
+    if (ssrW > 0.05) {
+        vec2 noiseUV = gl_FragCoord.xy / 256.0;
+    #ifdef AL_TAA
+        float dither = fract(texture(noisetex, noiseUV).r + float(frameCounter) * 0.61803398875);
+    #else
+        float dither = texture(noisetex, noiseUV).r;
+    #endif
+        vec2 hitUV;
+        if (alTraceSSR(P0, Rv, dither, hitUV)) {
+            vec3 hitCol = texture(colortex0, hitUV).rgb;
+            vec2 e = smoothstep(vec2(0.0), vec2(AL_SSR_EDGE_FADE), hitUV)
+                   * (1.0 - smoothstep(vec2(1.0 - AL_SSR_EDGE_FADE), vec2(1.0), hitUV));
+            float edgeFade = e.x * e.y * ssrW;
+            bool okHit = all(greaterThanEqual(hitCol, vec3(0.0)))
+                      && all(lessThan(hitCol, vec3(65000.0)));
+            refl = mix(refl, okHit ? hitCol : refl, edgeFade);
+        }
     }
+#endif
 
     // Metal tints the reflection with its own albedo (F0 colour); dielectric neutral.
     vec3 albedo    = texture(colortex1, texcoord).rgb;
     vec3 reflColor = refl * mix(vec3(1.0), albedo, metal);
 
-    // Strength: dielectric is Fresnel-driven; metal is strong at all angles.
-    float strength = mix(reflAmt * fres, reflAmt * (0.70 + 0.30 * fres), metal);
+    // Strength: dielectric Fresnel-driven (subtle head-on); metal moderate + tinted
+    // and capped by roughness so it reads as brushed metal, never a chrome mirror.
+    float strength = mix(reflAmt * fres, reflAmt * (0.45 + 0.35 * fres), metal);
     strength = alSaturate(strength * REFLECTIVE_STRENGTH);
 
     vec3 result = mix(base, reflColor, strength);
@@ -280,10 +304,14 @@ void main() {
     vec3 refl = mix(vec3(0.015, 0.020, 0.035), skyR, skyGate);  // fallback + cave gate
 
 #ifdef SSR
-    // R2 low-discrepancy dither on the noisetex value, advanced by frameCounter.
+    // R2 low-discrepancy dither on the noisetex value. Advanced by frameCounter
+    // ONLY under TAA (which temporally resolves it); under FXAA/Off it is frozen so
+    // the water reflection doesn't crawl as grain (field report).
     vec2 noiseUV = gl_FragCoord.xy / 256.0;        // noisetex is 256x256
     float dither = texture(noisetex, noiseUV).r;
+#ifdef AL_TAA
     dither = fract(dither + float(frameCounter) * 0.61803398875);
+#endif
 
     vec2 hitUV;
     if (alTraceSSR(P0, Rv, dither, hitUV)) {
@@ -360,6 +388,10 @@ void main() {
         // sky so it is not a jarring white band.
         contactFoam = (1.0 - smoothstep(0.0, AL_WATER_FOAM_CONTACT, waterPath))
                     * skyLm * AL_WATER_FOAM_CONTACT_STR;
+        // WHISPY FRACTAL breakup: modulate by the same domain-warped foam noise so the
+        // shoreline foam is chaotic whiskers, not a uniform white band.
+        vec2 foamWP = (alViewToPlayer(P0) + cameraPosition).xz;
+        contactFoam *= 0.15 + 0.85 * alWaterFoamNoise(foamWP, frameTimeCounter);
 #endif
     }
 

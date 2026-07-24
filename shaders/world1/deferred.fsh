@@ -94,9 +94,18 @@ void main() {
 
     // --- Per-pixel rotation + per-frame R2 advance ------------------------
     vec2  nz = texture(noisetex, gl_FragCoord.xy / 256.0).xy;
-    // R2 sequence: two irrational advances (1/plastic, 1/plastic^2).
-    float sliceJitter = fract(nz.x + float(frameCounter) * 0.75487766624669276);
-    float stepJitter  = fract(nz.y + float(frameCounter) * 0.56984029099805327);
+    // R2 sequence: two irrational advances (1/plastic, 1/plastic^2). The per-FRAME
+    // advance only denoises when temporally resolved, so it is applied ONLY under
+    // TAA; under FXAA/Off it is frozen (stable per-pixel pattern) so the AO does not
+    // CRAWL as grain (field report). The AO's own temporal history (colortex5) still
+    // accumulates either way; freezing the input just stops the visible shimmer.
+#ifdef AL_TAA
+    float fAdv = float(frameCounter);
+#else
+    float fAdv = 0.0;
+#endif
+    float sliceJitter = fract(nz.x + fAdv * 0.75487766624669276);
+    float stepJitter  = fract(nz.y + fAdv * 0.56984029099805327);
 
     // --- GTAO slice loop --------------------------------------------------
     // Jimenez normalizes the accumulated visibility by the sum of the

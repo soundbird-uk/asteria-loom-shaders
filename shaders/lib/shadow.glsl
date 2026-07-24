@@ -135,8 +135,17 @@ vec2 alVogel(int i, int n, float phi) {
 float alShadowRotation() {
     vec2 nz = texture(noisetex, gl_FragCoord.xy / 256.0).xy;
     // R2 sequence: a1 = 1/plastic-number. Advancing phi by it per frame gives a
-    // maximally-spread temporal offset.
+    // maximally-spread temporal offset — BUT that only denoises if the frames are
+    // temporally resolved. Under FXAA/Off (no temporal resolve) the animated
+    // rotation just CRAWLS as grain on soft shadow edges (field report). So the
+    // per-frame advance is applied ONLY under TAA; otherwise the rotation is a
+    // STABLE per-pixel pattern (from noisetex) that FXAA smooths spatially and that
+    // does not shimmer in motion.
+#ifdef AL_TAA
     float r2 = fract(float(frameCounter) * 0.75487766624669276);
+#else
+    float r2 = 0.0;
+#endif
     return (nz.x + r2) * AL_TAU;
 }
 

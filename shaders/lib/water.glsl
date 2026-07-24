@@ -294,4 +294,23 @@ vec3 alBlendNormals(vec3 base, vec3 detail) {
     return normalize(vec3(base.xz + detail.xz, base.y * detail.y));
 }
 
+// WHISPY FRACTAL FOAM mask in [0,1]: a domain-warped multi-octave 3D simplex field
+// (z = time) that breaks foam into chaotic, filamentary whiskers instead of a
+// uniform band. High-contrast so it reads as broken foam, not haze.
+float alWaterFoamNoise(vec2 wp, float t) {
+    vec3 q = vec3(wp * AL_WATER_FOAM_SCALE, t * 0.28);
+    // two domain-warp passes for organic, non-grid whiskers
+    vec3 w1 = vec3(alSimplex3(q), alSimplex3(q + 19.3), alSimplex3(q + 7.1));
+    q += w1 * AL_WATER_FOAM_WARP;
+    float f = 0.0, amp = 0.6, freq = 1.0, norm = 0.0;
+    for (int i = 0; i < 3; i++) {
+        f    += amp * alSimplex3(q * freq);
+        norm += amp;
+        freq *= 2.1;
+        amp  *= 0.5;
+    }
+    float n = f / max(norm, 1e-4) * 0.5 + 0.5;          // -> [0,1]
+    return alSaturate(smoothstep(0.35, 0.75, n));        // high-contrast whiskers
+}
+
 #endif // AL_LIB_WATER

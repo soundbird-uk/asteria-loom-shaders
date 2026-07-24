@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (5.2.0) — grain, reflectivity, SSR grid, foam
+
+- **Crawling grain on reflections / AO / soft shadows removed.** The screen-space
+  dithers (shadow PCF rotation, GTAO slice/step jitter, SSR ray-start) were advanced
+  by `frameCounter` every frame — which only denoises when temporally resolved, so
+  under FXAA (the default) it just crawled as grain. The per-frame advance is now
+  applied ONLY under TAA; under FXAA/Off the dither is frozen to a stable per-pixel
+  pattern that FXAA smooths and that doesn't shimmer in motion.
+- **Metal blocks are rough metal, not chrome.** Iron/gold/etc. reflectivity cut
+  (0.90→0.55) with a PBR roughness term that blurs the environment reflection toward
+  the soft zenith ambient and weights down the sharp SSR, Schlick Fresnel, and the
+  reflection tinted by the block's own albedo. The "horizon bar inside the block" is
+  fixed by fading near-horizontal reflected rays to ambient instead of the sky
+  horizon band.
+- **Water SSR "grain grid" (dark patches) fixed.** Occluded / downward reflected rays
+  now infill with a dim water tone instead of near-black, so an overhead view of
+  choppy water no longer shows griddy dark patches; SSR still overrides with real
+  on-screen geometry, and the sun glint + Beer-Lambert absorption are unchanged.
+- **Foam is whispy and fractal.** Crest and shoreline foam are broken up by a
+  multi-octave domain-warped 3D-simplex mask into chaotic filament/whisker edges
+  instead of a uniform white band, on top of the day/night foam lighting from 5.1.2.
+
 ### Added (5.1.2) — shoreline swell attenuation
 
 - **Ocean swells now scale with water depth.** Water depth is read from the scene
