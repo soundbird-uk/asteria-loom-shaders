@@ -55,18 +55,22 @@ vec4 alNetherPortal(vec2 planePos, vec2 parallax, float fres, float time) {
     // Fine bright filaments threading through the swirl (molten veins).
     float veins = alSaturate(pow(swirl, 3.0) * 1.6);
 
-    vec3 deep   = vec3(0.10, 0.02, 0.26);                     // dark violet depth
-    vec3 mids   = vec3(0.55, 0.16, 0.92);
-    vec3 bright = vec3(0.95, 0.55, 1.00);
-    vec3 col = mix(deep, mids, swirl * swirl) * 1.7;          // emissive body
-    col += bright * (veins * 1.4);                            // glowing filaments
-    // Fresnel "reflection" sheen — a grazing-angle violet specular, the water trick.
-    // Kept moderate so the swirl/veins still read through it at grazing angles.
+    // 5.0.10 ("not see-through, not pretty like water"): a DEEP dark-violet body
+    // (low emissive so it no longer reads as a flat glowing sheet), with only the
+    // veins genuinely glowing, and a LOW base alpha so you look INTO the depth like
+    // water — the veins/edges stay solid. The Fresnel sheen is the grazing
+    // "reflection" (water trick).
+    vec3 deep   = vec3(0.05, 0.012, 0.16);                    // very dark violet depth
+    vec3 mids   = vec3(0.38, 0.11, 0.70);
+    vec3 bright = vec3(0.85, 0.48, 1.00);
+    vec3 col = mix(deep, mids, swirl * swirl);                // deep body, NOT overbright
+    col += bright * (veins * 0.9);                            // glowing molten filaments
+    // Fresnel "reflection" sheen — a grazing-angle violet specular (water trick),
+    // moderate so the swirl still reads through it.
     float f = fres * fres;
-    col += vec3(0.60, 0.42, 1.00) * (f * 1.15);
-    // Alpha: see-through in the dark deep, solid on the bright veins/edges — so the
-    // portal reads DEEP (you see into it) rather than a flat opaque sheet.
-    float alpha = alSaturate(mix(0.55, 0.95, max(veins, f)) + swirl * 0.10);
+    col += vec3(0.55, 0.40, 1.00) * (f * 0.9);
+    // Alpha: SEE-THROUGH in the dark deep (look into it), solid on the veins/edges.
+    float alpha = alSaturate(mix(0.30, 0.85, max(veins, f)) + swirl * 0.08);
     return vec4(col, alpha);
 }
 
@@ -83,7 +87,7 @@ vec3 alEndPortal(vec2 planePos, vec2 parallax, float time) {
     // Swirling violet nebula base (guarantees it is never black, adds depth).
     vec2  nb  = planePos * 0.9 + parallax * 0.25 + vec2(0.02 * time, -0.015 * time);
     float neb = alPortFbm(nb);
-    vec3  col = mix(vec3(0.045, 0.010, 0.11), vec3(0.22, 0.08, 0.42), neb * neb);
+    vec3  col = mix(vec3(0.10, 0.03, 0.24), vec3(0.42, 0.18, 0.78), neb * neb);
 
     for (int i = 0; i < 6; i++) {
         float fi = float(i);
@@ -99,8 +103,8 @@ vec3 alEndPortal(vec2 planePos, vec2 parallax, float time) {
             col += sc2 * (d * d * tw * (0.55 + 0.75 / (fi + 1.0)));
         }
     }
-    col += vec3(0.20, 0.07, 0.40) * 0.85;                      // ethereal purple bloom
-    return max(col, vec3(0.0));
+    col += vec3(0.26, 0.10, 0.52) * 1.15;                      // ethereal purple bloom
+    return max(col * 1.35, vec3(0.0));                         // overall luminance lift
 }
 
 #endif // AL_LIB_PORTAL

@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (5.0.10)
+
+- **Quality presets now enable the correct features.** Each preset (Potato→Ultra)
+  is fully explicit, so switching to High/Ultra reliably turns ON everything it
+  should (SSR, bloom, god rays, volumetric clouds, reflective blocks, contact
+  shadows, AO). Previously features that Potato disabled stayed off because the
+  higher presets relied on defaults and never re-enabled them.
+- **End portal no longer renders black/dark.** Root cause: the end portal and
+  gateway are BLOCK ENTITIES, so they're identified by the `blockEntityId` uniform,
+  not the `mc_Entity` attribute the old code checked — detection never fired. Now
+  detected correctly and the starfield is brightened so it reads as a glowing deep-
+  space portal.
+- **End portal frame glows only the Eye of Ender.** It was in the blanket emissive
+  list, which lit up the whole block (ugly). Now only the teal eye pixels glow
+  (colour-masked); the frame stone is normally lit.
+- **Nether portal reads as deep and see-through.** Much lower emissive + base
+  opacity so you look INTO it like water, with only the molten veins glowing and a
+  Fresnel sheen at grazing — no longer a flat bright sheet.
+
 ### Added (5.0.9)
 
 - **Reflective blocks (material-dependent SSR).** Smooth solid blocks now reflect

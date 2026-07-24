@@ -9,7 +9,12 @@
 
 uniform mat4 gbufferModelViewInverse;
 
-in vec4 mc_Entity;   // block ID (block.properties): 10003 = end portal / gateway
+// End portal / gateway are BLOCK ENTITIES (TheEndPortalRenderer), so they are
+// identified by the `blockEntityId` UNIFORM — NOT the mc_Entity vertex attribute
+// (which is only populated for chunk-mesh blocks). block.properties maps
+// `block.10003 = minecraft:end_portal minecraft:end_gateway`, which feeds BOTH
+// mc_Entity (blocks) and blockEntityId (block entities); we read the latter here.
+uniform int blockEntityId;
 
 out vec2 texcoord;
 out vec2 lmcoord;
@@ -28,5 +33,5 @@ void main() {
     vec3 viewN = normalize(gl_NormalMatrix * gl_Normal);
     wnormal = mat3(gbufferModelViewInverse) * viewN;
     playerPos = (gbufferModelViewInverse * viewPos).xyz;
-    isEndPortal = (mc_Entity.x == 10003.0) ? 1.0 : 0.0;
+    isEndPortal = (blockEntityId == 10003) ? 1.0 : 0.0;
 }

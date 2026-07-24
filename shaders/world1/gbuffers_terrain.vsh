@@ -26,6 +26,7 @@ out vec2 lmcoord;
 out vec4 glcolor;
 out vec3 wnormal;
 flat out float emissive;   // 1.0 for light-emitting blocks (block.properties 10040)
+flat out float endFrame;   // 1.0 for end_portal_frame (10041) — eye-only glow
 flat out float reflAmt;    // reflectivity 0..1 (block.properties 10050/10051)
 flat out float metalness;  // 1.0 = metal (albedo-tinted reflection)
 
@@ -36,6 +37,7 @@ void main() {
     // the foliage wind; the fragment stage tags matID EMISSIVE so deferred1 adds
     // the glow from the block's own texture colour.
     emissive = (mc_Entity.x == 10040.0) ? 1.0 : 0.0;
+    endFrame = (mc_Entity.x == 10041.0) ? 1.0 : 0.0;   // eye-only glow (fsh masks)
 
     // Reflective-material classification (block.properties 10050 glassy, 10051
     // metal). The fragment stage stores reflAmt in colortex3.b and metalness in .a
