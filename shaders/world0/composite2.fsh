@@ -289,12 +289,17 @@ void main() {
     // the SKY (terrain, drawn first, masks it), which is exactly the requested
     // "horizon band belongs to the skybox and terrain always masks it".
     if (depth >= 1.0) {
-        vec3  vdir = normalize(alViewDirToWorld(alScreenToView(texcoord, 1.0)));
-        vec3  wSun = normalize(alViewDirToWorld(sunPosition));
-        float horizonT = 1.0 - smoothstep(0.0, AL_FOG_HORIZON_SKY, abs(vdir.y));
-        vec3  farCol   = alFogFarColor(wSun, rainStrength, wetness, thunderStrength);
-        vec3  skyOut   = mix(scene, farCol, horizonT * AL_FOG_HORIZON_SEAL);
-        outColor = vec4(skyOut, 1.0);
+        vec3  vdir   = normalize(alViewDirToWorld(alScreenToView(texcoord, 1.0)));
+        vec3  wSun   = normalize(alViewDirToWorld(sunPosition));
+        vec3  farCol = alFogFarColor(wSun, rainStrength, wetness, thunderStrength);
+        // BELOW the horizon: paint EXACTLY the fog colour (kills the green void;
+        // the ground/void beyond the render edge reads as the same fog the terrain
+        // melts into, so there is no seam).
+        if (vdir.y < 0.0) { outColor = vec4(farCol, 1.0); return; }
+        // Just ABOVE the horizon: fade the sky into the fog colour so terrain and
+        // sky meet seamlessly (this lives in the sky, so terrain masks it).
+        float horizonT = 1.0 - smoothstep(0.0, AL_FOG_HORIZON_SKY, vdir.y);
+        outColor = vec4(mix(scene, farCol, horizonT * AL_FOG_HORIZON_SEAL), 1.0);
         return;
     }
 

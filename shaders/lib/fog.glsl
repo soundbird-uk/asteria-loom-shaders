@@ -85,8 +85,11 @@
 // in the view direction) so it can NEVER paint a horizon band on terrain.
 //   EDGE_CHUNKS — how many chunks before `far` the thick fog starts
 //   EDGE_BRIGHT — lifts the far fog toward the sky's brightness (greyish blend)
-#define AL_FOG_EDGE_CHUNKS 3.5
+#define AL_FOG_EDGE_CHUNKS 3.0
 #define AL_FOG_EDGE_BRIGHT 1.35
+// Fog starts building (unevenly/patchy) this many chunks before the render edge,
+// ramping up to the solid wall in the last AL_FOG_EDGE_CHUNKS chunks.
+#define AL_FOG_MID_CHUNKS  6.5
 
 // Horizon void-seal (applied to SKY pixels in composite2): fade the sky toward
 // the far fog colour near the horizon so the void beyond the render edge reads as
@@ -230,6 +233,21 @@ vec3 alFogSkyInscatter(vec3 worldDir) {
     bool ok = (sky.r >= 0.0 && sky.g >= 0.0 && sky.b >= 0.0)
            && (sky.r < 1.0e4 && sky.g < 1.0e4 && sky.b < 1.0e4);
     return ok ? sky : alFogAnalyticSky(worldDir);
+}
+
+// Cheap value noise (portable, sampler-free) for PATCHY far fog — breaks the
+// far-fog ramp into uneven, real-looking banks instead of a clean radial fade.
+float alFogHash(vec2 p) {
+    return fract(sin(dot(p, vec2(41.31, 289.17))) * 43758.5453);
+}
+float alFogNoise(vec2 p) {
+    vec2 i = floor(p), f = fract(p);
+    f = f * f * (3.0 - 2.0 * f);
+    float a = alFogHash(i);
+    float b = alFogHash(i + vec2(1.0, 0.0));
+    float c = alFogHash(i + vec2(0.0, 1.0));
+    float d = alFogHash(i + vec2(1.0, 1.0));
+    return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
 }
 
 /* -------------------------------------------------------------------------
@@ -450,11 +468,20 @@ vec3 alApplyAerialFog(vec3 sceneColor, float camY, vec3 worldDir, float dist,
     float density = (0.6931472 / AL_FOG_DIST_HALF) * max(userDensity, 0.0) * densityMul;
     float baseFog = 1.0 - exp(-density * max(dist, 0.0));
 
-    // Edge seal: a THICK fog wall in the last AL_FOG_EDGE_CHUNKS chunks, FULL a
-    // half-chunk before the render edge, so the unrendered-chunk dropoff/void is
-    // completely hidden and the last terrain melts into the sky. Absolute chunk
-    // distance -> behaves the same at any render distance.
-    float edge = smoothstep(farD - AL_FOG_EDGE_CHUNKS * 16.0, farD - 8.0, dist);
+    // --- Patchy far gradient + solid wall (5.0.5) -------------------------
+    // From ~AL_FOG_MID_CHUNKS chunks out the fog builds UNEVENLY (world-ish noise
+    // -> patchy, real banks) so the far field gets progressively less clear, then
+    // the last AL_FOG_EDGE_CHUNKS chunks become a SOLID wall that hides the
+    // unrendered-chunk dropoff/void. Absolute chunk distance (same at any render
+    // distance).
+    float midStart = farD - AL_FOG_MID_CHUNKS * 16.0;
+    float midEnd   = farD - AL_FOG_EDGE_CHUNKS * 16.0;
+    float mid = smoothstep(midStart, midEnd, dist);
+    vec2  np    = worldDir.xz * (dist * 0.02);
+    float patch = alFogNoise(np) * 0.6 + alFogNoise(np * 2.3 + 7.0) * 0.4;
+    mid *= mix(0.35, 1.10, patch);                       // uneven / patchy banks
+    float wall = smoothstep(farD - AL_FOG_EDGE_CHUNKS * 16.0, farD - 8.0, dist);
+    float edge = clamp(max(mid, wall), 0.0, 1.0);
 
     float fogF = max(baseFog, edge) * skyGate;
 

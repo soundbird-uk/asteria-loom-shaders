@@ -1013,23 +1013,22 @@ const vec3 AL_NETHER_FOG = vec3(0.24, 0.07, 0.04);
 // drawn procedurally in world1/deferred1; these light the terrain.
 const vec3 AL_END_KEY     = vec3(0.60, 0.38, 0.92);   // cool violet directional-ish
 const vec3 AL_END_AMBIENT = vec3(0.12, 0.075, 0.20);  // low purple fill (moody, darker)
-// Dense purple haze that veils everything, DARKER overall (field feedback). Short
-// half-distance so distance drowns in purple fog.
-const vec3 AL_END_FOG     = vec3(0.15, 0.055, 0.26);  // deep purple in-scatter
-#define AL_END_FOG_HALF 82.0
+// Purple haze — LESS foggy now (field feedback: more aurora, less fog). Longer
+// half-distance so the End reads clear with the aurora as the star, not soup.
+const vec3 AL_END_FOG     = vec3(0.13, 0.05, 0.24);   // deep purple in-scatter
+#define AL_END_FOG_HALF 150.0
 
-// End procedural space backdrop — a dark purple gradient the procedural black
-// hole sits in. LOW = near horizon, HIGH = zenith (darker). Darker overall.
+// End procedural space backdrop — a dark purple gradient. LOW = near horizon,
+// HIGH = zenith (darker overall).
 const vec3 AL_END_SPACE_LOW  = vec3(0.09, 0.030, 0.17);
 const vec3 AL_END_SPACE_HIGH = vec3(0.03, 0.012, 0.075);
 
-// End "aurora" light shafts — vertical violet beams with BRIGHT and DARK streaks,
-// in the haze (terrain, world XZ columns) AND the sky backdrop (azimuth columns).
-#define AL_END_SHAFT_COLOR    vec3(0.55, 0.22, 0.95)  // violet beam colour
-#define AL_END_SHAFT_SCALE    0.012                   // world-XZ frequency of beams
-#define AL_END_SHAFT_DRIFT    0.10                    // slow horizontal drift
-#define AL_END_SHAFT_STRENGTH 1.05                    // additive beam brightness
-#define AL_END_SHAFT_DIST     110.0                   // range over which beams build
+// Flowing aurora borealis (lib/blackhole.glsl alEndAurora). STR = sky-curtain
+// brightness; VEIL = how strongly the same curtains are added over the scene
+// (in front of / behind geometry) in world1/composite2, so the aurora is all
+// around, not just a distant backdrop.
+#define AL_END_AURORA_STR  0.55
+#define AL_END_AURORA_VEIL 0.40
 // Procedural black-hole apparent size (angular radius multiplier). Small default.
 #define END_BLACKHOLE_SIZE 1.0 // [0.50 0.75 1.00 1.50 2.00]
 

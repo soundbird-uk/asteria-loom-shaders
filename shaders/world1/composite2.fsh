@@ -343,19 +343,13 @@ void main() {
 #endif
 
 #ifdef AL_DIM_END
-    // Violet light shafts rising through the End haze. Sampled at the MID-POINT of
-    // the view ray so the beams read as volumetric columns in the fog (constant in
-    // world-Y => vertical). They build with distance (more haze volume to light)
-    // and fade well above the camera. Additive, HDR (blooms in composite4/5).
+    // Aurora veil over the scene: the SAME flowing curtains as the sky, added
+    // faintly in the view direction so the aurora pervades the End — visible in
+    // front of and behind geometry, not just as a distant backdrop. Builds a
+    // little with distance (more air to glow through).
     {
-        vec3  wmid  = cameraPosition + worldDir * (dist * 0.5);
-        float mask  = alEndShaftMask(wmid.xz, frameTimeCounter);   // 0..1
-        float build = 1.0 - exp(-dist / AL_END_SHAFT_DIST);
-        float hFade = exp(-max(wmid.y - cameraPosition.y, 0.0) / 80.0);
-        float s     = (mask - 0.5) * 2.0;                          // -1..1 bright/dark
-        // Bright violet beams add; dark lanes subtract -> vertical bright+dark streaks.
-        fogged += AL_END_SHAFT_COLOR * (max(s, 0.0) * build * hFade * AL_END_SHAFT_STRENGTH);
-        fogged *= 1.0 - max(-s, 0.0) * (build * hFade * 0.35);
+        float build = 1.0 - exp(-dist / 90.0);
+        fogged += alEndAurora(worldDir, frameTimeCounter) * (AL_END_AURORA_VEIL * build);
     }
 #endif
 
