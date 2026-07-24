@@ -30,55 +30,82 @@ vec3 alEndHaze(vec3 dir) {
 
 /*
  Volumetric WHISPS — glowing violet whisps living in the End's 3D world space
- (NOT the skybox). alEndWhispDensity is the density (0..1) at a world position:
- sparse vertical columns (whisps) placed by seamless FBM in XZ, with a rising
- vertical structure so they travel upward and drift, undulating ethereally.
+ (NOT the skybox). TWO independent layers give the ethereal look:
+   LARGE — wide, sparse, VERY see-through columns (medium purple).
+   FINE  — tiny, thin, more numerous, lighter and MORE glowing whisps.
+ Each is a sparse vertical column field placed by seamless FBM in XZ with a rising
+ vertical structure (animate along Y so they drift upward, undulating ethereally).
+ A vertical ENVELOPE fades them in above the base and out gently toward the top so
+ they never abruptly stop high up.
 */
-float alEndWhispDensity(vec3 p, float time) {
-    vec3 q = p * AL_END_WHISP_SCALE;
-    q.xz += vec2(time * 0.015, time * 0.011);        // slow ethereal drift
-    // Sparse vertical columns from an XZ noise field.
-    float columns = alFbm3(vec3(q.xz, 17.0));
-    columns = smoothstep(0.52, 0.82, columns);
-    if (columns <= 0.001) return 0.0;
-    // Rising vertical structure (animate along Y so whisps travel upward).
-    float vert = alFbm3(vec3(q.xz * 1.7, q.y - time * AL_END_WHISP_RISE));
-    return columns * smoothstep(0.42, 0.86, vert);
+
+// Vertical fade: in above BASE, out gradually over TOP_FADE below TOP.
+float alEndWhispEnv(float y) {
+    float fadeIn  = smoothstep(AL_END_WHISP_BASE_Y, AL_END_WHISP_BASE_Y + 25.0, y);
+    float fadeOut = 1.0 - smoothstep(AL_END_WHISP_TOP_Y - AL_END_WHISP_TOP_FADE,
+                                     AL_END_WHISP_TOP_Y, y);
+    return alSaturate(fadeIn * fadeOut);
+}
+
+float alEndWhispLarge(vec3 p, float time) {
+    vec3 q = p * AL_END_WHISP_SCALE_L;
+    q.xz += vec2(time * 0.015, time * 0.011);
+    float col = alFbm3(vec3(q.xz, 17.0));
+    col = smoothstep(0.56, 0.86, col);               // sparse wide columns
+    if (col <= 0.001) return 0.0;
+    float vert = alFbm3(vec3(q.xz * 1.6, q.y - time * AL_END_WHISP_RISE_L));
+    return col * smoothstep(0.45, 0.90, vert);
+}
+
+float alEndWhispFine(vec3 p, float time) {
+    vec3 q = p * AL_END_WHISP_SCALE_F;
+    q.xz += vec2(-time * 0.020, time * 0.016);
+    float col = alFbm3(vec3(q.xz, 41.0));
+    col = smoothstep(0.70, 0.93, col);               // sparser + thinner
+    if (col <= 0.001) return 0.0;
+    float vert = alFbm3(vec3(q.xz * 2.4, q.y - time * AL_END_WHISP_RISE_F));
+    return col * smoothstep(0.60, 0.96, vert);
 }
 
 /*
- Raymarch the whisps from the camera along `dir`, BOUNDED by `marchDist` (the
- scene distance for terrain pixels, or the max reach for sky) so the End pillars
- and terrain correctly OCCLUDE whisps behind them — they no longer phase through.
-
- 5.0.8 REWORK: emission-with-absorption + self-occlusion (front-to-back), instead
- of the old raw additive integral. The old version accumulated density*dt over the
- whole ray so a long march blew the glow WAY past 1.0 -> clipped to white. Now each
- step emits a soft light-purple glow that is attenuated by the transmittance
- accumulated in FRONT of it, and the returned glow is a partition of (1 - trans),
- so it is BOUNDED to AL_END_WHISP_COLOR * AL_END_WHISP_GLOW (< 1 => never white) and
- thin whisps stay SEE-THROUGH (high transmittance => little glow). `dither` offsets
+ Raymarch BOTH whisp layers from the camera along `dir`, BOUNDED by `marchDist`
+ (scene distance for terrain, max reach for sky) so pillars/terrain OCCLUDE whisps
+ behind them. Each layer accumulates emission-with-absorption independently (front-
+ to-back), so its returned glow is BOUNDED to COL*GLOW (saturated purple, sub-1 =>
+ never white) and LOW densities keep both layers very SEE-THROUGH. `dither` offsets
  the first step to hide banding.
 */
 vec3 alEndWhispMarch(vec3 camPos, vec3 dir, float marchDist, float time, float dither) {
     marchDist = min(marchDist, AL_END_WHISP_MAXDIST);
     if (marchDist <= 1.0) return vec3(0.0);
-    const int STEPS = 16;
+    const int STEPS = 20;
     float dt = marchDist / float(STEPS);
     float t  = dt * dither;
-    float trans = 1.0;           // transmittance from the camera to the current step
-    float lit   = 0.0;           // accumulated (bounded) emission weight, <= 1
+    float transL = 1.0, transF = 1.0;    // per-layer transmittance
+    float litL = 0.0, litF = 0.0;        // per-layer emission weight, each <= 1
     for (int i = 0; i < STEPS; i++) {
-        float d = alEndWhispDensity(camPos + dir * t, time);
-        if (d > 0.001) {
-            float a = 1.0 - exp(-d * AL_END_WHISP_DENSITY * dt);  // step opacity 0..1
-            lit   += trans * a;                                   // occluded by what's in front
-            trans *= (1.0 - a);
-            if (trans < 0.02) break;                              // fully saturated -> done
+        vec3  sp  = camPos + dir * t;
+        float env = alEndWhispEnv(sp.y);
+        if (env > 0.001) {
+            if (transL > 0.02) {
+                float dL = alEndWhispLarge(sp, time) * env;
+                if (dL > 0.001) {
+                    float a = 1.0 - exp(-dL * AL_END_WHISP_DENS_L * dt);
+                    litL += transL * a; transL *= (1.0 - a);
+                }
+            }
+            if (transF > 0.02) {
+                float dF = alEndWhispFine(sp, time) * env;
+                if (dF > 0.001) {
+                    float a = 1.0 - exp(-dF * AL_END_WHISP_DENS_F * dt);
+                    litF += transF * a; transF *= (1.0 - a);
+                }
+            }
         }
         t += dt;
     }
-    return AL_END_WHISP_COLOR * (lit * AL_END_WHISP_GLOW);
+    return AL_END_WHISP_COL_L * (litL * AL_END_WHISP_GLOW_L)
+         + AL_END_WHISP_COL_F * (litF * AL_END_WHISP_GLOW_F);
 }
 
 /*

@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed (5.0.11)
+
+- **End whisps reworked into two ethereal layers.** A LARGE, sparse, very
+  see-through medium-purple layer plus a FINE, tiny, thinner, lighter and more
+  glowing layer — both far dimmer and more transparent than before (bounded,
+  saturated-purple emission so they never clip to white). A vertical envelope fades
+  them in from the base and out gradually toward the top so they no longer stop
+  abruptly high up.
+- **Nether & End fog now use the overworld-style distance system, toned.** A light
+  mid-field haze + patchy far gradient + solid render-edge wall, in an ember tone
+  (Nether) and a purple tone (End, converging to the horizon space colour). The
+  Nether's heavy uniform orange fog that washed everything out is gone.
+- **Cave / underground distance fog.** In a huge cave that runs past the render
+  distance, the far fog now converges to a dark cave tone (matching the cave) so the
+  unrendered dropoff is hidden without a bright grey wall looking out of place.
+
+### Fixed (5.0.11)
+
+- **Sun no longer leaks into caves.** The direct-light sky-access gate was too
+  permissive (sky light bleeds into cave mouths); the window is raised and sharpened
+  so clearly-covered surfaces get no direct sun, while open ground is unchanged.
+
 ### Fixed (5.0.10)
 
 - **Quality presets now enable the correct features.** Each preset (Potato→Ultra)

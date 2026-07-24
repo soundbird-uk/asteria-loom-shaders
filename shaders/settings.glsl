@@ -1048,20 +1048,28 @@ const vec3 AL_BOUNCE = vec3(0.036, 0.038, 0.048);
 // --- Nether (world-1) ---
 // Flat warm-ember ambient (the Nether glows everywhere; no sun, no sky gate).
 const vec3 AL_NETHER_AMBIENT = vec3(0.34, 0.13, 0.07);
-// Ember fog tint + its half-distance (blocks to ~50% fog). Raised from 26 -> 62
-// so the Nether reads atmospheric, not soupy — you can see across a cavern again.
-const vec3 AL_NETHER_FOG = vec3(0.24, 0.07, 0.04);
-#define AL_NETHER_FOG_HALF 62.0
+// 5.0.11 ("too much orange fog, washed out; want overworld-style distance fog in
+// a nether tone"). The Nether now uses the SAME distance-fog structure as the
+// overworld — a light mid-field ember haze + a patchy far gradient + a solid
+// render-edge wall — instead of a heavy uniform exponential ember. AL_NETHER_FOG
+// is the (dim) mid haze; AL_NETHER_FOG_FAR is the richer far-wall ember that hides
+// the render edge; the half-distance is much longer so the near/mid field is clear.
+const vec3 AL_NETHER_FOG     = vec3(0.115, 0.040, 0.024);  // dim mid ember (was 0.24,0.07,0.04)
+const vec3 AL_NETHER_FOG_FAR = vec3(0.190, 0.066, 0.040);  // far-wall ember tone
+#define AL_NETHER_FOG_HALF 150.0
 
 // --- End (world1) ---
 // Cool violet key + purple ambient (the End has no sun). The black-hole sky is
 // drawn procedurally in world1/deferred1; these light the terrain.
 const vec3 AL_END_KEY     = vec3(0.60, 0.38, 0.92);   // cool violet directional-ish
 const vec3 AL_END_AMBIENT = vec3(0.12, 0.075, 0.20);  // low purple fill (moody, darker)
-// Purple haze — LESS foggy now (field feedback: more aurora, less fog). Longer
-// half-distance so the End reads clear with the aurora as the star, not soup.
-const vec3 AL_END_FOG     = vec3(0.13, 0.05, 0.24);   // deep purple in-scatter
-#define AL_END_FOG_HALF 150.0
+// 5.0.11 — same overworld-style distance fog for the End, in a purple tone. The
+// mid haze is dim; the far wall converges to the End horizon SPACE colour so distant
+// terrain melts seamlessly into the purple sky. Long half-distance keeps the near/
+// mid field clear (the whisps are the star, not soup).
+const vec3 AL_END_FOG     = vec3(0.085, 0.032, 0.160);  // dim purple mid haze
+const vec3 AL_END_FOG_FAR = vec3(0.155, 0.055, 0.290);  // far wall = End horizon space colour
+#define AL_END_FOG_HALF 200.0
 
 // End procedural space backdrop — a purple gradient. LOW = near horizon (a
 // richer, clearly-visible violet), HIGH = zenith (deep near-black purple). The
@@ -1075,18 +1083,32 @@ const vec3 AL_END_SPACE_HIGH = vec3(0.022, 0.007, 0.060);
 // that rise and drift ethereally, raymarched and BOUNDED by the scene depth so
 // the End pillars/terrain correctly occlude them. Like clouds, but lower, vertical
 // and glowing.
-#define AL_END_WHISP_SCALE   0.030   // world-space frequency of the whisp field
-#define AL_END_WHISP_RISE    0.18    // vertical rise speed (whisps travel upward)
-#define AL_END_WHISP_MAXDIST 190.0   // how far the march reaches (blocks)
-// 5.0.8 FIELD ("whisps far too bright/white — should be a soft light-purple glow,
-// more see-through, casting light rather than being white"). The march now does
-// emission-absorption with self-occlusion (lib/blackhole.glsl), so the returned
-// glow is BOUNDED to AL_END_WHISP_COLOR * AL_END_WHISP_GLOW (< 1 => never clips to
-// white) and thin whisps stay see-through. GLOW is the peak brightness of a fully
-// opaque column; DENSITY is the absorption coefficient (higher = more solid/opaque).
-#define AL_END_WHISP_GLOW    0.85     // peak glow of a solid column (kept < 1: no white-out)
-#define AL_END_WHISP_DENSITY 1.15     // absorption per unit density (see-through control)
-const vec3 AL_END_WHISP_COLOR = vec3(0.62, 0.44, 0.86);   // soft light-purple glow
+// 5.0.11 TWO-LAYER WHISPS (field: "not luminous light-purple / too white / not
+// see-through / abruptly stop up high"). The march (lib/blackhole.glsl) accumulates
+// TWO independent whisp fields with emission-absorption self-occlusion, so each
+// layer's glow is BOUNDED to COL*GLOW (saturated purple, sub-1 => never white) and
+// low densities keep them very SEE-THROUGH. A vertical envelope fades them in from
+// the base and out gently toward the top (no abrupt cut-off).
+#define AL_END_WHISP_MAXDIST 200.0   // how far the march reaches (blocks)
+
+// Vertical band (world Y): fade IN above BASE, fade OUT over TOP_FADE below TOP.
+#define AL_END_WHISP_BASE_Y  -40.0
+#define AL_END_WHISP_TOP_Y    170.0
+#define AL_END_WHISP_TOP_FADE 110.0  // long, gradual top fade (blocks)
+
+// LARGE whisps — wide, sparse, VERY see-through, medium-saturated purple.
+#define AL_END_WHISP_SCALE_L  0.022   // low frequency = large columns
+#define AL_END_WHISP_RISE_L   0.16    // vertical drift speed
+#define AL_END_WHISP_DENS_L   0.045   // LOW density -> very see-through
+#define AL_END_WHISP_GLOW_L   0.50    // peak glow of a solid large column
+const vec3 AL_END_WHISP_COL_L = vec3(0.40, 0.16, 0.72);   // see-through medium purple
+
+// FINE whisps — tiny, thin, more numerous, LIGHTER purple, MORE glowing.
+#define AL_END_WHISP_SCALE_F  0.085   // high frequency = tiny thin whisps
+#define AL_END_WHISP_RISE_F   0.26
+#define AL_END_WHISP_DENS_F   0.070
+#define AL_END_WHISP_GLOW_F   0.70    // brighter (more glowing) than the large layer
+const vec3 AL_END_WHISP_COL_F = vec3(0.62, 0.40, 0.92);   // lighter glowing purple
 // Procedural black-hole apparent size (angular radius multiplier). Small default.
 #define END_BLACKHOLE_SIZE 1.0 // [0.50 0.75 1.00 1.50 2.00]
 

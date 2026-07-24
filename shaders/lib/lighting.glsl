@@ -86,7 +86,13 @@ vec3 alLightPhase1(vec3 albedoLin, vec3 worldN, vec2 lm,
     // Gating the direct key by the sky lightmap kills that: lm.y ~ 0 (underground)
     // -> no direct light; open sky -> full. Shadowed-but-open surfaces (sky access
     // > 0) are unaffected — they still get the key, dimmed by shadowVis.
-    float skyAccess = smoothstep(0.0, 0.12, lm.y);
+    // 5.0.11: widened + raised the window (was 0.0..0.12) — the sky lightmap bleeds
+    // a little way into cave mouths / under overhangs, so a low threshold still let
+    // full sun leak onto clearly-covered surfaces. Requiring more sky access before
+    // full direct light (and squaring for a sharper low-end cutoff) kills that leak
+    // while open ground (lm.y ~ 1) is untouched.
+    float skyAccess = smoothstep(0.05, 0.32, lm.y);
+    skyAccess *= skyAccess;
     // 0.4.3 (ISSUE 7/8): strengthen the direct key so the sun-facing side clearly
     // reads BRIGHTER than the shadowed side. AL_DIRECT_BOOST lifts the key while
     // the ambient below is trimmed, so overall exposure moves little but the

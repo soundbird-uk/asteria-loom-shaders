@@ -133,6 +133,13 @@
 #define AL_FOG_GATE_RELAX_NEAR 42.0
 #define AL_FOG_GATE_RELAX_FAR  120.0
 
+// 5.0.11 CAVE TONE. Where a pixel has little sky access (a HUGE cave / deep
+// underground that runs past the render distance), the far/mid fog converges to
+// this dark, near-neutral tone instead of the bright grey horizon fog — so the
+// render edge inside a big cave is hidden and reads like the cave receding into
+// darkness, not a bright grey wall.
+#define AL_FOG_CAVE_COL vec3(0.006, 0.008, 0.013)
+
 // --- Ground-haze in-scatter softening (BUG A: sunrise/sunset white-out) ------
 // The near-horizon sky is very bright at sunrise/sunset. Because distant terrain
 // is viewed along rays AT or BELOW the horizon, its in-scatter would blow out to
@@ -432,6 +439,27 @@ vec3 alFogFarColor(vec3 worldSunDir, float rainStrength, float wetness,
 }
 
 /* -------------------------------------------------------------------------
+   Shared RENDER-EDGE fog factor — a patchy far gradient that ramps to a SOLID
+   wall in the last chunks, hiding the unrendered-chunk dropoff/void. Used by
+   EVERY dimension (overworld, Nether, End) so they all seal the render edge the
+   same way, each with its own tone. dist = metres, farD = render distance (>=16),
+   worldDir drives the patchy noise. Returns 0 (clear) .. 1 (full wall).
+   ------------------------------------------------------------------------- */
+float alFogEdgeFactor(float dist, float farD, vec3 worldDir) {
+    float wallChunks = AL_FOG_EDGE_CHUNKS;
+    float midStart = farD - AL_FOG_MID_CHUNKS * 16.0;
+    float midEnd   = farD - wallChunks * 16.0;
+    float mid = smoothstep(midStart, midEnd, dist);
+    vec2  np    = worldDir.xz * (dist * 0.02);
+    float patch = alFogNoise(np) * 0.6 + alFogNoise(np * 2.3 + 7.0) * 0.4;
+    mid *= mix(1.0, mix(0.35, 1.10, patch), FOG_PATCHINESS);   // patchy banks
+    float wallStart = farD - wallChunks * 16.0;
+    float wallEnd   = farD - 8.0;
+    float wall = (wallEnd > wallStart) ? smoothstep(wallStart, wallEnd, dist) : 0.0;
+    return clamp(max(mid, wall), 0.0, 1.0);
+}
+
+/* -------------------------------------------------------------------------
    Full aerial-perspective evaluation for one pixel.
      sceneColor   — linear HDR colour under the fog (colortex0)
      camY         — camera world Y (cameraPosition.y)
@@ -457,18 +485,31 @@ vec3 alApplyAerialFog(vec3 sceneColor, float camY, vec3 worldDir, float dist,
                     densityMul, scatterTint, desat, darken);
 
 #if defined AL_DIM_NETHER
-    // Nether: dense, short-range ember fog EVERYWHERE (no sky gate — Nether sky-
-    // lightmap is 0, so a gate would remove all fog). Pure distance; ember tint.
-    float ndens = (0.6931472 / AL_NETHER_FOG_HALF) * max(userDensity, 0.0) * densityMul;
-    float nFogF = 1.0 - exp(-ndens * max(dist, 0.0));
-    vec3  nInsc = AL_NETHER_FOG * scatterTint * darken;
+    // Nether: overworld-style DISTANCE fog in an ember tone (5.0.11). A LIGHT
+    // mid-field ember haze (no washout) + the shared patchy far gradient + solid
+    // render-edge wall so the unrendered dropoff is hidden. No sky gate (the Nether
+    // has no sky). The far wall is a richer ember the distance melts into.
+    float nFarD   = max(farDist, 16.0);
+    float ndens   = (0.6931472 / AL_NETHER_FOG_HALF) * max(userDensity, 0.0) * densityMul;
+    float nBase   = 1.0 - exp(-ndens * max(dist, 0.0));
+    float nEdge   = alFogEdgeFactor(dist, nFarD, worldDir);
+    float nFogF   = max(nBase, nEdge);
+    vec3  nHaze   = AL_NETHER_FOG     * scatterTint * darken;   // dim mid ember
+    vec3  nFar    = AL_NETHER_FOG_FAR * darken;                 // far-wall ember
+    vec3  nInsc   = mix(nHaze, nFar, nEdge);
     return max(sceneColor * (1.0 - nFogF) + nInsc * nFogF, vec3(0.0));
 #elif defined AL_DIM_END
-    // End: purple haze, no sky gate, medium range; distant terrain fades into the
-    // purple, the black-hole sky shows through where terrain is absent.
-    float edens = (0.6931472 / AL_END_FOG_HALF) * max(userDensity, 0.0) * densityMul;
-    float eFogF = 1.0 - exp(-edens * max(dist, 0.0));
-    vec3  eInsc = AL_END_FOG * scatterTint * darken;
+    // End: overworld-style DISTANCE fog in a purple tone (5.0.11). Dim mid haze +
+    // patchy far gradient + wall; the far wall converges to the End HORIZON SPACE
+    // colour so distant terrain melts seamlessly into the purple sky. No sky gate.
+    float eFarD   = max(farDist, 16.0);
+    float edens   = (0.6931472 / AL_END_FOG_HALF) * max(userDensity, 0.0) * densityMul;
+    float eBase   = 1.0 - exp(-edens * max(dist, 0.0));
+    float eEdge   = alFogEdgeFactor(dist, eFarD, worldDir);
+    float eFogF   = max(eBase, eEdge);
+    vec3  eHaze   = AL_END_FOG     * scatterTint * darken;      // dim purple mid
+    vec3  eFar    = AL_END_FOG_FAR * darken;                    // far wall = sky horizon
+    vec3  eInsc   = mix(eHaze, eFar, eEdge);
     return max(sceneColor * (1.0 - eFogF) + eInsc * eFogF, vec3(0.0));
 #else
     // Sky-exposure gate: no open sky above -> no aerial fog (caves/interiors).
@@ -486,27 +527,10 @@ vec3 alApplyAerialFog(vec3 sceneColor, float camY, vec3 worldDir, float dist,
     float density = (0.6931472 / AL_FOG_DIST_HALF) * max(userDensity, 0.0) * densityMul;
     float baseFog = 1.0 - exp(-density * max(dist, 0.0));
 
-    // --- Patchy far gradient + solid wall (5.0.5) -------------------------
-    // From ~AL_FOG_MID_CHUNKS chunks out the fog builds UNEVENLY (world-ish noise
-    // -> patchy, real banks) so the far field gets progressively less clear, then
-    // the last AL_FOG_EDGE_CHUNKS chunks become a SOLID wall that hides the
-    // unrendered-chunk dropoff/void. Absolute chunk distance (same at any render
-    // distance).
-    float wallChunks = AL_FOG_EDGE_CHUNKS;
-    float midStart = farD - AL_FOG_MID_CHUNKS * 16.0;
-    float midEnd   = farD - wallChunks * 16.0;
-    float mid = smoothstep(midStart, midEnd, dist);
-    vec2  np    = worldDir.xz * (dist * 0.02);
-    float patch = alFogNoise(np) * 0.6 + alFogNoise(np * 2.3 + 7.0) * 0.4;
-    // FOG_PATCHINESS blends between a smooth radial ramp (0) and strongly broken
-    // banks (>=1). At 0 the multiplier is a flat 1.0 (no patch modulation).
-    mid *= mix(1.0, mix(0.35, 1.10, patch), FOG_PATCHINESS);
-    // Solid wall in the last wallChunks. Guarded so FOG_WALL_CHUNKS = 0 => no wall
-    // (smoothstep is undefined when edge0 >= edge1, so branch it out).
-    float wallStart = farD - wallChunks * 16.0;
-    float wallEnd   = farD - 8.0;
-    float wall = (wallEnd > wallStart) ? smoothstep(wallStart, wallEnd, dist) : 0.0;
-    float edge = clamp(max(mid, wall), 0.0, 1.0);
+    // --- Patchy far gradient + solid wall (shared helper) ------------------
+    // From ~FOG_START_CHUNKS out the fog builds UNEVENLY (patchy banks), then the
+    // last FOG_WALL_CHUNKS become a SOLID wall hiding the unrendered dropoff.
+    float edge = alFogEdgeFactor(dist, farD, worldDir);
 
     // The NEAR base haze is sky-gated (caves/interiors stay clear), but the FAR
     // patchy+wall fog is NOT — otherwise a distant cave mouth / hole in the surface
@@ -552,6 +576,16 @@ vec3 alApplyAerialFog(vec3 sceneColor, float camY, vec3 worldDir, float dist,
     // The horizon SKY converges to the SAME colour (composite2 sky path), so far
     // terrain and the void beyond meet seamlessly.
     vec3 farCol    = alFogFarColor(worldSunDir, rainStrength, wetness, thunderStrength);
+
+    // CAVE TONE (5.0.11): inside a HUGE cave / deep underground that runs past the
+    // render distance, the far/mid fog must be DARK to match the cave — a bright grey
+    // wall in a dark cave looks wrong. Blend BOTH the mid haze and the far colour
+    // toward AL_FOG_CAVE_COL as this pixel's sky access falls, so the render edge in a
+    // big cave reads as the cave receding into darkness (the void is still hidden).
+    float openness = smoothstep(0.0, 0.30, skyLightmap);
+    haze   = mix(AL_FOG_CAVE_COL, haze,   openness);
+    farCol = mix(AL_FOG_CAVE_COL, farCol, openness);
+
     vec3 inscatter = mix(haze, farCol, edge);
 
     vec3 result = sceneColor * (1.0 - fogF) + inscatter * fogF;
