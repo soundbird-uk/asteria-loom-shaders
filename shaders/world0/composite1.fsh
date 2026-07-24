@@ -1,6 +1,7 @@
 #version 330 compatibility
 #include "/settings.glsl"
 #include "/lib/common.glsl"
+#include "/lib/encoding.glsl"
 #include "/lib/space.glsl"
 #ifdef VOLUMETRIC_CLOUDS
 #include "/lib/clouds.glsl"
@@ -45,6 +46,7 @@
 */
 
 uniform sampler2D colortex0;   // scene HDR
+uniform sampler2D colortex3;   // G-buffer matID .r (player/hand cloud occlusion)
 uniform sampler2D colortex4;   // this frame's AO (r), confidence (g)
 uniform sampler2D depthtex1;   // opaque-only depth (matches the AO pass)
 
@@ -191,6 +193,17 @@ void main() {
     vec3  nightCloud = mix(AL_CLOUD_NIGHT_TINT, vec3(1.0), cloudDayF)
                      * mix(AL_CLOUD_NIGHT_BRIGHT, 1.0, cloudDayF);
     dispScatter *= nightCloud;
+
+    // Clouds must NEVER draw over the player body (3rd person) or the held item /
+    // hand (1st person). Those surfaces are tagged ENTITY / HAND; the player's
+    // translucent skin layers (hat, jacket) are excluded from depthtex1, so without
+    // this the cloud march runs past them and clouds show THROUGH the player. Force
+    // full occlusion (scene, no cloud) on those pixels.
+    int pmat = alDecodeMatID(texture(colortex3, texcoord).r);
+    if (pmat == AL_MATID_ENTITY || pmat == AL_MATID_HAND) {
+        dispTrans   = 1.0;
+        dispScatter = vec3(0.0);
+    }
 
     // Composite over the scene: background shows through by the (dissolved)
     // transmittance, plus the (distance-faded) in-scattered radiance.

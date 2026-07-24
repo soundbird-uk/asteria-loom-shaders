@@ -64,6 +64,8 @@ uniform sampler2D colortex0;   // scene HDR (sky + lit scene + translucents + cl
 uniform sampler2D colortex2;   // G-buffer: normal.rg (octahedral), lightmap.ba (block, sky)
 uniform sampler2D colortex3;   // G-buffer: matID .r (outline / god-ray gating)
 uniform sampler2D depthtex0;   // translucent-inclusive depth
+uniform sampler2D depthtex1;   // opaque-only depth (for fog-through-glass: the
+                               // geometry BEHIND a translucent surface)
 
 // Weather (verified). rainStrength/wetness/thunderStrength drive density/tint.
 uniform float rainStrength;
@@ -310,8 +312,19 @@ void main() {
         return;
     }
 
+    // FOG THROUGH GLASS: for a translucent surface (glass/ice/slime/portal), fog
+    // by the OPAQUE geometry BEHIND it (depthtex1) so distant fog is visible
+    // THROUGH the glass instead of the near glass-surface distance leaving it
+    // unfogged. Water keeps its own surface depth (its depth-tint/absorption is
+    // handled in composite). Glass against open sky keeps the glass depth.
+    float fogDepth = depth;
+    if (alDecodeMatID(texture(colortex3, texcoord).r) == AL_MATID_TRANSLUCENT) {
+        float dOpaque = texture(depthtex1, texcoord).r;
+        if (dOpaque < 1.0) fogDepth = dOpaque;
+    }
+
     // Reconstruct the world-relative view ray from depth.
-    vec3  viewPos   = alScreenToView(texcoord, depth);
+    vec3  viewPos   = alScreenToView(texcoord, fogDepth);
     vec3  playerPos = alViewToPlayer(viewPos);          // world pos rel. camera
     float dist      = length(playerPos);
 

@@ -69,10 +69,13 @@
 
 uniform sampler2D colortex0;   // scene HDR (opaque + translucents blended)
 uniform sampler2D colortex2;   // water surface: normal .rg, lightmap .ba
-uniform sampler2D colortex3;   // matID .r
+uniform sampler2D colortex3;   // matID .r, reflectivity .b, metalness .a
 uniform sampler2D depthtex0;   // translucent-inclusive depth (water surface)
 uniform sampler2D depthtex1;   // opaque-only depth (behind the water)
 uniform sampler2D noisetex;    // blue-ish noise for the dithered SSR start
+#ifdef REFLECTIVE_BLOCKS
+uniform sampler2D colortex1;   // albedo — metal reflections tint by the block's own colour
+#endif
 
 // Forward matrices for the view-space raymarch projection. lib/space.glsl owns
 // the INVERSE matrices + cameraPosition/previous* (do not redeclare those);
@@ -143,6 +146,67 @@ bool alTraceSSR(vec3 origin, vec3 dir, float dither, out vec2 hitUV) {
     return false;
 }
 
+#ifdef REFLECTIVE_BLOCKS
+/*
+ Material-dependent reflection for a SOLID reflective block (ice / metal / polished)
+ or reflective translucent ice. reflAmt (colortex3.b) is the surface reflectivity,
+ metal (colortex3.a) selects the model:
+   * DIELECTRIC (ice / polished stone, metal=0): Fresnel-shaped — subtle head-on,
+     reflective at grazing; the reflection is neutral (untinted).
+   * METAL (metal=1): strong at all angles and TINTED by the block's own albedo
+     (iron silver, gold yellow, copper orange) — a proper metallic look.
+ Reuses the water SSR raymarch against depthtex0, with a sky-access gate so indoor
+ blocks reflect a dark tone instead of the bright sky. NaN-safe: falls back to base.
+*/
+vec3 alReflectiveBlock(vec3 base, float reflAmt, float metal) {
+    float d0 = texture(depthtex0, texcoord).r;
+    vec3  P0 = alScreenToView(texcoord, d0);
+    float dist0 = length(P0);
+    if (!(dist0 >= 0.0) || dist0 > 1.0e7) return base;
+
+    vec3  Nw = alDecodeNormal(texture(colortex2, texcoord).rg);
+    vec3  Nv = normalize(mat3(gbufferModelView) * Nw);
+    vec3  I  = normalize(P0);
+    float cosI = alSaturate(dot(-I, Nv));
+
+    float f0   = mix(0.04, 0.90, metal);
+    float fres = f0 + (1.0 - f0) * pow(1.0 - cosI, 5.0);
+
+    // Sky-access gate: indoor reflective blocks reflect a dark tone, not bright sky.
+    float skyLm   = alSaturate(texture(colortex2, texcoord).a);
+    float skyGate = smoothstep(0.0, 0.35, skyLm);
+    vec3  Rv = reflect(I, Nv);
+    vec3  Rw = normalize(alViewDirToWorld(Rv));
+    vec3  refl = mix(vec3(0.015, 0.020, 0.035), alSkySample(Rw), skyGate);
+
+    // SSR: reflect nearby on-screen geometry when the toggle's march finds a hit.
+    vec2  noiseUV = gl_FragCoord.xy / 256.0;
+    float dither  = fract(texture(noisetex, noiseUV).r + float(frameCounter) * 0.61803398875);
+    vec2  hitUV;
+    if (alTraceSSR(P0, Rv, dither, hitUV)) {
+        vec3 hitCol = texture(colortex0, hitUV).rgb;
+        vec2 e = smoothstep(vec2(0.0), vec2(AL_SSR_EDGE_FADE), hitUV)
+               * (1.0 - smoothstep(vec2(1.0 - AL_SSR_EDGE_FADE), vec2(1.0), hitUV));
+        float edgeFade = e.x * e.y;
+        bool okHit = all(greaterThanEqual(hitCol, vec3(0.0)))
+                  && all(lessThan(hitCol, vec3(65000.0)));
+        refl = mix(refl, okHit ? hitCol : refl, edgeFade);
+    }
+
+    // Metal tints the reflection with its own albedo (F0 colour); dielectric neutral.
+    vec3 albedo    = texture(colortex1, texcoord).rgb;
+    vec3 reflColor = refl * mix(vec3(1.0), albedo, metal);
+
+    // Strength: dielectric is Fresnel-driven; metal is strong at all angles.
+    float strength = mix(reflAmt * fres, reflAmt * (0.70 + 0.30 * fres), metal);
+    strength = alSaturate(strength * REFLECTIVE_STRENGTH);
+
+    vec3 result = mix(base, reflColor, strength);
+    bool ok = all(greaterThanEqual(result, vec3(0.0)));
+    return ok ? min(result, vec3(65000.0)) : base;
+}
+#endif
+
 void main() {
     vec3 base = texture(colortex0, texcoord).rgb;
 
@@ -153,8 +217,19 @@ void main() {
     return;
 #endif
 
+    vec4 m3  = texture(colortex3, texcoord);
+    int  mat = alDecodeMatID(m3.r);
+
+#ifdef REFLECTIVE_BLOCKS
+    // Reflective solid blocks (ice / metal / polished) and reflective translucent
+    // ice — tagged with reflectivity in colortex3.b (+ metalness in .a). Not water.
+    if (mat != AL_MATID_WATER && m3.b > 0.01) {
+        outColor = vec4(alReflectiveBlock(base, m3.b, m3.a), 1.0);
+        return;
+    }
+#endif
+
     // Non-water pixels: untouched.
-    int mat = alDecodeMatID(texture(colortex3, texcoord).r);
     if (mat != AL_MATID_WATER) {
         outColor = vec4(base, 1.0);
         return;

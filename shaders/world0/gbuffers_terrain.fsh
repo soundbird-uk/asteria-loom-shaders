@@ -15,6 +15,8 @@ in vec2 lmcoord;
 in vec4 glcolor;
 in vec3 wnormal;
 flat in float emissive;   // 1.0 for light-emitting blocks (block.properties 10040)
+flat in float reflAmt;    // reflectivity 0..1 (block.properties 10050/10051)
+flat in float metalness;  // 1.0 = metal (albedo-tinted reflection)
 
 /* RENDERTARGETS: 1,2,3 */
 layout(location = 0) out vec4 outAlbedo;    // colortex1
@@ -31,6 +33,7 @@ void main() {
 
     outAlbedo   = vec4(albedo.rgb, 1.0);                       // a = AO spare
     outNormalLm = vec4(alEncodeNormal(wnormal), lmcoord);      // rg normal, ba lightmap
+    // colortex3: r matID, g flags, b reflectivity, a metalness (composite SSR).
     outMaterial = vec4(alEncodeMatID(matID),
-                       alEncodeFlags(AL_FLAG_NONE), 0.0, 0.0);
+                       alEncodeFlags(AL_FLAG_NONE), reflAmt, metalness);
 }

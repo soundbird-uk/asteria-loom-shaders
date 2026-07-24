@@ -585,10 +585,29 @@ const float sunPathRotation = -35.0;
 #define AL_RAY_WEAVE_DEPTH  0.32   // modulation depth (0 = off, 1 = full dark bands)
 #define AL_RAY_WEAVE_DRIFT  0.04   // slow angular drift (rad/s) — dreamy, not flicker
 
-// Overall fog density multiplier on top of the tuned sea-level baseline.
+// Overall fog density multiplier on top of the tuned sea-level baseline. Scales
+// the mid-field aerial HAZE (the atmospheric depth you see across the landscape).
 // 1.00 is the intended look; lower for crisp long views, higher for a soupier,
-// moodier haze.
-#define FOG_DENSITY 1.00 // [0.50 0.75 1.00 1.25 1.50 2.00]
+// moodier haze. Does NOT affect the render-edge wall (that has its own controls).
+#define FOG_DENSITY 1.00 // [0.00 0.50 0.75 1.00 1.25 1.50 2.00]
+
+// --- Render-edge fog wall (the new distance-fog system) --------------------
+// The far fog has two GUI-tunable stages, both measured in CHUNKS before the
+// render-distance edge (so they mean the same thing at any render distance):
+//   FOG_WALL_CHUNKS  — the last N chunks are a SOLID grey fog wall that fully
+//                      hides the unrendered-chunk dropoff into the void. 0 = no
+//                      wall (edge left open). Raise for a thicker seal.
+//   FOG_START_CHUNKS — the patchy, uneven fog begins building this many chunks
+//                      before the edge and ramps up to the wall. Larger = the
+//                      distance hazes over sooner / more gradually.
+// FOG_START_CHUNKS is always treated as at least (wall + 1) internally so the
+// patchy ramp can never sit inside or behind the wall.
+#define FOG_WALL_CHUNKS  3.0 // [0.0 1.0 1.5 2.0 2.5 3.0 4.0 5.0]
+#define FOG_START_CHUNKS 6.5 // [3.0 4.5 5.0 6.5 8.0 10.0 12.0 16.0]
+
+// How uneven/patchy the far fog builds before the wall (0 = smooth radial ramp,
+// 1 = strongly broken into real-looking banks). Cosmetic; tune to taste.
+#define FOG_PATCHINESS 1.0 // [0.0 0.25 0.5 0.75 1.0 1.5]
 
 
 /* =========================================================================
@@ -625,6 +644,23 @@ const float sunPathRotation = -35.0;
 // direction and faded with water depth + sky exposure + time of day. POTATO
 // turns this off.
 #define WATER_CAUSTICS // [WATER_CAUSTICS]
+
+// --- Reflective solid blocks (5.0.9) ---------------------------------------
+// Screen-space reflections on smooth SOLID blocks, MATERIAL-DEPENDENT (tagged in
+// block.properties): metals (iron/gold/copper/netherite/diamond/emerald) reflect
+// strongly and tint the reflection with their own colour; ice (packed/blue and
+// regular) and polished stones stay glassy — subtle head-on, reflective at grazing
+// (Fresnel). Reuses the water SSR raymarch (composite) against depthtex0, with a
+// sky-access gate so indoor blocks don't reflect bright sky. Master toggle:
+#define REFLECTIVE_BLOCKS // [REFLECTIVE_BLOCKS]
+
+// Overall reflection strength for blocks. 1.0 = tuned default.
+#define REFLECTIVE_STRENGTH 1.00 // [0.25 0.50 0.75 1.00 1.50]
+
+// Per-class base reflectivity (internal, not GUI). Glassy = ice / polished stone;
+// Metal = the metal block set. REFLECTIVE_STRENGTH scales both.
+#define AL_REFLECT_ICE   0.55   // glassy dielectric (Fresnel-shaped in composite)
+#define AL_REFLECT_METAL 0.90   // metal (strong at all angles, albedo-tinted)
 
 // --- Wave shaping (internal, not GUI) --------------------------------------
 // Reworked (0.4.2 field fix — "too uniform, one direction"): the surface is NOT

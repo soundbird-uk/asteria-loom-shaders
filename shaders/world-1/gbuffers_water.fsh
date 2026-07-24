@@ -63,6 +63,7 @@ in vec3 playerPos;
 flat in float isWater;         // 1 = real water, 0 = other translucent (glass/ice/...)
 flat in float isNetherPortal;  // 1 = nether portal (block.properties 10002)
 flat in float isEndPortal;     // 1 = end portal / gateway (10003) — translucent-route fallback
+flat in float isIce;           // 1 = regular translucent ice (10052) — glassy SSR reflection
 
 /* RENDERTARGETS: 0,2,3 */
 layout(location = 0) out vec4 outColor;      // colortex0 (blended lit surface)
@@ -194,7 +195,10 @@ void main() {
 
         outColor    = vec4(color, tex.a);                    // keep glass colour+alpha
         outNormalLm = vec4(alEncodeNormal(Ng), lmcoord);     // geometric normal
+        // Regular ice gets a glassy reflectivity in colortex3.b so the composite
+        // SSR pass reflects it (material-dependent, dielectric); plain glass keeps 0.
+        float iceRefl = (isIce > 0.5) ? AL_REFLECT_ICE : 0.0;
         outMaterial = vec4(alEncodeMatID(AL_MATID_TRANSLUCENT),
-                           alEncodeFlags(AL_FLAG_NONE), 0.0, 0.0);
+                           alEncodeFlags(AL_FLAG_NONE), iceRefl, 0.0);
     }
 }

@@ -83,13 +83,14 @@
 // chunks that completely hides the unrendered-chunk dropoff into the void and
 // melts into the sky. The far fog colour is DIRECTION-INDEPENDENT (no sky sample
 // in the view direction) so it can NEVER paint a horizon band on terrain.
-//   EDGE_CHUNKS — how many chunks before `far` the thick fog starts
-//   EDGE_BRIGHT — lifts the far fog toward the sky's brightness (greyish blend)
-#define AL_FOG_EDGE_CHUNKS 3.0
+// 5.0.9: the chunk distances are now GUI sliders (settings.glsl) so the wall and
+// the patchy-ramp start make sense to tune. AL_FOG_EDGE_CHUNKS / AL_FOG_MID_CHUNKS
+// alias the GUI values; the start is floored to (wall + 1) so the patchy ramp can
+// never fall inside or behind the wall. EDGE_BRIGHT (internal) lifts the far fog
+// toward the sky's brightness (greyish blend).
+#define AL_FOG_EDGE_CHUNKS FOG_WALL_CHUNKS
+#define AL_FOG_MID_CHUNKS  max(FOG_START_CHUNKS, FOG_WALL_CHUNKS + 1.0)
 #define AL_FOG_EDGE_BRIGHT 1.35
-// Fog starts building (unevenly/patchy) this many chunks before the render edge,
-// ramping up to the solid wall in the last AL_FOG_EDGE_CHUNKS chunks.
-#define AL_FOG_MID_CHUNKS  6.5
 
 // Horizon void-seal (applied to SKY pixels in composite2): fade the sky toward
 // the far fog colour near the horizon so the void beyond the render edge reads as
@@ -491,13 +492,20 @@ vec3 alApplyAerialFog(vec3 sceneColor, float camY, vec3 worldDir, float dist,
     // the last AL_FOG_EDGE_CHUNKS chunks become a SOLID wall that hides the
     // unrendered-chunk dropoff/void. Absolute chunk distance (same at any render
     // distance).
+    float wallChunks = AL_FOG_EDGE_CHUNKS;
     float midStart = farD - AL_FOG_MID_CHUNKS * 16.0;
-    float midEnd   = farD - AL_FOG_EDGE_CHUNKS * 16.0;
+    float midEnd   = farD - wallChunks * 16.0;
     float mid = smoothstep(midStart, midEnd, dist);
     vec2  np    = worldDir.xz * (dist * 0.02);
     float patch = alFogNoise(np) * 0.6 + alFogNoise(np * 2.3 + 7.0) * 0.4;
-    mid *= mix(0.35, 1.10, patch);                       // uneven / patchy banks
-    float wall = smoothstep(farD - AL_FOG_EDGE_CHUNKS * 16.0, farD - 8.0, dist);
+    // FOG_PATCHINESS blends between a smooth radial ramp (0) and strongly broken
+    // banks (>=1). At 0 the multiplier is a flat 1.0 (no patch modulation).
+    mid *= mix(1.0, mix(0.35, 1.10, patch), FOG_PATCHINESS);
+    // Solid wall in the last wallChunks. Guarded so FOG_WALL_CHUNKS = 0 => no wall
+    // (smoothstep is undefined when edge0 >= edge1, so branch it out).
+    float wallStart = farD - wallChunks * 16.0;
+    float wallEnd   = farD - 8.0;
+    float wall = (wallEnd > wallStart) ? smoothstep(wallStart, wallEnd, dist) : 0.0;
     float edge = clamp(max(mid, wall), 0.0, 1.0);
 
     // The NEAR base haze is sky-gated (caves/interiors stay clear), but the FAR

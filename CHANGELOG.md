@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added (5.0.9)
+
+- **Reflective blocks (material-dependent SSR).** Smooth solid blocks now reflect
+  their surroundings via screen-space reflections, with a look that depends on the
+  material: metals (iron/gold/copper/netherite/diamond/emerald) reflect strongly
+  and tint the reflection with their own colour, while ice (packed/blue and regular)
+  and polished stones stay glassy — subtle head-on, reflective at grazing. Sky-access
+  gated so indoor blocks don't reflect bright sky. New `REFLECTIVE_BLOCKS` toggle +
+  `REFLECTIVE_STRENGTH` slider on the Water screen. Tagged in `block.properties`
+  (10050 glassy, 10051 metal, 10052 translucent ice).
+- **Reworked fog settings.** The new distance-fog system is now GUI-tunable in
+  chunks that mean something: `FOG_START_CHUNKS` (how far out the patchy fog begins),
+  `FOG_WALL_CHUNKS` (thickness of the solid render-edge wall, 0 = off) and
+  `FOG_PATCHINESS`. `FOG_DENSITY` now scales only the mid-field haze.
+
+### Fixed (5.0.9)
+
+- **Fog is now visible through glass.** Glass/ice/other translucents are fogged by
+  the distance to the opaque geometry BEHIND them, so distant fog shows through the
+  glass instead of the near glass surface leaving it clear.
+- **Clouds no longer show through the player.** Volumetric clouds are never drawn
+  over entity/hand surfaces, so the 3rd-person player body and 1st-person hand
+  correctly occlude clouds (previously they showed through translucent skin layers).
+
 ### Fixed (5.0.8)
 
 - **Fog now covers distant cave mouths / holes in the surface.** The sky-exposure

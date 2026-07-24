@@ -26,6 +26,8 @@ out vec2 lmcoord;
 out vec4 glcolor;
 out vec3 wnormal;
 flat out float emissive;   // 1.0 for light-emitting blocks (block.properties 10040)
+flat out float reflAmt;    // reflectivity 0..1 (block.properties 10050/10051)
+flat out float metalness;  // 1.0 = metal (albedo-tinted reflection)
 
 void main() {
     vec4 viewPos = gl_ModelViewMatrix * gl_Vertex;
@@ -34,6 +36,13 @@ void main() {
     // the foliage wind; the fragment stage tags matID EMISSIVE so deferred1 adds
     // the glow from the block's own texture colour.
     emissive = (mc_Entity.x == 10040.0) ? 1.0 : 0.0;
+
+    // Reflective-material classification (block.properties 10050 glassy, 10051
+    // metal). The fragment stage stores reflAmt in colortex3.b and metalness in .a
+    // so the composite SSR pass can reflect these solid blocks material-dependently.
+    reflAmt = 0.0; metalness = 0.0;
+    if (mc_Entity.x == 10050.0)      { reflAmt = AL_REFLECT_ICE;   metalness = 0.0; }
+    else if (mc_Entity.x == 10051.0) { reflAmt = AL_REFLECT_METAL; metalness = 1.0; }
 
 #ifdef AL_WAVING_FOLIAGE
     // --- Foliage wind (ISSUE 5) ------------------------------------------------
