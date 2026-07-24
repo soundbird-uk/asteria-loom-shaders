@@ -61,6 +61,7 @@ in vec4 glcolor;
 in vec3 wnormal;
 in vec3 playerPos;
 in vec2 waterRefXZ;            // undisplaced world XZ — Gerstner rest position
+in float waterShore;           // 0 shallow/calm shore .. 1 deep/rough open water
 flat in float isWater;         // 1 = real water, 0 = other translucent (glass/ice/...)
 flat in float isNetherPortal;  // 1 = nether portal (block.properties 10002)
 flat in float isEndPortal;     // 1 = end portal / gateway (10003) — translucent-route fallback
@@ -160,8 +161,9 @@ void main() {
         if (abs(Ng.y) > 0.5) {
             float dist = length(playerPos);
             // Analytic Gerstner normal + Jacobian at the UNDISPLACED rest position.
+            // shoreFactor attenuates big swells near land (fine ripples preserved).
             vec3  gN; float jac;
-            alGerstnerSurface(waterRefXZ, frameTimeCounter, 1.0, gN, jac);
+            alGerstnerSurface(waterRefXZ, frameTimeCounter, 1.0, waterShore, gN, jac);
             // Domain-warped 3D-simplex micro-ripples (fade out with range).
             float microAmt = alSaturate(1.0 - dist / AL_WATER_MICRO_FADE);
             vec3  mN = alWaterMicroNormal(waterRefXZ, frameTimeCounter, microAmt);
@@ -194,11 +196,16 @@ void main() {
         vec3 color = alLightPhase1(albedoLin, N, lmcoord, shadowVis, wLightDir,
                                    wSunDir, playerPos + cameraPosition, dayFactor);
 
-        // Crest foam: opaque, bright, lit by the ambient + a touch of the key.
-        vec3 foamLit = AL_WATER_FOAM_COLOR * (0.5 + 0.5 * shadowVis * max(NdotL, 0.0)
-                                              + 0.4 * lmcoord.y);
-        color = mix(color, foamLit, crestFoam);
-        alpha = mix(alpha, 1.0, crestFoam);
+        // Crest foam: lit with the SAME lighting model as the water (foam albedo),
+        // so it darkens to moonlit grey at night instead of glowing white (field
+        // report). Only computed where foam actually is.
+        if (crestFoam > 0.001) {
+            vec3 foamLit = alLightPhase1(AL_WATER_FOAM_COLOR, N, lmcoord, shadowVis,
+                                         wLightDir, wSunDir, playerPos + cameraPosition,
+                                         dayFactor);
+            color = mix(color, foamLit, crestFoam);
+            alpha = mix(alpha, 1.0, crestFoam);
+        }
 
         outColor    = vec4(color, alpha);
         outNormalLm = vec4(alEncodeNormal(N), lmcoord);      // Gerstner+micro normal

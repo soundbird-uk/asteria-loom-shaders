@@ -168,12 +168,23 @@ void alGerstnerParams(int i, out vec2 dir, out float ki, out float ai,
     qi  = AL_WATER_STEEPNESS / (ki * float(AL_WATER_WAVE_N) + 1e-4);
 }
 
+// SHORELINE weight for wave i: near shore (shoreFactor -> 0) the big LOW-frequency
+// swells (low i) fade out while the fine high-frequency capillary ripples (high i)
+// are preserved, so shallow water stays rippled, never flat glass. Offshore
+// (shoreFactor -> 1) every wave is at full amplitude.
+float alShoreWaveW(int i, float shoreFactor) {
+    float hf = float(i) / float(AL_WATER_WAVE_N - 1);   // 0 = biggest swell, 1 = finest ripple
+    return mix(shoreFactor, 1.0, hf);
+}
+
 // World-space Gerstner displacement (x,z pinch toward crests, y height).
-vec3 alGerstnerDisplace(vec2 wp, float t) {
+// shoreFactor (0 shallow/calm .. 1 deep/rough) attenuates the big swells near land.
+vec3 alGerstnerDisplace(vec2 wp, float t, float shoreFactor) {
     vec3 disp = vec3(0.0);
     for (int i = 0; i < AL_WATER_WAVE_N; i++) {
         vec2 dir; float ki, ai, wi, qi;
         alGerstnerParams(i, dir, ki, ai, wi, qi);
+        ai *= alShoreWaveW(i, shoreFactor);
         float th = dot(wp, dir) * ki + t * wi + float(i) * 1.3;
         float s = sin(th), c = cos(th);
         disp.x += qi * ai * dir.x * c;
@@ -184,13 +195,16 @@ vec3 alGerstnerDisplace(vec2 wp, float t) {
 }
 
 // Analytic surface normal (world Y-up) + Jacobian determinant of the horizontal
-// displacement. `strength` scales the horizontal slope of the normal.
-void alGerstnerSurface(vec2 wp, float t, float strength, out vec3 nrm, out float jac) {
+// displacement. `strength` scales the horizontal slope of the normal; shoreFactor
+// attenuates the big-swell contribution near land (fine ripples preserved).
+void alGerstnerSurface(vec2 wp, float t, float strength, float shoreFactor,
+                       out vec3 nrm, out float jac) {
     float dhdx = 0.0, dhdz = 0.0, nySum = 0.0;
     float jxx = 0.0, jzz = 0.0, jxz = 0.0;
     for (int i = 0; i < AL_WATER_WAVE_N; i++) {
         vec2 dir; float ki, ai, wi, qi;
         alGerstnerParams(i, dir, ki, ai, wi, qi);
+        ai *= alShoreWaveW(i, shoreFactor);
         float th = dot(wp, dir) * ki + t * wi + float(i) * 1.3;
         float s = sin(th), c = cos(th);
         float ka = ki * ai;

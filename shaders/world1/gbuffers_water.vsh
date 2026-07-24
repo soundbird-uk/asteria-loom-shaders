@@ -18,6 +18,8 @@
 */
 
 uniform mat4 gbufferModelViewInverse;
+uniform mat4 gbufferProjectionInverse;   // reconstruct seabed depth for shoreFactor
+uniform sampler2D depthtex1;              // opaque-only depth (seabed behind water)
 uniform vec3 cameraPosition;      // world-space camera (wave phase in world XZ)
 uniform float frameTimeCounter;   // wave animation time
 
@@ -31,6 +33,7 @@ out vec4 glcolor;
 out vec3 wnormal;
 out vec3 playerPos;
 out vec2 waterRefXZ;             // UNDISPLACED world XZ (Gerstner rest position)
+out float waterShore;           // 0 shallow/calm shore .. 1 deep/rough open water
 // 1.0 for real water, 0.0 for every other translucent that routes through this
 // program. `flat` (330-core) — it is a per-primitive classification, not a value
 // to interpolate. The fragment stage gates ALL water-specific behaviour on it.
@@ -55,12 +58,37 @@ void main() {
     vec3 worldPos = (gbufferModelViewInverse * viewPos).xyz + cameraPosition;
     waterRefXZ = worldPos.xz;
 
-#ifdef WATER_WAVES
-    // GERSTNER DISPLACEMENT — real water only. Evaluate the world-space wave
-    // displacement and rotate it into view space (modelview inverse is orthonormal,
-    // so world->view is its transpose) before projecting.
+    // --- SHORELINE ATTENUATION: water depth from the scene depth buffer ---------
+    // A vertex shader can't know water depth from geometry, so we sample the opaque
+    // depth (depthtex1 — seabed/terrain behind the water, already finalized before
+    // the translucent pass) at THIS vertex's screen position (vertex texture fetch),
+    // reconstruct the seabed's view distance, and compare it to the water surface
+    // distance to get the water-column depth. shoreFactor ramps 0 (shallow/beach)
+    // -> 1 (deep/open) over COAST_SWELL_DISTANCE. Fully guarded: any degenerate case
+    // defaults to 1.0 (open water / full waves) so water never collapses to glass.
+    waterShore = 1.0;
     if (isWater > 0.5) {
-        vec3 disp = alGerstnerDisplace(worldPos.xz, frameTimeCounter);
+        vec4 clipU = gl_ProjectionMatrix * viewPos;           // undisplaced, unjittered
+        if (clipU.w > 1e-4) {
+            vec2 suv = clipU.xy / clipU.w * 0.5 + 0.5;
+            if (all(greaterThanEqual(suv, vec2(0.0))) && all(lessThanEqual(suv, vec2(1.0)))) {
+                float dB = textureLod(depthtex1, suv, 0.0).r;
+                if (dB < 1.0) {                               // seabed present (not sky)
+                    vec4 vp = gbufferProjectionInverse * vec4(suv * 2.0 - 1.0, dB * 2.0 - 1.0, 1.0);
+                    float seabedEye = -vp.z / (abs(vp.w) < 1e-5 ? 1e-5 : vp.w);
+                    float surfEye   = -viewPos.z;
+                    float wdepth    = max(seabedEye - surfEye, 0.0);
+                    waterShore = smoothstep(0.0, COAST_SWELL_DISTANCE, wdepth);
+                }
+            }
+        }
+    }
+
+#ifdef WATER_WAVES
+    // GERSTNER DISPLACEMENT — real water only. Big swells scaled by shoreFactor so
+    // beaches stay calm; world displacement rotated into view space before project.
+    if (isWater > 0.5) {
+        vec3 disp = alGerstnerDisplace(worldPos.xz, frameTimeCounter, waterShore);
         // SHORELINE SAFETY: damp the HORIZONTAL pull so water vertices can't drag
         // away from the solid block beside them and open a seam/void at the shore.
         // Vertical swell is kept in full; the fragment normal keeps full steepness.

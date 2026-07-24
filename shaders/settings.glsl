@@ -673,6 +673,13 @@ const float sunPathRotation = -35.0;
 // water go opaque/navy faster with depth; lower keeps it clearer/teal for longer.
 #define WATER_ABSORPTION 1.00 // [0.25 0.50 0.75 1.00 1.25 1.50 2.00]
 
+// SHORELINE SWELL ATTENUATION: how deep the water must be (blocks) before the big
+// ocean swells reach FULL height. Below this, large low-frequency waves fade out so
+// beaches/shallows stay calm; the fine capillary ripples are always kept so shallow
+// water never reads as flat glass. Depth is read from the scene depth buffer
+// (gbuffers_water.vsh) per water vertex. Larger = swells only build far offshore.
+#define COAST_SWELL_DISTANCE 20.0 // [5.0 10.0 15.0 20.0 30.0 40.0 50.0]
+
 // Animated voronoi caustics on the submerged scene, projected along the sun
 // direction and faded with water depth + sky exposure + time of day. POTATO
 // turns this off.
@@ -781,6 +788,26 @@ const float sunPathRotation = -35.0;
 #define AL_WATER_FOAM_JAC_LO   0.900
 #define AL_WATER_FOAM_CONTACT  0.85
 const vec3 AL_WATER_FOAM_COLOR = vec3(0.86, 0.92, 0.96);
+// 5.1.2 foam tone: contact (shoreline) foam was too white/jarring and never
+// darkened at night. STR caps its strength; NIGHT is its brightness floor at night
+// (both crest + contact foam are lit by day factor so they read moonlit-grey after
+// dark instead of glowing white).
+#define AL_WATER_FOAM_CONTACT_STR 0.65
+#define AL_WATER_FOAM_NIGHT       0.14
+
+// --- Reflection: occluded-horizon fix + sun glint (5.1.2) ------------------
+// Near-horizontal reflected rays are almost always occluded by shore terrain /
+// mountains, but the sky LUT has a bright horizon band there that SSR-misses paint
+// onto the water as a jarring bright line. Fade the reflected SKY toward a dark
+// water tone as the reflected ray nears the horizon (Rw.y in LO..HI); only up-
+// pointing rays show real sky. SSR still overrides with real on-screen geometry.
+#define AL_WATER_REFL_HORIZON_LO 0.00
+#define AL_WATER_REFL_HORIZON_HI 0.22
+const vec3 AL_WATER_REFL_OCCLUDED = vec3(0.020, 0.035, 0.055);
+// Analytic SUN GLINT (the sun disc isn't in the depth buffer, so SSR can't reflect
+// it): a tight specular toward the sun so water sparkles with the sun/moon.
+#define AL_WATER_SUN_SPEC     9.0
+#define AL_WATER_SUN_SPEC_POW 500.0
 
 // --- Water surface opacity (internal, not GUI) -----------------------------
 // Fresnel-driven alpha: the surface is denser looking straight down and near-

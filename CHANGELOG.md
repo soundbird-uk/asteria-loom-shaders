@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added (5.1.2) — shoreline swell attenuation
+
+- **Ocean swells now scale with water depth.** Water depth is read from the scene
+  depth buffer per water vertex (vertex texture fetch of the opaque depth, seabed
+  reconstructed and compared to the surface). Big low-frequency Gerstner swells fade
+  out in the shallows so beaches/coasts stay calm, building to rough heavy swells in
+  deep/open water; the fine capillary ripples are always preserved so shallow water
+  never reads as flat glass. New `COAST_SWELL_DISTANCE` slider (5–50 blocks,
+  default 20).
+
+### Fixed (5.1.2) — water foam + reflections
+
+- **Foam darkens at night and is less jarring.** Crest foam is now lit by the full
+  scene lighting model (foam albedo) and contact/shoreline foam is day-factor +
+  sky-access shaded, so both read moonlit-grey after dark instead of glowing white;
+  shoreline foam strength reduced so it is no longer a harsh white band.
+- **Water no longer reflects the occluded horizon line.** Near-horizontal reflected
+  rays (which real shore terrain/mountains occlude) now fade to a dark water tone
+  instead of sampling the bright sky horizon band; only up-pointing rays show real
+  sky, and SSR still reflects actual on-screen terrain/objects.
+- **Water reflects the sun.** Added an analytic sun-glint specular (the sun disc is
+  not in the depth buffer, so SSR can't reflect it), day-factor scaled and gated to
+  open sky, so open water sparkles with the sun.
+
 ### Changed (5.1.1) — water robustness + cloud shape
 
 - **Clouds: more, smaller, thicker "candy-floss" puffs.** Tripled the coverage-field

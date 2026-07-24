@@ -269,7 +269,15 @@ void main() {
     float skyGate = smoothstep(0.0, 0.35, wSkyLm);
     vec3 Rv = reflect(I, Nv);
     vec3 Rw = normalize(alViewDirToWorld(Rv));
-    vec3 refl = mix(vec3(0.015, 0.020, 0.035), alSkySample(Rw), skyGate);  // fallback
+    // OCCLUDED-HORIZON FIX: a near-horizontal reflected ray almost always hits shore
+    // terrain / mountains, not open sky — but the sky LUT has a bright horizon band
+    // there that SSR-misses would paint onto the water as a jarring bright line.
+    // Fade the reflected SKY toward a dark water tone as the ray nears the horizon
+    // (Rw.y small); only up-pointing rays show real sky. SSR overrides below with
+    // actual on-screen geometry where it hits.
+    float upCut = smoothstep(AL_WATER_REFL_HORIZON_LO, AL_WATER_REFL_HORIZON_HI, Rw.y);
+    vec3  skyR  = mix(AL_WATER_REFL_OCCLUDED, alSkySample(Rw), upCut);
+    vec3 refl = mix(vec3(0.015, 0.020, 0.035), skyR, skyGate);  // fallback + cave gate
 
 #ifdef SSR
     // R2 low-discrepancy dither on the noisetex value, advanced by frameCounter.
@@ -290,6 +298,19 @@ void main() {
         refl = mix(refl, okHit ? hitCol : refl, edgeFade);
     }
 #endif
+
+    // SUN GLINT: the sun disc is not in the depth buffer, so SSR can never reflect
+    // it. Add an analytic specular toward the sun so open water sparkles with the
+    // sun (a tight core + a soft glossy lobe), day-factor scaled and gated to open
+    // sky. This is the "reflect the sun" the field report asked for.
+    {
+        vec3  sunDirW = alSunDirWorld();
+        float sd      = max(dot(Rw, sunDirW), 0.0);
+        float glint   = pow(sd, AL_WATER_SUN_SPEC_POW) + 0.12 * pow(sd, 8.0);
+        float dayF    = alSmooth(smoothstep(-0.06, 0.16, sunDirW.y));
+        refl += alDirectColor(sunDirW) * (glint * AL_WATER_SUN_SPEC
+                                          * mix(0.12, 1.0, dayF) * skyGate);
+    }
 
     // --- Refraction + absorption + caustics on the submerged scene -----------
     vec3  transmitted = base;
@@ -335,8 +356,10 @@ void main() {
 
 #ifdef WATER_FOAM
         // CONTACT FOAM: soft shoreline foam where the water column is shallow (the
-        // surface is close to the terrain behind it). Only under open sky.
-        contactFoam = (1.0 - smoothstep(0.0, AL_WATER_FOAM_CONTACT, waterPath)) * skyLm;
+        // surface is close to the terrain behind it). Softened (STR) + gated to open
+        // sky so it is not a jarring white band.
+        contactFoam = (1.0 - smoothstep(0.0, AL_WATER_FOAM_CONTACT, waterPath))
+                    * skyLm * AL_WATER_FOAM_CONTACT_STR;
 #endif
     }
 
@@ -344,8 +367,14 @@ void main() {
     vec3 result = mix(transmitted, refl, fres);
 
 #ifdef WATER_FOAM
-    // Shoreline foam on top (matte, slightly sky-lit).
-    result = mix(result, AL_WATER_FOAM_COLOR * (0.6 + 0.4 * skyLm), contactFoam);
+    // Shoreline foam on top (matte). Darkened at night (day factor) + by sky access
+    // so it reads moonlit-grey after dark instead of glowing white (field report).
+    if (contactFoam > 0.001) {
+        float foamDayF = alSmooth(smoothstep(-0.06, 0.16, alSunDirWorld().y));
+        vec3  foamCol  = AL_WATER_FOAM_COLOR * (0.25 + 0.55 * skyLm)
+                       * mix(AL_WATER_FOAM_NIGHT, 1.0, foamDayF);
+        result = mix(result, foamCol, contactFoam);
+    }
 #endif
 
     // NaN-law: any non-finite channel -> fall back to the untouched scene.
