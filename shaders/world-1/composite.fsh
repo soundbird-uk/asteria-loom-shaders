@@ -198,7 +198,7 @@ vec3 alReflectiveBlock(vec3 base, float reflAmt, float metal) {
     float ssrW = 1.0 - rough;
     if (ssrW > 0.05) {
         vec2 noiseUV = gl_FragCoord.xy / 256.0;
-    #ifdef AL_TAA
+    #ifdef AL_TEMPORAL
         float dither = fract(texture(noisetex, noiseUV).r + float(frameCounter) * 0.61803398875);
     #else
         float dither = texture(noisetex, noiseUV).r;
@@ -305,11 +305,11 @@ void main() {
 
 #ifdef SSR
     // R2 low-discrepancy dither on the noisetex value. Advanced by frameCounter
-    // ONLY under TAA (which temporally resolves it); under FXAA/Off it is frozen so
-    // the water reflection doesn't crawl as grain (field report).
+    // whenever a temporal resolve runs (composite3, FXAA or TAA) so it AVERAGES OUT;
+    // frozen only with AA fully off (no accumulator) so it can't crawl.
     vec2 noiseUV = gl_FragCoord.xy / 256.0;        // noisetex is 256x256
     float dither = texture(noisetex, noiseUV).r;
-#ifdef AL_TAA
+#ifdef AL_TEMPORAL
     dither = fract(dither + float(frameCounter) * 0.61803398875);
 #endif
 

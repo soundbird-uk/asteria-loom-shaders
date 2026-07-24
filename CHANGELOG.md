@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (5.2.1) — real temporal accumulation for SSR / AO / shadow grain
+
+- **Grain is now temporally ACCUMULATED away, not just frozen.** `composite3` is a
+  full temporal-resolve pass (closest-depth velocity dilation, reprojection via the
+  previous-frame model/projection matrices, YCoCg variance clip, disocclusion
+  depth-reject, HDR-compressed blend) that runs in BOTH FXAA and TAA modes. The
+  missing link: the screen-space dithers (SSR ray-start, GTAO slice/step, shadow-PCF
+  rotation) must be ANIMATED per frame for the accumulator to average them — 5.2.0
+  froze them, which left a static grain that can't average out. They are now animated
+  whenever a temporal resolve runs (`AL_TEMPORAL`), and frozen only with AA fully OFF
+  (no accumulator). Over ~8–10 frames the reprojected history averages the noise to a
+  smooth result for reflections, AO and soft shadow edges.
+- **TAA is now the default** (Medium/High/Ultra), so the accumulation also carries
+  camera jitter for sharp sub-pixel anti-aliasing; the variance clip keeps it sharp,
+  not blurry, and controls ghosting on motion. Potato/Low stay on FXAA (which still
+  gets the temporal anti-flicker accumulation, just without jitter). FXAA-mode
+  accumulation strengthened (0.75→0.82) so it denoises well too.
+- **Water SSR dark-grid infill retained + reinforced** — occluded/downward rays
+  return a dim ocean tone (never black), and with the noise now averaging out the
+  griddy pattern resolves to smooth water.
+
 ### Fixed (5.2.0) — grain, reflectivity, SSR grid, foam
 
 - **Crawling grain on reflections / AO / soft shadows removed.** The screen-space

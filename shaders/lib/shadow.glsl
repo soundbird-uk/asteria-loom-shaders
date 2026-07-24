@@ -138,10 +138,12 @@ float alShadowRotation() {
     // maximally-spread temporal offset — BUT that only denoises if the frames are
     // temporally resolved. Under FXAA/Off (no temporal resolve) the animated
     // rotation just CRAWLS as grain on soft shadow edges (field report). So the
-    // per-frame advance is applied ONLY under TAA; otherwise the rotation is a
-    // STABLE per-pixel pattern (from noisetex) that FXAA smooths spatially and that
-    // does not shimmer in motion.
-#ifdef AL_TAA
+    // per-frame advance is applied whenever a TEMPORAL RESOLVE runs (composite3, in
+    // both FXAA and TAA modes) so the animated rotation is AVERAGED OUT to a smooth
+    // soft edge. Only with AA fully OFF (no accumulator) is it frozen, so it can't
+    // crawl. (Animating it without a resolver was the crawl; freezing it without
+    // averaging was the residual static grain — this ties the two together.)
+#ifdef AL_TEMPORAL
     float r2 = fract(float(frameCounter) * 0.75487766624669276);
 #else
     float r2 = 0.0;

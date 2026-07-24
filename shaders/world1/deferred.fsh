@@ -95,11 +95,11 @@ void main() {
     // --- Per-pixel rotation + per-frame R2 advance ------------------------
     vec2  nz = texture(noisetex, gl_FragCoord.xy / 256.0).xy;
     // R2 sequence: two irrational advances (1/plastic, 1/plastic^2). The per-FRAME
-    // advance only denoises when temporally resolved, so it is applied ONLY under
-    // TAA; under FXAA/Off it is frozen (stable per-pixel pattern) so the AO does not
-    // CRAWL as grain (field report). The AO's own temporal history (colortex5) still
-    // accumulates either way; freezing the input just stops the visible shimmer.
-#ifdef AL_TAA
+    // advance is applied whenever a TEMPORAL RESOLVE runs (composite3, in both FXAA
+    // and TAA modes) AND the AO's own history (colortex5) accumulates it, so the
+    // animated jitter is AVERAGED OUT to smooth AO. Only with AA fully OFF (no
+    // accumulator) is it frozen so it can't crawl.
+#ifdef AL_TEMPORAL
     float fAdv = float(frameCounter);
 #else
     float fAdv = 0.0;

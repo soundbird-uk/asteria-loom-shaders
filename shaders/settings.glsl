@@ -995,7 +995,7 @@ const vec3 AL_UW_SNOW_TINT  = vec3(0.82, 0.86, 0.94);
 //   TAA  — jittered temporal accumulation (sharper sub-pixel detail) resolved in
 //          composite3 with un-jitter + variance clip. Steadier than raw aliasing
 //          but can still crawl slightly on far silhouettes; offered as a choice.
-#define AA_MODE 1 // [0 1 2]
+#define AA_MODE 2 // [0 1 2]
 
 // Derived internal flags (do not set directly — driven by AA_MODE).
 #if AA_MODE == 2
@@ -1003,6 +1003,14 @@ const vec3 AL_UW_SNOW_TINT  = vec3(0.82, 0.86, 0.94);
 #endif
 #if AA_MODE == 1
     #define AL_FXAA_ON    // spatial FXAA in final.fsh
+#endif
+// AL_TEMPORAL = a temporal RESOLVE runs (composite3 reprojects prev-frame history
+// and blends) — true for BOTH FXAA (anti-flicker) and TAA. The screen-space noise
+// (SSR / GTAO / shadow-PCF dither) is ANIMATED per frame ONLY when this is set, so
+// composite3 can average it out; with AA fully OFF (no accumulator) the dither is
+// frozen instead so it can't crawl. This is the mechanism that removes the grain.
+#if AA_MODE != 0
+    #define AL_TEMPORAL
 #endif
 
 // --- FXAA shaping (internal, not GUI — composite3.fsh) --------------------
@@ -1039,7 +1047,7 @@ const vec3 AL_UW_SNOW_TINT  = vec3(0.82, 0.86, 0.94);
 #define AL_TAA_CLIP_GAMMA 1.6
 // Anti-flicker (FXAA / no-jitter) blend ceiling — a touch lower than the TAA
 // ceiling so it quiets shimmer without smearing moving foliage/entities.
-#define AL_TAA_FXAA_MAX_BLEND 0.75
+#define AL_TAA_FXAA_MAX_BLEND 0.82
 
 
 /* =========================================================================
