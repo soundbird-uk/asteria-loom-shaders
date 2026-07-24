@@ -1,8 +1,8 @@
 # Asteria Loom — Architecture Overview
 
 A contributor-facing map of how the pack is put together. It reflects the pipeline **as of
-Phase 4** (0.4.0, in review — Phases 1–3 are released). Each phase has a binding contract;
-read the relevant one plus the brief:
+Phase 5** (Phases 1–5 shipped; the pack is in the 5.x visual-fix / tuning pass). Each phase
+has a binding contract; read the relevant one plus the brief:
 
 - [`docs/architecture/phase1-contract.md`](architecture/phase1-contract.md) — scaffold,
   conventions, base G-buffer (authoritative for the layout and Mac-safe GLSL rules).

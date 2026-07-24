@@ -10,9 +10,11 @@ Windows/Linux-only features unlock automatically on capable machines and compile
 of the build on macOS. Development is **Mac-first** against OpenGL 4.1, so the baseline is
 guaranteed to run on Apple Silicon; Windows and Linux gain an advanced tier on top.
 
-> **Current version: 0.3.3** (Phases 1–3 shipped and field-hardened on M4 Mac and Windows).
-> **0.4.0 — Phase 4 (water & post) — is implemented and in adversarial review.** See the
-> roadmap below and the [changelog](CHANGELOG.md) for the full release history.
+> **Current version: 5.2.5.** Phases 1–5 are shipped and field-hardened on M4 Mac and
+> Windows: lighting/shadows, PB atmosphere/clouds/fog, the water & post stack, all three
+> dimensions (Overworld, Nether, End), and an ongoing visual-fix pass (a Gerstner water
+> rewrite, deterministic grain removal, and material-correct reflections). See the
+> [changelog](CHANGELOG.md) for the full release history.
 
 ## Features
 
@@ -39,17 +41,35 @@ Live today (0.3.3):
 - **Dark, moody nights** with a preserved cool-blue readability floor and a warm blocklight
   ramp so torches, campfires and glowstone pop against the darker base.
 
-Implemented in **0.4.0 (Phase 4)**, in review — not yet field-verified on-device:
+Water & post (Phase 4, shipped):
 
-- **Water** — procedural animated ripples, screen-space reflections of sky and geometry,
-  depth-dependent absorption tint, projected animated caustics on submerged surfaces, and
-  underwater volumetric media (blue-green haze + gentle refraction).
-- **TAA** — Halton-jittered temporal anti-aliasing with reprojection and neighbourhood
-  clamping (on in every preset except Potato).
+- **Water** — a Gerstner-wave surface (golden-angle spaced directions, crest-pinch
+  steepness, analytic normal + Jacobian) with domain-warped 3D-simplex micro-ripples,
+  screen-space reflections of sky and geometry, Beer-Lambert depth absorption (clear teal
+  shallows → deep navy), screen-space refraction, projected animated caustics, Jacobian
+  crest foam and depth-buffer shoreline foam, plus a shoreline swell-attenuation system.
+  Transparency follows the **view angle** (see-through looking down, reflective at grazing),
+  and the ripple normal is footprint-anti-aliased (`fwidth`) so waves never alias into a
+  grainy grid. Wave quality, foam, absorption and coast distance are all GUI-tunable.
+- **Anti-aliasing** — **FXAA by default** (fast spatial edge smoothing on the tonemapped
+  image, no camera jitter, no shimmer); **TAA** (Halton-jittered temporal accumulation with
+  reprojection + variance clip) is offered as a choice. A temporal-resolve pass runs in both
+  modes for anti-flicker.
+- **Deterministic grain removal** — a depth+normal bilateral denoise on GTAO, a glossy
+  pre-filter on SSR, and non-tiling (IGN) dithers, so reflections, AO and soft shadows are
+  clean without the distance jitter that pure temporal accumulation introduces.
 - **Bloom** — threshold-free, energy-conserving mip-chain bloom driving emissive spill.
 - **AgX tonemap** with mip-average auto-exposure and temporal adaptation, plus
   biome-adaptive grading and **weather storytelling** (rain desaturates and cools, thunder
   darkens, post-rain wetness lifts freshness, lightning flashes brighten the frame).
+
+Dimensions & materials (Phase 5, shipped):
+
+- **All three dimensions** have a bespoke pass: Overworld, a Nether with toned distance fog
+  and a deep reflective portal, and an End with a purple-gradient sky, moving aurora, and a
+  remastered swirling portal. Reflective blocks (ice / metal / polished) use a material-aware
+  micro-facet reflection (GGX-style roughness + Schlick Fresnel) so iron reads as rough metal
+  rather than chrome. Emissive block-entity eyes (end-portal frames) glow correctly.
 
 ## Roadmap
 
@@ -61,14 +81,15 @@ detailed checklist and per-phase field-hardening notes.
 | 1 | Scaffold & foundation | **Complete** (field-hardened) | Deferred G-buffer pipeline, five profiles, CI validation |
 | 2 | Lighting & shadows | **Complete** (field-hardened) | PCSS soft shadows + distortion + contact shadows, GTAO, warm blocklight ramp |
 | 3 | Sky, clouds & fog | **Complete** (field-hardened) | PB atmosphere + sky LUT, procedural sun disc, volumetric clouds, aerial fog, night sky |
-| 4 | Water & post | **Implemented, in review** | Water/SSR/caustics/underwater, TAA, bloom, AgX + auto-exposure, biome grading, weather storytelling |
-| 5 | Dimensions & extras | Upcoming | End black hole + purple haze, Nether pass, loom crepuscular rays + aurora, Distant Horizons |
-| 6 | Advanced tier (Windows/Linux) | Upcoming | Flood-fill colored light, voxel RT shadows/GI, histogram exposure, 3D-cached volumetrics |
-| 7 | Tuning & release | Upcoming | Per-profile perf validation, sampler audits, screenshots, v1.0.0 |
+| 4 | Water & post | **Complete** (field-hardened) | Gerstner water/SSR/caustics/absorption/foam, FXAA+TAA, bloom, AgX + auto-exposure, biome grading, weather storytelling |
+| 5 | Dimensions & extras | **Complete** (Distant Horizons upcoming) | End purple sky + aurora + remastered portal, Nether pass, loom crepuscular rays, material-aware reflective blocks |
+| 6 | Advanced tier (Windows/Linux) | On hold | Flood-fill colored light, voxel RT shadows/GI, histogram exposure, 3D-cached volumetrics (compute path breaks macOS GL 4.1) |
+| 7 | Tuning & release | In progress | Ongoing visual-fix pass, per-profile perf validation, sampler audits, screenshots, v1.0.0 |
 
-Phases 1–3 are complete and have been hardened through repeated on-device testing on an M4
-Mac (Iris, GL 4.1) and Windows. Phase 4 is code-complete and passing CI across all profiles
-but has not yet been field-verified; treat its features as provisional until 0.4.0 releases.
+Phases 1–5 are complete and have been hardened through repeated on-device testing on an M4
+Mac (Iris, GL 4.1) and Windows. The project is currently in a visual-fix / tuning pass
+(the 5.2.x line): a Gerstner water rewrite, deterministic grain removal, material-correct
+reflections, and dimension polish, all driven by on-device field reports.
 
 ## Requirements
 
@@ -110,11 +131,14 @@ lever), not just by `#define` tweaks. Current differentiators:
 
 | Preset | Intended for | Shadows | AO | Clouds | Water | Post |
 |---|---|---|---|---|---|---|
-| Potato | Integrated graphics | Off | Off | Vanilla | Waves only, no SSR/caustics | No TAA, no bloom |
-| Low | Weak dedicated GPUs | On, hard-edged (no PCSS), 1536 map | Off | Vanilla | SSR quality 1 | TAA + bloom |
-| Medium | Mainstream GPUs (default) | PCSS, 12 samples, 2048 map | On, quality 2 | Volumetric, quality 1 | SSR quality 2 | TAA + bloom |
-| High | RTX 3060-class GPUs | PCSS 16 samples + contact shadows | On, quality 3 | Volumetric, quality 2 | SSR quality 2 | TAA + bloom |
-| Ultra | High-end GPUs | PCSS 24 samples + contact, 3072 map | On, quality 3 | Volumetric, quality 3 | SSR quality 3 | TAA + bloom |
+| Potato | Integrated graphics | Off | Off | Vanilla | Waves only, no SSR/caustics | No AA, no bloom |
+| Low | Weak dedicated GPUs | On, hard-edged (no PCSS), 1536 map | Off | Vanilla | SSR quality 1 | FXAA + bloom |
+| Medium | Mainstream GPUs (default) | PCSS, 12 samples, 2048 map | On, quality 2 | Volumetric, quality 1 | SSR quality 2 | FXAA + bloom |
+| High | RTX 3060-class GPUs | PCSS 16 samples + contact shadows | On, quality 3 | Volumetric, quality 2 | SSR quality 2 | FXAA + bloom |
+| Ultra | High-end GPUs | PCSS 24 samples + contact, 3072 map | On, quality 3 | Volumetric, quality 3 | SSR quality 3 | FXAA + bloom |
+
+Anti-aliasing defaults to **FXAA** on every preset above Potato; **TAA** is available as a
+per-user choice in the Post settings screen.
 
 ## Settings screens
 
@@ -126,8 +150,8 @@ Every option is exposed in the in-game GUI, grouped into screens:
 - **Sky** — sky and sun/moon brightness, Mie strength, turbidity, sun disc size/brightness, night sky, star density.
 - **Clouds** — volumetric clouds, quality, coverage, cloud speed, vanilla-cloud fallback.
 - **Fog** — aerial fog, density.
-- **Water** — SSR, SSR quality, waves, caustics.
-- **Post** — bloom, bloom strength, exposure, TAA.
+- **Water** — SSR, SSR quality, wave quality, foam, absorption, coast swell distance, caustics.
+- **Post** — anti-aliasing mode (Off / FXAA / TAA), bloom, bloom strength, exposure.
 - **Debug** — debug view selector.
 
 ## Screenshots

@@ -53,26 +53,29 @@ cloud speed, clouds/fog dissolving into the same distance haze, render-distance 
 removed, softened sunset white-out. (0.3.3) properly dark scene-toned nights and thicker,
 darker fog on one shared day/night ramp._
 
-## Phase 4 — Water & post _(implemented, in adversarial review — 0.4.0 pending)_
+## Phase 4 — Water & post _(complete, field-hardened)_
 
-- [~] Screen-space reflections with sky-map fallback
-- [~] Animated caustics + normal-mapped water ripples + depth-based absorption
-- [~] Underwater refraction distortion + volumetric media (lava/powder-snow variants)
-- [~] TAA (Halton jitter, reprojection, neighbourhood clamp; off on Potato)
-- [~] Mip-chain bloom + emissive spill
-- [~] AgX tonemap + mip-average auto-exposure with temporal adaptation
-- [~] Biome-adaptive grading + weather storytelling (rain, thunder, wetness, lightning flash)
+- [x] Screen-space reflections with sky-map fallback + robust miss infill
+- [x] Animated caustics + water ripples + depth-based (Beer-Lambert) absorption
+- [x] Underwater refraction distortion + volumetric media (lava/powder-snow variants)
+- [x] FXAA (default) + TAA (Halton jitter, reprojection, variance clip; off on Potato)
+- [x] Mip-chain bloom + emissive spill
+- [x] AgX tonemap + mip-average auto-exposure with temporal adaptation
+- [x] Biome-adaptive grading + weather storytelling (rain, thunder, wetness, lightning flash)
 
-_Code-complete and green in CI across all profiles; not yet verified on-device. Field
-hardening notes will be added once 0.4.0 ships._
+_Hardened through the 5.x visual-fix pass: a Gerstner-wave rewrite (golden-angle
+directions, analytic normal + Jacobian, micro-ripples, shoreline swell attenuation),
+view-angle transparency, footprint (`fwidth`) normal anti-aliasing, deterministic grain
+removal (bilateral AO, glossy SSR, IGN dithers), and material-aware reflective blocks._
 
-## Phase 5 — Dimensions & extras
+## Phase 5 — Dimensions & extras _(complete; Distant Horizons upcoming)_
 
-- [ ] `world1` End: raymarched black hole (lensing, photon ring, accretion disc) + purple haze
-- [ ] `world-1` Nether pass
-- [ ] "Loom" light-weave motif: interwoven crepuscular rays + woven-band aurora
+- [x] `world1` End: purple-gradient sky + moving aurora + remastered swirling portal
+      (the raymarched black hole was cut per field feedback in favour of the aurora sky)
+- [x] `world-1` Nether pass (toned distance fog, deep reflective portal)
+- [x] "Loom" light-weave motif: interwoven crepuscular rays + woven-band aurora
+- [x] `worldN` folder migration via include shims (world0 / world-1 / world1)
 - [ ] Distant Horizons programs (`dh_terrain`, `dh_water`, `dh_shadow`, depth compositing)
-- [ ] `worldN` folder migration via include shims
 
 ## Phase 6 — Advanced tier (Windows/Linux) — ON HOLD
 
