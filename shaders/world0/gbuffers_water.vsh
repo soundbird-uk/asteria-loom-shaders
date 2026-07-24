@@ -27,6 +27,7 @@ out vec3 playerPos;
 // program. `flat` (330-core) — it is a per-primitive classification, not a value
 // to interpolate. The fragment stage gates ALL water-specific behaviour on it.
 flat out float isWater;
+flat out float isNetherPortal;   // 1.0 for nether_portal (block.properties 10002)
 
 void main() {
     vec4 viewPos = gl_ModelViewMatrix * gl_Vertex;
@@ -35,7 +36,8 @@ void main() {
     texcoord = (gl_TextureMatrix[0] * gl_MultiTexCoord0).xy;
     lmcoord  = (gl_TextureMatrix[1] * gl_MultiTexCoord1).xy;
     glcolor  = gl_Color;
-    isWater  = (mc_Entity.x == 10001.0) ? 1.0 : 0.0;
+    isWater        = (mc_Entity.x == 10001.0) ? 1.0 : 0.0;
+    isNetherPortal = (mc_Entity.x == 10002.0) ? 1.0 : 0.0;
 
     vec3 viewN = normalize(gl_NormalMatrix * gl_Normal);
     wnormal = mat3(gbufferModelViewInverse) * viewN;

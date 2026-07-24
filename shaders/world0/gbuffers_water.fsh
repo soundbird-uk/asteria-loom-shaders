@@ -4,7 +4,9 @@
 #include "/lib/encoding.glsl"
 #include "/lib/lighting.glsl"
 #include "/lib/shadow.glsl"
+// deep swirling nether portal (bare include line — flattener needs no trailing text)
 #include "/lib/water.glsl"
+#include "/lib/portal.glsl"
 
 /*
  gbuffers_water (fragment) — Phase 4 real water. Two jobs:
@@ -58,7 +60,8 @@ in vec2 lmcoord;
 in vec4 glcolor;
 in vec3 wnormal;
 in vec3 playerPos;
-flat in float isWater;   // 1 = real water, 0 = other translucent (glass/ice/...)
+flat in float isWater;         // 1 = real water, 0 = other translucent (glass/ice/...)
+flat in float isNetherPortal;  // 1 = nether portal (block.properties 10002)
 
 /* RENDERTARGETS: 0,2,3 */
 layout(location = 0) out vec4 outColor;      // colortex0 (blended lit surface)
@@ -81,6 +84,28 @@ layout(location = 2) out vec4 outMaterial;   // colortex3 (matID)
      write fully-formed values because they now land verbatim.
 */
 void main() {
+    // NETHER PORTAL: a deep swirling violet portal with an emissive glow and a
+    // Fresnel edge sheen (lib/portal.glsl) — replaces the flat vanilla swirl.
+    // Detected via mc_Entity (block.properties 10002). Tagged TRANSLUCENT so the
+    // composite water pass leaves it alone.
+    if (isNetherPortal > 0.5) {
+        vec3  N   = normalize(wnormal);
+        vec3  Vw  = normalize(-playerPos);
+        vec3  wp  = playerPos + cameraPosition;
+        vec3  up0 = (abs(N.y) < 0.9) ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
+        vec3  tang = normalize(cross(up0, N));
+        vec3  bit  = cross(N, tang);
+        vec2  pc  = vec2(dot(wp, tang), dot(wp, bit));
+        vec2  par = vec2(dot(Vw, tang), dot(Vw, bit));
+        float fres = pow(1.0 - abs(dot(Vw, N)), 4.0);
+        vec4  pcol = alNetherPortal(pc, par, fres, frameTimeCounter);
+        outColor    = pcol;
+        outNormalLm = vec4(alEncodeNormal(N), lmcoord);
+        outMaterial = vec4(alEncodeMatID(AL_MATID_TRANSLUCENT),
+                           alEncodeFlags(AL_FLAG_NONE), 0.0, 0.0);
+        return;
+    }
+
     vec4 tex = texture(gtexture, texcoord) * glcolor;
 
     vec3  Ng = normalize(wnormal);
