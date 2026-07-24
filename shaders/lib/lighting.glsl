@@ -80,12 +80,19 @@ vec3 alLightPhase1(vec3 albedoLin, vec3 worldN, vec2 lm,
 #else
     float cloudSh   = alCloudShadow(worldPos);
     float directNight = mix(AL_NIGHT_DIRECT_SCALE, 1.0, dayFactor);
+    // SKY-ACCESS GATE (5.0.6): enclosed surfaces (no sky lightmap) must receive NO
+    // direct sun/moon. The shadow map only covers a limited range, so deep caves /
+    // anything roofed beyond it were being lit by the sun leaking straight through.
+    // Gating the direct key by the sky lightmap kills that: lm.y ~ 0 (underground)
+    // -> no direct light; open sky -> full. Shadowed-but-open surfaces (sky access
+    // > 0) are unaffected — they still get the key, dimmed by shadowVis.
+    float skyAccess = smoothstep(0.0, 0.12, lm.y);
     // 0.4.3 (ISSUE 7/8): strengthen the direct key so the sun-facing side clearly
     // reads BRIGHTER than the shadowed side. AL_DIRECT_BOOST lifts the key while
     // the ambient below is trimmed, so overall exposure moves little but the
     // lit/shadow CONTRAST rises — surfaces gain a real lit side and a dark side.
     vec3  direct  = alDirectColor(worldSunDir)
-                  * (NdotL * shadowVis * cloudSh * directNight * AL_DIRECT_BOOST);
+                  * (NdotL * shadowVis * cloudSh * directNight * AL_DIRECT_BOOST * skyAccess);
 #endif
 
     // --- Hemisphere ambient (the fill) ------------------------------------

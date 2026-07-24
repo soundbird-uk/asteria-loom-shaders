@@ -981,7 +981,9 @@ const vec3 AL_TORCH_EMBER  = vec3(1.00, 0.40, 0.14);
 // "daylight-lite" — nights are clearly darker while silhouettes/nearby detail stay
 // readable. Hue kept cool-blue. Scaled by the NIGHT_BRIGHTNESS GUI slider.
 // 0.4.4: lowered ~45% so night open ground reads as moonlit gloom, not lit.
-const vec3 AL_NIGHT_FLOOR = vec3(0.008, 0.012, 0.026);
+// 5.0.6 FIELD ("night is too dark, can't see anything"): raised ~2.3x so open
+// moonlit ground stays clearly readable at night while keeping the cool hue.
+const vec3 AL_NIGHT_FLOOR = vec3(0.020, 0.026, 0.048);
 
 // Faint indirect-bounce lift added to the light sum so coloured faces never
 // read as pure black. Kept near-neutral (only a whisper cool): this is the ONLY
@@ -992,7 +994,14 @@ const vec3 AL_NIGHT_FLOOR = vec3(0.008, 0.012, 0.026);
 // floor brightness. Cut ~65% (0.020 -> 0.006) so caves are genuinely dark and
 // torches read as the light source. Still non-zero so coloured faces aren't pure
 // black. (BOUNCE_INTENSITY scales it; AO multiplies it.)
-const vec3 AL_BOUNCE = vec3(0.006, 0.006, 0.008);
+// 5.0.6 FIELD ("caves / Nether / no-light areas are too dark, can't see
+// anything"): this is the ONLY light a fully-enclosed face receives, so it sets
+// the minimum visibility floor in pure darkness. Raised ~6x (0.006 -> 0.036) so
+// unlit caves and dark Nether reaches read as a dim, navigable gloom instead of
+// pitch black, while still far below torch/daylight so torches remain the light
+// source. Near-neutral (whisper cool) to avoid tinting caves. Applies in every
+// dimension (part of the shared indirect sum); AO + BOUNCE_INTENSITY scale it.
+const vec3 AL_BOUNCE = vec3(0.036, 0.038, 0.048);
 
 /* =========================================================================
    DIMENSIONS (Phase 5 — world-1 Nether, world1 End). Colour identity for the
