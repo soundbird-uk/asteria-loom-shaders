@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (5.2.3) — water "grid grain" root cause: normal aliasing + tiling dither
+
+- **The real cause of the dark grainy grid on water from above.** Two things fed
+  it, neither addressed by 5.2.2: (1) the high-frequency ripple NORMAL aliases
+  against the pixel grid whenever one pixel spans more than a ripple wavelength
+  (looking across/over water) — that aliased normal scatters BOTH the reflected
+  direction and the refraction UV per pixel; (2) the SSR ray-start dither was a
+  `texture(noisetex, gl_FragCoord/256)` lookup that literally repeats every 256 px,
+  stamping a fixed grid into the reflection. From above the Fresnel term is low so
+  the water is mostly the (grainy) refracted column, which is why it looked worst
+  there.
+- **Footprint normal anti-aliasing (`fwidth`).** `gbuffers_water` now measures the
+  per-pixel world-space footprint of the ripple coordinate and fades the fine
+  normal detail — and flattens the whole normal toward vertical — analytically
+  wherever the ripples would fall below Nyquist. The surface smooths to calm
+  exactly where the grid grain used to be. Deterministic: no dither, no history, so
+  it cannot grain or crawl. (`AL_WATER_AA_MICRO_K / _FLAT_K / _MAXFLAT`.)
+- **SSR dither is now non-tiling IGN** (Interleaved Gradient Noise) instead of the
+  256-px noisetex grid, in both the water and reflective-block paths, so neighbouring
+  rays march coherently and hit/miss together instead of checkerboarding.
+- **Refraction offset cut** `0.045 → 0.028` and micro-ripple amplitude `0.10 → 0.08`
+  so residual normal variance perturbs the submerged sample far less.
+
 ### Fixed (5.2.2) — deterministic SPATIAL denoising for grain (reverts the 5.2.1 TAA regression)
 
 - **Why 5.2.1 was wrong.** 5.2.1 leaned entirely on temporal accumulation

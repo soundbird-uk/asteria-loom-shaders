@@ -153,6 +153,15 @@ bool alTraceSSR(vec3 origin, vec3 dir, float dither, out vec2 hitUV) {
 // motion — so it cannot flicker or jitter with the camera. Radius grows with
 // view distance where the ripple pattern aliases hardest. Off-screen and
 // HDR-garbage taps are dropped so it can never smear the screen edge or bloom.
+// Interleaved Gradient Noise — a fine, NON-TILING per-pixel value. Replaces the
+// old `texture(noisetex, gl_FragCoord/256)` SSR ray-start dither, which repeated
+// every 256 px and printed a stable grid onto water reflections (the grid grain).
+// IGN is spatially coherent between neighbours, so adjacent rays march together
+// and hit/miss coherently instead of checkerboarding.
+float alIGN(vec2 p) {
+    return fract(52.9829189 * fract(dot(p, vec2(0.06711056, 0.00583715))));
+}
+
 vec3 alGlossyReflSample(vec2 hitUV, float viewDist) {
     vec2  texel  = 1.0 / vec2(textureSize(colortex0, 0));
     float radius = AL_SSR_GLOSS_RADIUS + viewDist * AL_SSR_GLOSS_DISTK;
@@ -229,11 +238,9 @@ vec3 alReflectiveBlock(vec3 base, float reflAmt, float metal) {
     // reflection on rough iron reads as chrome, so weight it by (1-rough).
     float ssrW = 1.0 - rough;
     if (ssrW > 0.05) {
-        vec2 noiseUV = gl_FragCoord.xy / 256.0;
+        float dither = alIGN(gl_FragCoord.xy);
     #ifdef AL_TAA
-        float dither = fract(texture(noisetex, noiseUV).r + float(frameCounter) * 0.61803398875);
-    #else
-        float dither = texture(noisetex, noiseUV).r;
+        dither = fract(dither + float(frameCounter) * 0.61803398875);
     #endif
         vec2 hitUV;
         if (alTraceSSR(P0, Rv, dither, hitUV)) {
@@ -338,11 +345,10 @@ void main() {
     vec3 refl = mix(vec3(0.015, 0.020, 0.035), skyR, skyGate);  // fallback + cave gate
 
 #ifdef SSR
-    // R2 low-discrepancy dither on the noisetex value. Advanced by frameCounter
-    // whenever a temporal resolve runs (composite3, FXAA or TAA) so it AVERAGES OUT;
-    // frozen only with AA fully off (no accumulator) so it can't crawl.
-    vec2 noiseUV = gl_FragCoord.xy / 256.0;        // noisetex is 256x256
-    float dither = texture(noisetex, noiseUV).r;
+    // Non-tiling IGN ray-start (was a 256px-tiling noisetex lookup -> grid grain).
+    // Coherent between neighbours so adjacent rays hit/miss together. Frozen under
+    // FXAA (stable, FXAA-smoothable); advanced per frame only under TAA to resolve.
+    float dither = alIGN(gl_FragCoord.xy);
 #ifdef AL_TAA
     dither = fract(dither + float(frameCounter) * 0.61803398875);
 #endif

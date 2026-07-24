@@ -793,10 +793,24 @@ const float sunPathRotation = -35.0;
 //   WARP  — domain-warp strength (breaks any grid so ripples read organic)
 //   FADE  — blocks over which the micro layer fades out (anti-sparkle at range)
 #define AL_WATER_MICRO_SCALE  0.90
-#define AL_WATER_MICRO_AMP    0.10
+#define AL_WATER_MICRO_AMP    0.08
 #define AL_WATER_MICRO_SPEED  0.80
 #define AL_WATER_MICRO_WARP   0.55
 #define AL_WATER_MICRO_FADE   26.0
+
+// --- Footprint normal anti-aliasing (fixes the "grid grain" on water) -------
+// The ripple normal is high-frequency world-space detail. When a single screen
+// pixel spans more than a ripple wavelength — looking ACROSS water from above,
+// or at any distance — those ripples fall below Nyquist and ALIAS against the
+// pixel grid. That aliased normal then scatters BOTH the reflected direction and
+// the refraction UV per pixel, which is the dark grainy grid on water from above.
+// fwidth(waterRefXZ) measures that per-pixel footprint (world units/px); the fine
+// normal detail is faded out analytically where it would alias, so the surface
+// smooths to calm exactly where the grain used to be. Deterministic — no dither,
+// no history — so it cannot grain or crawl. Higher K = flatten sooner.
+#define AL_WATER_AA_MICRO_K   1.60   // footprint fade rate for the fine ripples
+#define AL_WATER_AA_FLAT_K    0.16   // footprint-driven flatten of the whole normal
+#define AL_WATER_AA_MAXFLAT   0.85   // ceiling on that footprint flatten (0..1)
 
 // --- Foam (internal, not GUI; master toggle is WATER_FOAM) -----------------
 //   JAC_LO/HI — Jacobian range mapped to crest-foam amount: foam ramps in as J
@@ -884,7 +898,7 @@ const vec3 AL_WATER_TINT = vec3(0.09, 0.19, 0.22);
 // Screen-space REFRACTION: how far (uv) the water normal bends the submerged scene
 // sample. Subtle + distance-faded so the seabed wobbles under the surface without
 // tearing. (5.1.0 water overhaul.)
-#define AL_WATER_REFRACT     0.045
+#define AL_WATER_REFRACT     0.028
 
 // --- Absorption (internal, not GUI) ----------------------------------------
 // Beer-Lambert tint of the SUBMERGED scene by the water path length between the

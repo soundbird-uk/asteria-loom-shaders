@@ -164,14 +164,25 @@ void main() {
             // shoreFactor attenuates big swells near land (fine ripples preserved).
             vec3  gN; float jac;
             alGerstnerSurface(waterRefXZ, frameTimeCounter, 1.0, waterShore, gN, jac);
-            // Domain-warped 3D-simplex micro-ripples (fade out with range).
-            float microAmt = alSaturate(1.0 - dist / AL_WATER_MICRO_FADE);
+            // FOOTPRINT ANTI-ALIASING: world units of ripple coordinate that this
+            // one pixel spans. When it approaches a ripple wavelength the ripples
+            // are sub-pixel and alias into the dark grid grain on water-from-above;
+            // fade the fine normal out analytically there (screen-space derivative,
+            // deterministic — the real fix for that grid, not a dither trick).
+            float footprint = length(fwidth(waterRefXZ));
+            float fpMicro = alSaturate(1.0 - footprint * AL_WATER_AA_MICRO_K);
+            // Domain-warped 3D-simplex micro-ripples (fade with range AND footprint).
+            float microAmt = alSaturate(1.0 - dist / AL_WATER_MICRO_FADE) * fpMicro;
             vec3  mN = alWaterMicroNormal(waterRefXZ, frameTimeCounter, microAmt);
             N = alBlendNormals(gN, mN);
-            // ANTI-SPARKLE: fade the normal toward flat with distance so far crests
-            // don't alias into shimmer (helps FXAA especially; TAA is off by default).
-            float flatAmt = smoothstep(AL_WATER_NORMAL_FADE_A, AL_WATER_NORMAL_FADE_B, dist)
-                          * AL_WATER_NORMAL_MAXFLAT;
+            // ANTI-SPARKLE: flatten the normal toward vertical with distance so far
+            // crests don't alias into shimmer, PLUS a footprint term so a single
+            // pixel spanning many swell wavelengths (grazing / from above) also
+            // smooths to calm rather than a grainy grid.
+            float flatDist = smoothstep(AL_WATER_NORMAL_FADE_A, AL_WATER_NORMAL_FADE_B, dist)
+                           * AL_WATER_NORMAL_MAXFLAT;
+            float flatFP   = alSaturate(footprint * AL_WATER_AA_FLAT_K) * AL_WATER_AA_MAXFLAT;
+            float flatAmt  = max(flatDist, flatFP);
             N = normalize(mix(N, vec3(0.0, 1.0, 0.0), flatAmt));
             if (Ng.y < 0.0) N.y = -N.y;                // undersides
             N = normalize(N);
