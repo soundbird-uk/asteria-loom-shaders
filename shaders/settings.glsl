@@ -57,14 +57,14 @@
    ========================================================================= */
 
 // Direct sun / moon light strength.
-#define SUN_INTENSITY 1.0 // [0.50 0.75 1.00 1.25 1.50 1.75 2.00]
+#define SUN_INTENSITY 1.00 // [0.50 0.75 1.00 1.25 1.50 1.75 2.00]
 
 // Cool hemisphere sky-fill (ambient) strength. This is the cool half of the
 // pack's signature warm/cool contrast — turn it up for softer shadows.
-#define AMBIENT_INTENSITY 1.0 // [0.50 0.75 1.00 1.25 1.50 1.75 2.00]
+#define AMBIENT_INTENSITY 1.00 // [0.50 0.75 1.00 1.25 1.50 1.75 2.00]
 
 // Warm block-light (torches/lanterns) strength.
-#define BLOCKLIGHT_INTENSITY 1.0 // [0.50 0.75 1.00 1.25 1.50 1.75 2.00]
+#define BLOCKLIGHT_INTENSITY 1.00 // [0.50 0.75 1.00 1.25 1.50 1.75 2.00]
 
 // Colour-temperature ramp on block light: candle-amber near a source fading to
 // deep ember-orange at the dim edge of its reach. This is the Mac-path
@@ -103,7 +103,7 @@
 // multiplier on the whole NIGHT ambient (both the cool sky fill's night lift and
 // the cool-blue floor); noon is never affected. Default 1.0 = the intended dark,
 // moody, moonlit look (0.3.2 retune); raise it if you want brighter nights.
-#define NIGHT_BRIGHTNESS 1.0 // [0.25 0.50 0.75 1.00 1.25 1.50 2.00]
+#define NIGHT_BRIGHTNESS 1.00 // [0.25 0.50 0.75 1.00 1.25 1.50 2.00]
 
 // Night ambient level (internal, not GUI). The Phase-3 atmosphere-driven ambient
 // (alAmbientColor) bottoms out at 0.18x its day value after dark; lib/lighting.glsl
@@ -155,7 +155,7 @@ const vec3 AL_SUN_LOW_TINT = vec3(1.30, 0.70, 0.34);
 
 // Fake indirect-bounce floor. A tiny lift so unlit coloured faces are never
 // pure black (real GI arrives in a later phase).
-#define BOUNCE_INTENSITY 1.0 // [0.00 0.25 0.50 0.75 1.00 1.50 2.00]
+#define BOUNCE_INTENSITY 1.00 // [0.00 0.25 0.50 0.75 1.00 1.50 2.00]
 
 
 /* =========================================================================
@@ -471,7 +471,7 @@ const vec3 AL_CLOUD_NIGHT_TINT = vec3(0.46, 0.58, 0.86);
 
 // Overall sky brightness. Baked into the LUT by the prepare pass so every
 // reader (sky, clouds, fog, reflections) scales consistently.
-#define SKY_BRIGHTNESS 1.0 // [0.50 0.75 1.00 1.25 1.50 2.00]
+#define SKY_BRIGHTNESS 1.00 // [0.50 0.75 1.00 1.25 1.50 2.00]
 
 // HDR boost applied to the MOON texture (and any custom sky textures) so it
 // reads through the tonemap and blooms later. NOTE: MOON-ONLY now — the vanilla
@@ -481,19 +481,19 @@ const vec3 AL_CLOUD_NIGHT_TINT = vec3(0.46, 0.58, 0.86);
 
 // Mie (haze/aerosol) scattering strength. Higher = a brighter, hazier white
 // glow around the sun and a milkier horizon band.
-#define MIE_STRENGTH 1.0 // [0.25 0.50 0.75 1.00 1.50 2.00 3.00]
+#define MIE_STRENGTH 1.00 // [0.25 0.50 0.75 1.00 1.50 2.00 3.00]
 
 // Atmospheric turbidity. Higher = dustier air: warmer, redder sun and a
 // thicker, more washed-out horizon.
-#define TURBIDITY 1.0 // [0.50 0.75 1.00 1.50 2.00 3.00]
+#define TURBIDITY 1.00 // [0.50 0.75 1.00 1.50 2.00 3.00]
 
 // Procedural sun-disc angular size, multiplying AL_SUN_ANGULAR_RADIUS. 1.0 is
 // the pack's deliberately soft, dreamy sun; lower is a tighter, sharper disc.
-#define SUN_DISC_SIZE 1.0 // [0.50 0.75 1.00 1.50 2.00 3.00]
+#define SUN_DISC_SIZE 1.00 // [0.50 0.75 1.00 1.50 2.00 3.00]
 
 // Procedural sun-disc HDR brightness. High values bloom hard once bloom lands
 // in Phase 4; the placeholder tonemap keeps them from clipping now.
-#define SUN_DISC_BRIGHTNESS 2.0 // [0.50 1.00 2.00 4.00 8.00 16.00]
+#define SUN_DISC_BRIGHTNESS 2.00 // [0.50 1.00 2.00 4.00 8.00 16.00]
 
 // Sun path tilt (degrees). Iris reads this const directive from the literal
 // source text with NO macro expansion, so it must BE the constant — edit the
@@ -565,7 +565,7 @@ const float sunPathRotation = -35.0;
 #define GOD_RAYS // [GOD_RAYS]
 
 // God-ray strength (GUI slider). 0 = off, 1.0 = tuned default, higher = stronger.
-#define GODRAY_STRENGTH 1.0 // [0.00 0.25 0.50 0.75 1.00 1.50 2.00 3.00]
+#define GODRAY_STRENGTH 1.00 // [0.00 0.25 0.50 0.75 1.00 1.50 2.00 3.00]
 
 // --- God-ray shaping (internal, not GUI) ----------------------------------
 #define AL_GODRAY_SAMPLES   40     // march taps toward the sun (more = smoother)
@@ -827,7 +827,7 @@ const vec3 AL_UW_SNOW_TINT  = vec3(0.82, 0.86, 0.94);
 // Exposure user bias. Multiplies the auto-adapted exposure in final (auto
 // exposure now does the metering; this is the manual trim on top). 1.0 = no
 // trim; the calibration exposure that sets the base levels is AL_AGX_EXPOSURE.
-#define EXPOSURE 1.0 // [0.25 0.50 0.75 1.00 1.25 1.50 2.00]
+#define EXPOSURE 1.00 // [0.25 0.50 0.75 1.00 1.25 1.50 2.00]
 
 // --- AgX tonemap (internal, not GUI — edit + hot-reload) ------------------
 // Calibration exposure baked into AgX. Tuned (numeric sim vs the outgoing
@@ -1096,6 +1096,10 @@ const vec3 AL_END_SPACE_HIGH = vec3(0.022, 0.007, 0.060);
 // the base and out gently toward the top (no abrupt cut-off).
 #define AL_END_WHISP_MAXDIST 200.0   // how far the march reaches (blocks)
 
+// GUI (Sky screen): master toggle + overall glow multiplier for the whisps.
+#define END_WHISPS // [END_WHISPS]
+#define END_WHISP_INTENSITY 1.00 // [0.00 0.25 0.50 0.75 1.00 1.50 2.00]
+
 // Vertical band (world Y): fade IN above BASE, fade OUT over TOP_FADE below TOP.
 #define AL_END_WHISP_BASE_Y  -40.0
 #define AL_END_WHISP_TOP_Y    170.0
@@ -1114,7 +1118,10 @@ const vec3 AL_END_WHISP_COL_L = vec3(0.40, 0.16, 0.72);   // see-through medium 
 #define AL_END_WHISP_DENS_F   0.070
 #define AL_END_WHISP_GLOW_F   0.70    // brighter (more glowing) than the large layer
 const vec3 AL_END_WHISP_COL_F = vec3(0.62, 0.40, 0.92);   // lighter glowing purple
-// Procedural black-hole apparent size (angular radius multiplier). Small default.
-#define END_BLACKHOLE_SIZE 1.0 // [0.50 0.75 1.00 1.50 2.00]
+
+// Dormant black-hole size — the procedural black hole was removed (5.0.6), so this
+// is NO LONGER a GUI option (it did nothing). Kept as a plain constant only so the
+// call site in world1/composite2 still compiles; the value is ignored.
+#define END_BLACKHOLE_SIZE 1.0
 
 #endif // AL_SETTINGS

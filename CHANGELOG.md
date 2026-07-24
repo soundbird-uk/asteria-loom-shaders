@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (5.0.13) — settings menu pass
+
+- **No more duplicate "default" slider stops.** Twelve sliders had a default value
+  whose text didn't match any list entry (e.g. God Ray Strength defaulted to `1.0`
+  while the list had `1.00`), so Iris appended the default as a separate duplicate
+  on the far right ("a default and a 1.0"). Every default now string-matches a list
+  value, so each slider shows a single clean set of stops.
+- **Sliders show their number, not a "Default" word.** Removed the word value-labels
+  (Default / Thin / Hazy / …) from the magnitude sliders (fog density, god-ray/bloom/
+  reflection strength, star density, fog patchiness) so the actual number shows.
+  Kept meaningful labels where a bare number wouldn't read (quality tiers Low/Med/
+  High, AA mode, debug views, cloud %, fog chunk distances).
+
+### Added (5.0.13)
+
+- **End Whisps now configurable** (Sky screen): an `END_WHISPS` on/off toggle and an
+  `END_WHISP_INTENSITY` glow slider.
+
+### Removed (5.0.13)
+
+- **Dead "End Black Hole Size" option.** The procedural black hole was removed back
+  in 5.0.6, so the setting did nothing; it's gone from the menu.
+
 ### Fixed (5.0.12)
 
 - **Banners, sign text and translucent block-entity layers now render.** Added the

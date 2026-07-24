@@ -104,8 +104,9 @@ vec3 alEndWhispMarch(vec3 camPos, vec3 dir, float marchDist, float time, float d
         }
         t += dt;
     }
-    return AL_END_WHISP_COL_L * (litL * AL_END_WHISP_GLOW_L)
-         + AL_END_WHISP_COL_F * (litF * AL_END_WHISP_GLOW_F);
+    vec3 glow = AL_END_WHISP_COL_L * (litL * AL_END_WHISP_GLOW_L)
+              + AL_END_WHISP_COL_F * (litF * AL_END_WHISP_GLOW_F);
+    return glow * END_WHISP_INTENSITY;   // GUI overall glow multiplier
 }
 
 /*

@@ -90,21 +90,13 @@ option.NIGHT_SKY = Night Sky
 option.NIGHT_SKY.comment = Procedural stars, a tilted galaxy band and rare shooting stars, fading in after dusk. Kept dim and dreamy, below the moon's brightness.
 option.STARS_DENSITY = Star Density
 option.STARS_DENSITY.comment = How many stars fill the night sky. Lower is sparse and minimal; higher is a dense field. Brightness distribution stays the same.
-value.STARS_DENSITY.0.50 = Sparse
-value.STARS_DENSITY.0.75 = Light
-value.STARS_DENSITY.1.00 = Default
-value.STARS_DENSITY.1.50 = Dense
-value.STARS_DENSITY.2.00 = Very Dense
 option.AURORA = Aurora
 option.AURORA.comment = Woven curtains of aurora light on clear cold nights only (snowy biomes, no rain, deep night). Soft green-teal with violet fringes, kept below the moon so it stays dreamy rather than neon.
 
-option.END_BLACKHOLE_SIZE = End Black Hole Size
-option.END_BLACKHOLE_SIZE.comment = Apparent size of the procedural black hole that hangs in the End sky. Lower is a distant pinpoint; higher looms large.
-value.END_BLACKHOLE_SIZE.0.50 = Distant
-value.END_BLACKHOLE_SIZE.0.75 = Small
-value.END_BLACKHOLE_SIZE.1.00 = Default
-value.END_BLACKHOLE_SIZE.1.50 = Large
-value.END_BLACKHOLE_SIZE.2.00 = Looming
+option.END_WHISPS = End Whisps
+option.END_WHISPS.comment = Glowing volumetric violet whisps drifting through the End's 3D space (two layers: large see-through columns + tiny brighter wisps), occluded by the pillars. Off removes them.
+option.END_WHISP_INTENSITY = Whisp Glow
+option.END_WHISP_INTENSITY.comment = Overall brightness of the End whisps. 0 fades them out; higher makes them glow stronger.
 
 # ---- Clouds ----------------------------------------------------------------
 screen.CLOUDS = Clouds
@@ -142,13 +134,6 @@ option.AERIAL_FOG = Aerial Fog
 option.AERIAL_FOG.comment = Distance haze that shifts the view bluer and more desaturated, with a warm hazy horizon. Colour and density follow the time of day, weather and biome. Off skips the pass entirely, which ALSO disables the underwater, lava and powder-snow haze (they share this pass).
 option.FOG_DENSITY = Fog Density
 option.FOG_DENSITY.comment = Thickness of the mid-field aerial haze (the atmospheric depth across the landscape). Lower gives crisp long views; higher gives a soupier, moodier haze. Does not change the render-edge fog wall.
-value.FOG_DENSITY.0.00 = Off
-value.FOG_DENSITY.0.50 = Thin
-value.FOG_DENSITY.0.75 = Light
-value.FOG_DENSITY.1.00 = Default
-value.FOG_DENSITY.1.25 = Hazy
-value.FOG_DENSITY.1.50 = Thick
-value.FOG_DENSITY.2.00 = Soup
 option.FOG_START_CHUNKS = Fog Start Distance
 option.FOG_START_CHUNKS.comment = How many chunks before the render-distance edge the patchy far fog begins building. Larger hazes the distance over sooner and more gradually.
 value.FOG_START_CHUNKS.3.0 = 3 Chunks
@@ -171,12 +156,6 @@ value.FOG_WALL_CHUNKS.4.0 = 4 Chunks
 value.FOG_WALL_CHUNKS.5.0 = 5 Chunks
 option.FOG_PATCHINESS = Fog Patchiness
 option.FOG_PATCHINESS.comment = How uneven the far fog looks before the wall. 0 is a smooth radial ramp; higher breaks it into real-looking, random banks.
-value.FOG_PATCHINESS.0.0 = Smooth
-value.FOG_PATCHINESS.0.25 = Subtle
-value.FOG_PATCHINESS.0.5 = Light
-value.FOG_PATCHINESS.0.75 = Medium
-value.FOG_PATCHINESS.1.0 = Default
-value.FOG_PATCHINESS.1.5 = Heavy
 
 # ---- Water -----------------------------------------------------------------
 screen.WATER = Water
@@ -195,35 +174,17 @@ option.REFLECTIVE_BLOCKS = Reflective Blocks
 option.REFLECTIVE_BLOCKS.comment = Screen-space reflections on smooth solid blocks — ice, metal (iron/gold/copper/netherite/diamond/emerald), and polished stones. The look depends on the material: metals reflect strongly and tint the reflection with their own colour, while ice and polished stone stay glassy and grow reflective at grazing angles. Off keeps them matte.
 option.REFLECTIVE_STRENGTH = Reflection Strength
 option.REFLECTIVE_STRENGTH.comment = How strong the block reflections are overall. 1.0 is the tuned default; lower is subtler, higher is glossier.
-value.REFLECTIVE_STRENGTH.0.25 = Subtle
-value.REFLECTIVE_STRENGTH.0.50 = Light
-value.REFLECTIVE_STRENGTH.0.75 = Medium
-value.REFLECTIVE_STRENGTH.1.00 = Default
-value.REFLECTIVE_STRENGTH.1.50 = Glossy
 
 # ---- Post ------------------------------------------------------------------
 option.BLOOM = Bloom
 option.BLOOM.comment = Soft, threshold-free glow that spills from bright emissives (torches, glowstone, the sun) and gives the dreamy filmic look. Energy-conserving, so noon barely changes while lights glow against dark nights. Off on Potato.
 option.BLOOM_STRENGTH = Bloom Strength
 option.BLOOM_STRENGTH.comment = How strongly the glow blends into the scene. 1.0 is the tuned dreamy baseline; higher blooms harder, lower keeps it subtle.
-value.BLOOM_STRENGTH.0.5 = Subtle
-value.BLOOM_STRENGTH.0.75 = Light
-value.BLOOM_STRENGTH.1.0 = Default
-value.BLOOM_STRENGTH.1.25 = Strong
-value.BLOOM_STRENGTH.1.5 = Heavy
 
 option.GOD_RAYS = God Rays
 option.GOD_RAYS.comment = Screen-space sun shafts that fan out through gaps in leaves and around terrain toward the sun. Strongest at low sun and in haze; steady (no flicker) and gated so it never washes the screen. Off on Potato.
 option.GODRAY_STRENGTH = God Ray Strength
 option.GODRAY_STRENGTH.comment = How strong the sun shafts are. 0 turns them off, 1.0 is the tuned default, higher is more dramatic.
-value.GODRAY_STRENGTH.0.00 = Off
-value.GODRAY_STRENGTH.0.25 = Faint
-value.GODRAY_STRENGTH.0.50 = Subtle
-value.GODRAY_STRENGTH.0.75 = Light
-value.GODRAY_STRENGTH.1.00 = Default
-value.GODRAY_STRENGTH.1.50 = Strong
-value.GODRAY_STRENGTH.2.00 = Heavy
-value.GODRAY_STRENGTH.3.00 = Extreme
 
 option.EXPOSURE = Exposure Bias
 option.EXPOSURE.comment = Manual brightness trim on top of auto exposure, applied before the AgX tone map. 1.0 leaves the calibrated levels untouched; nudge it if you want the whole image brighter or darker.

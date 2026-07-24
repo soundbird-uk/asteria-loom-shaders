@@ -298,9 +298,11 @@ void main() {
         // reach) so distant whisps glow over the void too.
         vec3 skyDir = normalize(alViewDirToWorld(alScreenToView(texcoord, 1.0)));
         vec3 bh = alEndBlackHoleSky(skyDir, END_BLACKHOLE_SIZE, frameTimeCounter);
+#ifdef END_WHISPS
         float dthS = fract(dot(gl_FragCoord.xy, vec2(0.0671, 0.00584)) * 52.9829);
         bh += alEndWhispMarch(cameraPosition, skyDir, AL_END_WHISP_MAXDIST,
                               frameTimeCounter, dthS);
+#endif
         outColor = vec4(bh, 1.0);
 #else
         outColor = vec4(scene, 1.0);
@@ -358,7 +360,7 @@ void main() {
                                    rainStrength, wetness, thunderStrength);
 #endif
 
-#ifdef AL_DIM_END
+#if defined(AL_DIM_END) && defined(END_WHISPS)
     // Volumetric glowing whisps in the End's 3D space, BOUNDED by the scene
     // distance so the pillars/terrain occlude whisps behind them (no phasing
     // through geometry). Additive ethereal glow.
