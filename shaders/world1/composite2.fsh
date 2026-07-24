@@ -291,11 +291,14 @@ void main() {
     // Sky (clouds carry their own transmittance) -> passthrough.
     if (depth >= 1.0) {
 #ifdef AL_DIM_END
-        // THE END: paint the procedural black-hole sky over every sky pixel, from
-        // a per-pixel world-space view ray (reliable full coverage). Replaces
-        // whatever vanilla drew (void colour / end_sky texture).
+        // THE END sky (sky pixels): dark purple space + stars, painted per-pixel
+        // for full coverage. Volumetric whisps are then marched against it (max
+        // reach) so distant whisps glow over the void too.
         vec3 skyDir = normalize(alViewDirToWorld(alScreenToView(texcoord, 1.0)));
         vec3 bh = alEndBlackHoleSky(skyDir, END_BLACKHOLE_SIZE, frameTimeCounter);
+        float dthS = fract(dot(gl_FragCoord.xy, vec2(0.0671, 0.00584)) * 52.9829);
+        bh += alEndWhispMarch(cameraPosition, skyDir, AL_END_WHISP_MAXDIST,
+                              frameTimeCounter, dthS);
         outColor = vec4(bh, 1.0);
 #else
         outColor = vec4(scene, 1.0);
@@ -343,13 +346,12 @@ void main() {
 #endif
 
 #ifdef AL_DIM_END
-    // Aurora veil over the scene: the SAME flowing curtains as the sky, added
-    // faintly in the view direction so the aurora pervades the End — visible in
-    // front of and behind geometry, not just as a distant backdrop. Builds a
-    // little with distance (more air to glow through).
+    // Volumetric glowing whisps in the End's 3D space, BOUNDED by the scene
+    // distance so the pillars/terrain occlude whisps behind them (no phasing
+    // through geometry). Additive ethereal glow.
     {
-        float build = 1.0 - exp(-dist / 90.0);
-        fogged += alEndAurora(worldDir, frameTimeCounter) * (AL_END_AURORA_VEIL * build);
+        float dth = fract(dot(gl_FragCoord.xy, vec2(0.0671, 0.00584)) * 52.9829);
+        fogged += alEndWhispMarch(cameraPosition, worldDir, dist, frameTimeCounter, dth);
     }
 #endif
 

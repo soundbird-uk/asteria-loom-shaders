@@ -1032,12 +1032,16 @@ const vec3 AL_END_FOG     = vec3(0.13, 0.05, 0.24);   // deep purple in-scatter
 const vec3 AL_END_SPACE_LOW  = vec3(0.09, 0.030, 0.17);
 const vec3 AL_END_SPACE_HIGH = vec3(0.03, 0.012, 0.075);
 
-// Flowing aurora borealis (lib/blackhole.glsl alEndAurora). STR = sky-curtain
-// brightness; VEIL = how strongly the same curtains are added over the scene
-// (in front of / behind geometry) in world1/composite2, so the aurora is all
-// around, not just a distant backdrop.
-#define AL_END_AURORA_STR  0.55
-#define AL_END_AURORA_VEIL 0.40
+// End VOLUMETRIC WHISPS (lib/blackhole.glsl + world1/composite2). Glowing violet
+// whisps that live in 3D world space (NOT the skybox) — sparse vertical columns
+// that rise and drift ethereally, raymarched and BOUNDED by the scene depth so
+// the End pillars/terrain correctly occlude them. Like clouds, but lower, vertical
+// and glowing.
+#define AL_END_WHISP_SCALE   0.030   // world-space frequency of the whisp field
+#define AL_END_WHISP_RISE    0.18    // vertical rise speed (whisps travel upward)
+#define AL_END_WHISP_MAXDIST 190.0   // how far the march reaches (blocks)
+#define AL_END_WHISP_GLOW    1.6      // emissive glow strength (HDR -> blooms)
+const vec3 AL_END_WHISP_COLOR = vec3(0.52, 0.20, 0.95);   // violet whisp glow
 // Procedural black-hole apparent size (angular radius multiplier). Small default.
 #define END_BLACKHOLE_SIZE 1.0 // [0.50 0.75 1.00 1.50 2.00]
 
