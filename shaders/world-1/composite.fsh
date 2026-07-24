@@ -255,6 +255,11 @@ void main() {
     float fres = AL_WATER_F0 + (1.0 - AL_WATER_F0) * pow(1.0 - cosI, 5.0);
     fres = min(alSaturate(fres), AL_WATER_REFLECT_MAX);
 
+    // Crest foam (baked into `base` by gbuffers_water, amount in colortex3.b) must
+    // stay MATTE — kill its reflection so the whitecap doesn't chrome over.
+    float foamAmt = alSaturate(m3.b);
+    fres *= (1.0 - foamAmt);
+
     // --- Reflection colour ---------------------------------------------------
     // Sky-access gate: water with no open sky above it (caves, covered flowing
     // water) must NOT reflect the sky — otherwise the bright horizon band shows in
@@ -286,17 +291,29 @@ void main() {
     }
 #endif
 
-    // --- Absorption + caustics on the submerged scene ------------------------
+    // --- Refraction + absorption + caustics on the submerged scene -----------
     vec3  transmitted = base;
     float d1 = texture(depthtex1, texcoord).r;
     float skyLm = alSaturate(texture(colortex2, texcoord).a);
+    float contactFoam = 0.0;
 
     if (d1 > d0 && d1 < 1.0) {
         vec3 P1 = alScreenToView(texcoord, d1);
         float waterPath = max(alEyeZ(P1) - alEyeZ(P0), 0.0);   // metres through water
 
-        // Beer-Lambert green-blue tint over the path length.
-        vec3 absorb = exp(-AL_WATER_ABSORB * (waterPath * AL_WATER_ABSORB_SCALE));
+        // SCREEN-SPACE REFRACTION: bend the submerged sample by the surface normal
+        // (view xy), subtle + distance-faded + clamped on-screen, so the seabed
+        // wobbles under the ripples instead of sitting flat.
+        float refrFade = 1.0 / (1.0 + dist0 * 0.08);
+        vec2  refrUV = clamp(texcoord + Nv.xy * (AL_WATER_REFRACT * refrFade),
+                             vec2(0.002), vec2(0.998));
+        vec3  submerged = texture(colortex0, refrUV).rgb;
+
+        // Beer-Lambert extinction VECTOR: red absorbed fastest, then green, so water
+        // shifts clear teal (shallow) -> deep navy/blue (deep). WATER_ABSORPTION
+        // (GUI) scales how fast it deepens.
+        vec3 absorb = exp(-AL_WATER_ABSORB
+                          * (waterPath * AL_WATER_ABSORB_SCALE * WATER_ABSORPTION));
 
 #ifdef WATER_CAUSTICS
         vec3  sunDir = alSunDirWorld();
@@ -310,11 +327,22 @@ void main() {
 #endif
 
         // Weight by (1 - Fresnel): depth tint fades into the reflection at grazing.
-        transmitted = base * mix(vec3(1.0), absorb, 1.0 - fres);
+        transmitted = submerged * mix(vec3(1.0), absorb, 1.0 - fres);
+
+#ifdef WATER_FOAM
+        // CONTACT FOAM: soft shoreline foam where the water column is shallow (the
+        // surface is close to the terrain behind it). Only under open sky.
+        contactFoam = (1.0 - smoothstep(0.0, AL_WATER_FOAM_CONTACT, waterPath)) * skyLm;
+#endif
     }
 
-    // Reflection over the (absorbed) water colour.
+    // Reflection over the (absorbed/refracted) water colour.
     vec3 result = mix(transmitted, refl, fres);
+
+#ifdef WATER_FOAM
+    // Shoreline foam on top (matte, slightly sky-lit).
+    result = mix(result, AL_WATER_FOAM_COLOR * (0.6 + 0.4 * skyLm), contactFoam);
+#endif
 
     // NaN-law: any non-finite channel -> fall back to the untouched scene.
     bool ok = all(greaterThanEqual(result, vec3(0.0)));

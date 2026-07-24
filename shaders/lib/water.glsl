@@ -104,73 +104,6 @@ float alWaterValue2D(vec2 p) {
 ============================================================================
 */
 
-// High-frequency 2-warp domain-warped value noise in [-1,1] (the micro layer).
-// `t` is the (already micro-scaled) time; the drift is off-sync from the waves.
-float alWaterMicro(vec2 wp, float t) {
-    vec2 q = wp * AL_WATER_MICRO_SCALE + vec2(t * 0.13, -t * 0.11);
-    vec2 w1 = vec2(alWaterValue2D(q), alWaterValue2D(q + 5.2));
-    vec2 w2 = vec2(alWaterValue2D(q + 4.0 * w1), alWaterValue2D(q + 4.0 * w1 + 3.1));
-    return alWaterValue2D(q + 4.0 * w2) * 2.0 - 1.0;
-}
-
-// Ocean-like ripple normal (world Y-up frame). `strength` scales the horizontal
-// slope; `dist` fades the micro layer out with range (anti-sparkle).
-//
-// 0.4.4 REWRITE ("water looks terrible / circles / not random"): the old model's
-// EVENLY-spaced component directions + per-patch ROTATION produced radially-
-// symmetric, circular interference ("circles going in"). This is a proper OCEAN
-// SPECTRUM instead: many waves whose DIRECTIONS are hash-randomised (never a
-// symmetric fan) across a wide GEOMETRIC frequency band — long swells (~15 blk)
-// down to short ripples (~1 blk) — with amplitude falling and speed following
-// dispersion. The sum of many incommensurate directional waves NEVER repeats, so
-// the surface laps and swells randomly everywhere. A very-low-frequency patch
-// field only modulates overall CHOPPINESS (calm vs choppy areas), never rotation,
-// and a faint domain-warped micro layer adds the fine "micro water interaction"
-// texture up close. Big-wave normal is analytic (exact gradient, alias-free).
-vec3 alWaterWaveNormal(vec3 worldPos, float t, float strength, float dist) {
-    vec2 wp = worldPos.xz;
-
-    // Large-scale choppiness field (calm patches vs choppy patches). No rotation.
-    float chop = mix(0.55, 1.35, alWaterValue2D(wp * AL_WATER_PATCH_SCALE));
-
-    float dhdx = 0.0, dhdz = 0.0, norm = 0.0;
-    for (int i = 0; i < AL_WATER_WAVE_COMPONENTS; i++) {
-        float fi = float(i);
-        // Hash-randomised direction (NOT an even fan) -> no circular symmetry.
-        float a  = alWaterHash21(vec2(fi * 1.7, 4.3)) * AL_TAU;
-        vec2  dir = vec2(cos(a), sin(a));
-        // Geometric frequency band: long swells -> short ripples.
-        float k    = AL_WATER_WAVE_K * pow(1.34, fi);
-        float amp  = pow(0.80, fi) * chop;               // falling amplitude
-        float omega = AL_WATER_WAVE_SPEED * sqrt(k);     // dispersion
-        float phase = alWaterHash21(vec2(fi * 2.1, 9.7)) * AL_TAU;
-        // Gentle steepening (Gerstner-ish) so crests sharpen, troughs flatten.
-        float th = dot(wp, dir) * k + t * omega + phase;
-        float c  = cos(th);
-        dhdx += amp * k * c * dir.x;
-        dhdz += amp * k * c * dir.y;
-        norm += amp;
-    }
-    float inv = 1.0 / max(norm, 1e-4);
-    dhdx *= inv;
-    dhdz *= inv;
-
-    // Micro detail (finite diff, distance-faded): the fine surface texture.
-    float microAmt = alSaturate(1.0 - dist / AL_WATER_MICRO_FADE);
-    if (microAmt > 0.001) {
-        float e  = AL_WATER_NORMAL_EPS;
-        float mt = t * AL_WATER_MICRO_SPEED;
-        float m0 = alWaterMicro(wp, mt);
-        float mx = alWaterMicro(wp + vec2(e, 0.0), mt);
-        float mz = alWaterMicro(wp + vec2(0.0, e), mt);
-        float ma = AL_WATER_MICRO_AMP * microAmt;
-        dhdx += ma * (mx - m0) / e;
-        dhdz += ma * (mz - m0) / e;
-    }
-
-    return normalize(vec3(-dhdx * strength, 1.0, -dhdz * strength));
-}
-
 // --- Animated caustics ------------------------------------------------------
 // 0.4.4 REWRITE ("no real caustics / just circles"): the old voronoi produced
 // round cell blobs. This is the classic looping-domain caustic — a few iterations
@@ -197,6 +130,154 @@ float alWaterCaustic(vec3 worldPos, vec3 sunDir, float t) {
     }
     c = 1.17 - pow(max(c / 3.0, 0.0), 1.4);
     return alSaturate(pow(abs(c), 8.0));
+}
+
+/*
+============================================================================
+ GERSTNER OCEAN (5.1.0 water overhaul)
+----------------------------------------------------------------------------
+ A sum of AL_WATER_WAVE_N Gerstner (trochoidal) waves. Unlike a pure sine height
+ field, Gerstner waves also displace HORIZONTALLY toward the crests, so wave tops
+ PINCH/SHARPEN and troughs BROADEN — real swell shape. Wave directions are spaced
+ by the GOLDEN ANGLE (2.39996 rad), an irrational increment, so the directional
+ set is never commensurate and the summed surface NEVER repeats across large
+ oceans. Frequencies follow a geometric band (long swells -> short chop) and speed
+ follows deep-water dispersion (omega = SPEED*sqrt(k)).
+
+ Two entry points share the model so each stage pays only for what it needs:
+   alGerstnerDisplace(wp,t)                 -> vec3 world displacement (vertex sh.)
+   alGerstnerSurface(wp,t, out N, out J)    -> analytic normal + Jacobian (frag sh.)
+ The Jacobian J of the horizontal displacement folds negative (J<0) exactly where
+ crests overhang — the trigger for crest foam.
+ Pure GL3.30 math (no samplers, no bit ops).
+============================================================================
+*/
+#define AL_GOLDEN_ANGLE 2.39996323
+
+// Per-wave parameters for index i (kept identical across both entry points so the
+// displaced geometry and the shaded normal agree).
+void alGerstnerParams(int i, out vec2 dir, out float ki, out float ai,
+                      out float wi, out float qi) {
+    float fi  = float(i);
+    float ang = fi * AL_GOLDEN_ANGLE;                       // irrational spacing
+    dir = vec2(cos(ang), sin(ang));
+    ki  = AL_WATER_WAVE_K * pow(AL_WATER_WAVE_GAIN, fi);    // geometric freq band
+    ai  = AL_WATER_WAVE_AMP * pow(AL_WATER_AMP_GAIN, fi);   // falling amplitude
+    wi  = AL_WATER_WAVE_SPEED * sqrt(ki);                   // deep-water dispersion
+    // Per-wave steepness, bounded by 1/(k*N) so crests sharpen without looping.
+    qi  = AL_WATER_STEEPNESS / (ki * float(AL_WATER_WAVE_N) + 1e-4);
+}
+
+// World-space Gerstner displacement (x,z pinch toward crests, y height).
+vec3 alGerstnerDisplace(vec2 wp, float t) {
+    vec3 disp = vec3(0.0);
+    for (int i = 0; i < AL_WATER_WAVE_N; i++) {
+        vec2 dir; float ki, ai, wi, qi;
+        alGerstnerParams(i, dir, ki, ai, wi, qi);
+        float th = dot(wp, dir) * ki + t * wi + float(i) * 1.3;
+        float s = sin(th), c = cos(th);
+        disp.x += qi * ai * dir.x * c;
+        disp.z += qi * ai * dir.y * c;
+        disp.y += ai * s;
+    }
+    return disp;
+}
+
+// Analytic surface normal (world Y-up) + Jacobian determinant of the horizontal
+// displacement. `strength` scales the horizontal slope of the normal.
+void alGerstnerSurface(vec2 wp, float t, float strength, out vec3 nrm, out float jac) {
+    float dhdx = 0.0, dhdz = 0.0, nySum = 0.0;
+    float jxx = 0.0, jzz = 0.0, jxz = 0.0;
+    for (int i = 0; i < AL_WATER_WAVE_N; i++) {
+        vec2 dir; float ki, ai, wi, qi;
+        alGerstnerParams(i, dir, ki, ai, wi, qi);
+        float th = dot(wp, dir) * ki + t * wi + float(i) * 1.3;
+        float s = sin(th), c = cos(th);
+        float ka = ki * ai;
+        dhdx  += dir.x * ka * c;
+        dhdz  += dir.y * ka * c;
+        nySum += qi * ka * s;
+        float wa = qi * ka * s;                 // shared Jacobian term
+        jxx += dir.x * dir.x * wa;
+        jzz += dir.y * dir.y * wa;
+        jxz += dir.x * dir.y * wa;
+    }
+    nrm = normalize(vec3(-dhdx * strength, max(1.0 - nySum, 0.02), -dhdz * strength));
+    jac = (1.0 - jxx) * (1.0 - jzz) - jxz * jxz;   // < 0 where crests fold
+}
+
+// --- 3D simplex noise (Ashima/McEwan; GL3.30-safe, no bit ops) --------------
+// Used for the domain-warped micro-ripple normal (capillary waves / wind gusts).
+vec3 alW_mod289(vec3 x){ return x - floor(x * (1.0/289.0)) * 289.0; }
+vec4 alW_mod289(vec4 x){ return x - floor(x * (1.0/289.0)) * 289.0; }
+vec4 alW_permute(vec4 x){ return alW_mod289(((x*34.0)+1.0)*x); }
+vec4 alW_taylorInvSqrt(vec4 r){ return 1.79284291400159 - 0.85373472095314 * r; }
+float alSimplex3(vec3 v) {
+    const vec2 C = vec2(1.0/6.0, 1.0/3.0);
+    const vec4 D = vec4(0.0, 0.5, 1.0, 2.0);
+    vec3 i  = floor(v + dot(v, C.yyy));
+    vec3 x0 = v - i + dot(i, C.xxx);
+    vec3 g  = step(x0.yzx, x0.xyz);
+    vec3 l  = 1.0 - g;
+    vec3 i1 = min(g.xyz, l.zxy);
+    vec3 i2 = max(g.xyz, l.zxy);
+    vec3 x1 = x0 - i1 + C.xxx;
+    vec3 x2 = x0 - i2 + C.yyy;
+    vec3 x3 = x0 - D.yyy;
+    i = alW_mod289(i);
+    vec4 p = alW_permute(alW_permute(alW_permute(
+              i.z + vec4(0.0, i1.z, i2.z, 1.0))
+            + i.y + vec4(0.0, i1.y, i2.y, 1.0))
+            + i.x + vec4(0.0, i1.x, i2.x, 1.0));
+    float n_ = 0.142857142857;
+    vec3 ns = n_ * D.wyz - D.xzx;
+    vec4 j = p - 49.0 * floor(p * ns.z * ns.z);
+    vec4 x_ = floor(j * ns.z);
+    vec4 y_ = floor(j - 7.0 * x_);
+    vec4 x = x_ * ns.x + ns.yyyy;
+    vec4 y = y_ * ns.x + ns.yyyy;
+    vec4 h = 1.0 - abs(x) - abs(y);
+    vec4 b0 = vec4(x.xy, y.xy);
+    vec4 b1 = vec4(x.zw, y.zw);
+    vec4 s0 = floor(b0) * 2.0 + 1.0;
+    vec4 s1 = floor(b1) * 2.0 + 1.0;
+    vec4 sh = -step(h, vec4(0.0));
+    vec4 a0 = b0.xzyw + s0.xzyw * sh.xxyy;
+    vec4 a1 = b1.xzyw + s1.xzyw * sh.zzww;
+    vec3 p0 = vec3(a0.xy, h.x);
+    vec3 p1 = vec3(a0.zw, h.y);
+    vec3 p2 = vec3(a1.xy, h.z);
+    vec3 p3 = vec3(a1.zw, h.w);
+    vec4 nrm = alW_taylorInvSqrt(vec4(dot(p0,p0), dot(p1,p1), dot(p2,p2), dot(p3,p3)));
+    p0 *= nrm.x; p1 *= nrm.y; p2 *= nrm.z; p3 *= nrm.w;
+    vec4 m = max(0.6 - vec4(dot(x0,x0), dot(x1,x1), dot(x2,x2), dot(x3,x3)), 0.0);
+    m = m * m;
+    return 42.0 * dot(m*m, vec4(dot(p0,x0), dot(p1,x1), dot(p2,x2), dot(p3,x3)));
+}
+
+// Domain-warped micro-ripple normal detail (capillary waves + wind gusts). Two
+// warp passes of 3D simplex (z = time) give evolving, non-repeating fine ripples;
+// central differences of the warped field build a tangent-space-ish slope that we
+// fold into the Gerstner normal. `amt` (0..1) fades it out with distance.
+vec3 alWaterMicroNormal(vec2 wp, float t, float amt) {
+    if (amt <= 0.001) return vec3(0.0, 1.0, 0.0);
+    float sc = AL_WATER_MICRO_SCALE;
+    vec3 q  = vec3(wp * sc, t * AL_WATER_MICRO_SPEED);
+    // domain warp
+    vec3 w  = vec3(alSimplex3(q), alSimplex3(q + 11.5), 0.0);
+    vec3 qw = q + vec3(w.xy * AL_WATER_MICRO_WARP, 0.0);
+    float e = 0.75;
+    float h0 = alSimplex3(qw);
+    float hx = alSimplex3(qw + vec3(e, 0.0, 0.0));
+    float hz = alSimplex3(qw + vec3(0.0, e, 0.0));
+    float amp = AL_WATER_MICRO_AMP * amt;
+    return normalize(vec3(-(hx - h0) / e * amp, 1.0, -(hz - h0) / e * amp));
+}
+
+// Combine a detail normal (world Y-up) onto a base normal (reoriented-normal
+// blend): keeps the base slope and adds the detail's tilt. Both are Y-up frames.
+vec3 alBlendNormals(vec3 base, vec3 detail) {
+    return normalize(vec3(base.xz + detail.xz, base.y * detail.y));
 }
 
 #endif // AL_LIB_WATER

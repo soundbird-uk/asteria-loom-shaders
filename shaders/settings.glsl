@@ -635,10 +635,35 @@ const float sunPathRotation = -35.0;
 // MEDIUM/HIGH 2, ULTRA 3.
 #define SSR_QUALITY 2 // [1 2 3]
 
-// Animated ripple normals on the water surface (2-3 octave wind-aligned
-// wave-noise, pure math). Drives both the forward shading and the SSR
-// reflection wobble. Cheap, so it stays ON even on POTATO.
+// Gerstner wave DISPLACEMENT + ripple normals on the water surface (lib/water.glsl,
+// pure math). Drives the vertex swells, the shaded normal and the SSR reflection
+// wobble. Cheap enough to stay ON even on POTATO (the wave COUNT scales below).
 #define WATER_WAVES // [WATER_WAVES]
+
+// Wave quality = number of summed Gerstner waves (golden-angle spaced, so they
+// never repeat). 1=4 waves (fastest) .. 5=12 waves (richest swell detail). This is
+// the main water perf/quality dial the presets scale.
+#define WATER_WAVE_QUALITY 4 // [1 2 3 4 5]
+#if   WATER_WAVE_QUALITY == 1
+    #define AL_WATER_WAVE_N 4
+#elif WATER_WAVE_QUALITY == 2
+    #define AL_WATER_WAVE_N 6
+#elif WATER_WAVE_QUALITY == 3
+    #define AL_WATER_WAVE_N 8
+#elif WATER_WAVE_QUALITY == 4
+    #define AL_WATER_WAVE_N 10
+#else
+    #define AL_WATER_WAVE_N 12
+#endif
+
+// Dynamic FOAM: Jacobian crest foam (white foam where wave crests pinch/fold over,
+// determinant J < 0) + depth-buffer CONTACT foam (soft shoreline foam where water
+// meets blocks). Off on POTATO/LOW.
+#define WATER_FOAM // [WATER_FOAM]
+
+// Overall water ABSORPTION strength (Beer-Lambert extinction scale). Higher makes
+// water go opaque/navy faster with depth; lower keeps it clearer/teal for longer.
+#define WATER_ABSORPTION 1.00 // [0.25 0.50 0.75 1.00 1.25 1.50 2.00]
 
 // Animated voronoi caustics on the submerged scene, projected along the sun
 // direction and faded with water depth + sky exposure + time of day. POTATO
@@ -690,22 +715,50 @@ const float sunPathRotation = -35.0;
 //     swells), and the per-component spread below now covers a wider, gentler band;
 //   * lower overall amplitude so the surface undulates instead of shattering into
 //     high-frequency chop.
-#define AL_WATER_WAVE_COMPONENTS 4      // superposed directional waves (>=2 opposing)
-#define AL_WATER_WAVE_K          0.42   // base spatial wavenumber (longest wave)
-#define AL_WATER_WAVE_SPEED      0.50   // dispersion time-rate (omega = SPEED*sqrt(k))
-#define AL_WATER_WAVE_AMP        0.16   // overall normal-perturbation strength (subtle)
-#define AL_WATER_NORMAL_EPS      0.14   // micro-layer central-difference step (world m)
-// Spatial variation: patch field frequency (very low) + local rotation range.
-#define AL_WATER_PATCH_SCALE     0.012  // ~83-block patches move differently
-#define AL_WATER_PATCH_ROT       1.6    // radians of local component rotation
-// Micro detail (2-warp domain-warped value noise): DEMOTED to a faint, larger-
-// scale near-surface shimmer so it can never become the tiled-cloth texture.
-// Lower frequency (bigger features), a fraction of the old amplitude, and a much
-// shorter fade so it is gone within a few blocks (kills the busy weave + sparkle).
-#define AL_WATER_MICRO_SCALE     0.85   // lower freq (~1.2-block wavelength)
-#define AL_WATER_MICRO_AMP       0.045  // faint (was 0.16)
-#define AL_WATER_MICRO_SPEED     0.90   // off-sync from the big waves
-#define AL_WATER_MICRO_FADE      12.0   // blocks; micro gone beyond (anti-sparkle)
+// --- Gerstner wave shaping (internal, not GUI) -----------------------------
+// 5.1.0 OVERHAUL: a golden-angle Gerstner spectrum (lib/water.glsl). WAVE_N (the
+// count) is set by the GUI WATER_WAVE_QUALITY above. These shape the spectrum:
+//   K        — base wavenumber of the LONGEST swell (2pi/wavelength; 0.36 ~ 17 blk)
+//   WAVE_GAIN— geometric frequency step per wave (each wave ~1.28x higher freq)
+//   AMP      — base amplitude (world metres) of the longest swell (vertex swell)
+//   AMP_GAIN — amplitude falloff per wave (shorter waves are smaller)
+//   SPEED    — dispersion rate (omega = SPEED*sqrt(k); long waves travel faster)
+//   STEEPNESS— crest-pinch: higher sharpens crests / broadens troughs (0..1-ish;
+//              auto-bounded per wave by 1/(k*N) so the surface never self-loops)
+#define AL_WATER_WAVE_K       0.36
+#define AL_WATER_WAVE_GAIN    1.28
+#define AL_WATER_WAVE_AMP     0.115
+#define AL_WATER_AMP_GAIN     0.82
+#define AL_WATER_WAVE_SPEED   0.55
+#define AL_WATER_STEEPNESS    3.0    // crest-pinch (bounded per-wave; ~0.16 total << 1
+                                     // so geometry never self-loops, but crests
+                                     // sharpen enough for the Jacobian to dip at tops)
+
+// Micro-ripple normal (domain-warped 3D simplex — capillary waves / wind gusts).
+//   SCALE — world frequency of the fine ripples (~0.9 => sub-block detail)
+//   AMP   — how much the micro slope tilts the surface normal
+//   SPEED — evolution rate through the noise's time axis (off-sync from swells)
+//   WARP  — domain-warp strength (breaks any grid so ripples read organic)
+//   FADE  — blocks over which the micro layer fades out (anti-sparkle at range)
+#define AL_WATER_MICRO_SCALE  0.90
+#define AL_WATER_MICRO_AMP    0.10
+#define AL_WATER_MICRO_SPEED  0.80
+#define AL_WATER_MICRO_WARP   0.55
+#define AL_WATER_MICRO_FADE   26.0
+
+// --- Foam (internal, not GUI; master toggle is WATER_FOAM) -----------------
+//   JAC_LO/HI — Jacobian range mapped to crest-foam amount: foam ramps in as J
+//               drops from HI toward LO. Textbook whitecaps trigger at J<0 (fully
+//               folded crests), but stable block-grid water keeps J>0 (crests
+//               sharpen without inverting), so the threshold sits just under 1.0 to
+//               catch the SHARPEST ~5-15% of crests as sparse whitecaps.
+//   CONTACT   — shoreline foam thickness: water within this many blocks (depth)
+//               of the terrain behind it foams.
+//   COLOR     — foam albedo (linear).
+#define AL_WATER_FOAM_JAC_HI   0.985
+#define AL_WATER_FOAM_JAC_LO   0.900
+#define AL_WATER_FOAM_CONTACT  0.85
+const vec3 AL_WATER_FOAM_COLOR = vec3(0.86, 0.92, 0.96);
 
 // --- Water surface opacity (internal, not GUI) -----------------------------
 // Fresnel-driven alpha: the surface is denser looking straight down and near-
@@ -737,6 +790,10 @@ const vec3 AL_WATER_TINT = vec3(0.09, 0.19, 0.22);
 #define AL_SSR_THICKNESS     1.10   // max surface thickness accepted as a hit (m)
 #define AL_SSR_REFINE        5      // binary-search refinement iterations
 #define AL_SSR_EDGE_FADE     0.12   // screen-edge reflection fade width (uv)
+// Screen-space REFRACTION: how far (uv) the water normal bends the submerged scene
+// sample. Subtle + distance-faded so the seabed wobbles under the surface without
+// tearing. (5.1.0 water overhaul.)
+#define AL_WATER_REFRACT     0.045
 
 // --- Absorption (internal, not GUI) ----------------------------------------
 // Beer-Lambert tint of the SUBMERGED scene by the water path length between the

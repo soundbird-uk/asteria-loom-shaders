@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added (5.1.0) — hyper-real water overhaul
+
+- **Gerstner ocean (vertex displacement).** Water now physically displaces on a sum
+  of 4–12 Gerstner waves whose directions are spaced by the golden angle (irrational
+  → never repeats across large oceans). Crest-pinch steepness sharpens wave tops and
+  broadens troughs. `WATER_WAVE_QUALITY` sets the wave count.
+- **Domain-warped 3D-simplex micro-ripples.** A fine capillary/wind-gust normal layer
+  (two warp passes of 3D simplex) folded onto the analytic Gerstner normal, faded out
+  with distance to avoid sparkle.
+- **Jacobian crest foam + depth contact foam.** Whitecaps appear on the sharpest
+  crests (driven by the displacement Jacobian) and soft shoreline foam forms where the
+  water column is shallow against terrain (depth-buffer contact). `WATER_FOAM` toggle.
+- **Optics upgrade.** Screen-space refraction bends the submerged scene under the
+  ripples; Beer-Lambert absorption is a proper extinction vector (clear teal → deep
+  navy) scaled by `WATER_ABSORPTION`; ray-marched SSR (Schlick Fresnel) and projected
+  caustics retained. Crest foam is kept matte (no reflection).
+- **New water settings** on the Water screen: `WATER_WAVE_QUALITY`, `WATER_FOAM`,
+  `WATER_ABSORPTION` (SSR = the existing `SSR` toggle, caustics = `WATER_CAUSTICS`).
+  Presets scale them: Potato 4 waves/no foam → Ultra 12 waves/foam/SSR-High.
+
 ### Fixed (5.0.13) — settings menu pass
 
 - **No more duplicate "default" slider stops.** Twelve sliders had a default value

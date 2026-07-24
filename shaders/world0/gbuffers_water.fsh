@@ -60,6 +60,7 @@ in vec2 lmcoord;
 in vec4 glcolor;
 in vec3 wnormal;
 in vec3 playerPos;
+in vec2 waterRefXZ;            // undisplaced world XZ — Gerstner rest position
 flat in float isWater;         // 1 = real water, 0 = other translucent (glass/ice/...)
 flat in float isNetherPortal;  // 1 = nether portal (block.properties 10002)
 flat in float isEndPortal;     // 1 = end portal / gateway (10003) — translucent-route fallback
@@ -150,19 +151,29 @@ void main() {
         vec3 biomeLin  = alSrgbToLinear(glcolor.rgb);
         vec3 albedoLin = AL_WATER_TINT * mix(vec3(1.0), biomeLin * 3.0, 0.30);
 
-        // --- Ripple normal ---
-        vec3 N = Ng;
+        // --- Gerstner surface normal (per-fragment) + micro-ripples + foam ----
+        vec3  N   = Ng;
+        float crestFoam = 0.0;
 #ifdef WATER_WAVES
-        // Only perturb near-horizontal surfaces (the vast majority of water);
-        // the detail normal is in a world Y-up frame, flipped for undersides.
+        // Only shade near-horizontal water (the vast majority); the wave frame is
+        // world Y-up, flipped for undersides.
         if (abs(Ng.y) > 0.5) {
-            vec3 worldPos = playerPos + cameraPosition;
-            // length(playerPos) = camera-relative distance -> fades the micro
-            // detail layer with range (anti-sparkle; see lib/water.glsl).
-            vec3 nd = alWaterWaveNormal(worldPos, frameTimeCounter,
-                                        AL_WATER_WAVE_AMP, length(playerPos));
-            nd.y *= sign(Ng.y);
-            N = normalize(nd);
+            float dist = length(playerPos);
+            // Analytic Gerstner normal + Jacobian at the UNDISPLACED rest position.
+            vec3  gN; float jac;
+            alGerstnerSurface(waterRefXZ, frameTimeCounter, 1.0, gN, jac);
+            // Domain-warped 3D-simplex micro-ripples (fade out with range).
+            float microAmt = alSaturate(1.0 - dist / AL_WATER_MICRO_FADE);
+            vec3  mN = alWaterMicroNormal(waterRefXZ, frameTimeCounter, microAmt);
+            N = alBlendNormals(gN, mN);
+            if (Ng.y < 0.0) N.y = -N.y;                // undersides
+            N = normalize(N);
+#ifdef WATER_FOAM
+            // JACOBIAN CREST FOAM: the horizontal-displacement Jacobian folds
+            // negative where crests pinch/overhang -> whitecap foam there.
+            crestFoam = 1.0 - smoothstep(AL_WATER_FOAM_JAC_LO, AL_WATER_FOAM_JAC_HI, jac);
+            crestFoam *= microAmt;                     // fade the fine foam with range
+#endif
         }
 #endif
         // --- Fresnel-driven opacity ---
@@ -178,10 +189,18 @@ void main() {
         vec3 color = alLightPhase1(albedoLin, N, lmcoord, shadowVis, wLightDir,
                                    wSunDir, playerPos + cameraPosition, dayFactor);
 
+        // Crest foam: opaque, bright, lit by the ambient + a touch of the key.
+        vec3 foamLit = AL_WATER_FOAM_COLOR * (0.5 + 0.5 * shadowVis * max(NdotL, 0.0)
+                                              + 0.4 * lmcoord.y);
+        color = mix(color, foamLit, crestFoam);
+        alpha = mix(alpha, 1.0, crestFoam);
+
         outColor    = vec4(color, alpha);
-        outNormalLm = vec4(alEncodeNormal(N), lmcoord);      // ripple normal
+        outNormalLm = vec4(alEncodeNormal(N), lmcoord);      // Gerstner+micro normal
+        // colortex3.b carries the crest-foam amount so the composite pass can keep
+        // foam matte (skip SSR/absorption there); .a spare.
         outMaterial = vec4(alEncodeMatID(AL_MATID_WATER),
-                           alEncodeFlags(AL_FLAG_NONE), 0.0, 0.0);
+                           alEncodeFlags(AL_FLAG_NONE), crestFoam, 0.0);
     } else {
         // ============ OTHER TRANSLUCENT (glass / ice / slime / honey / ...) ===
         // 0.3.x behaviour: own texture colour + alpha (NO blue-green tint, NO
