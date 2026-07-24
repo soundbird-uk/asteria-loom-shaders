@@ -231,9 +231,14 @@ void main() {
         vec2 uv = texcoord;
         if (isEyeInWater == 1) {
             float t = frameTimeCounter;
+            // Fade the wobble to zero near the screen edges (+ hard clamp) so the
+            // refraction can't smear off-screen when moving fast underwater.
+            float eK = min(min(texcoord.x, 1.0 - texcoord.x),
+                           min(texcoord.y, 1.0 - texcoord.y));
             vec2 wob = vec2(sin(uv.y * 42.0 + t * 1.4),
-                            sin(uv.x * 42.0 + t * 1.7)) * AL_UW_WOBBLE;
-            uv = clamp(texcoord + wob, 0.0, 1.0);
+                            sin(uv.x * 42.0 + t * 1.7))
+                     * (AL_UW_WOBBLE * smoothstep(0.0, 0.05, eK));
+            uv = clamp(texcoord + wob, 0.002, 0.998);
         }
         vec3  s  = texture(colortex0, uv).rgb;
         float du = texture(depthtex0, uv).r;

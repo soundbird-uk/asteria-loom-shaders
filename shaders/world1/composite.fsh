@@ -302,10 +302,14 @@ void main() {
         float waterPath = max(alEyeZ(P1) - alEyeZ(P0), 0.0);   // metres through water
 
         // SCREEN-SPACE REFRACTION: bend the submerged sample by the surface normal
-        // (view xy), subtle + distance-faded + clamped on-screen, so the seabed
-        // wobbles under the ripples instead of sitting flat.
+        // (view xy), subtle + distance-faded, and FADE THE OFFSET TO ZERO near the
+        // screen edges (plus a hard clamp) so a distorted UV can never sample off-
+        // screen and smear/black-edge when the camera moves fast.
         float refrFade = 1.0 / (1.0 + dist0 * 0.08);
-        vec2  refrUV = clamp(texcoord + Nv.xy * (AL_WATER_REFRACT * refrFade),
+        float edgeK    = min(min(texcoord.x, 1.0 - texcoord.x),
+                             min(texcoord.y, 1.0 - texcoord.y));
+        float edgeFade = smoothstep(0.0, 0.06, edgeK);   // 0 at the very edge
+        vec2  refrUV = clamp(texcoord + Nv.xy * (AL_WATER_REFRACT * refrFade * edgeFade),
                              vec2(0.002), vec2(0.998));
         vec3  submerged = texture(colortex0, refrUV).rgb;
 

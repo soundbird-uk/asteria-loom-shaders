@@ -333,7 +333,7 @@ const float shadowDistance = 128.0; // [64.0 96.0 128.0 192.0 256.0]
 // Base cloud coverage (fraction of sky filled in clear weather). Rain pushes
 // this higher automatically (storm build-up). Lower = sparse fair-weather
 // cumulus; higher = a brooding overcast.
-#define VC_COVERAGE 0.45 // [0.30 0.35 0.40 0.45 0.50 0.55 0.60 0.65 0.70]
+#define VC_COVERAGE 0.55 // [0.30 0.35 0.40 0.45 0.50 0.55 0.60 0.65 0.70]
 
 // Cloud drift speed. A gentle, dreamy roll at 1.0; the slider scales the wind
 // linearly. At 1.0 the coverage pattern drifts ~29 blocks/second (see
@@ -360,24 +360,32 @@ const float shadowDistance = 128.0; // [64.0 96.0 128.0 192.0 256.0]
 #define AL_CLOUD_MAX_SPAN    5000.0
 
 // --- Coverage field (2D FBM value noise; shared by render + shadow) ---------
-#define AL_CLOUD_COVERAGE_SCALE   0.00028 // world XZ -> noise domain
-#define AL_CLOUD_COVERAGE_OCTAVES 4       // FBM octaves for the coverage map
+// 5.1.1 ("more, smaller, thicker candy-floss clouds; less sparse; not one huge
+// blob at high coverage"): the old 0.00028 scale made noise cells ~3.5k blocks
+// wide, so the visible sky spanned barely one cell -> either empty or a single
+// giant cloud. Tripled the frequency so many distinct puffs fill the sky, +1 FBM
+// octave for finer clumping. (Wind speed is raised in step below to keep the drift
+// rate the same, since world drift = WIND_SPEED / COVERAGE_SCALE.)
+#define AL_CLOUD_COVERAGE_SCALE   0.00090 // world XZ -> noise domain (smaller clouds)
+#define AL_CLOUD_COVERAGE_OCTAVES 5       // FBM octaves for the coverage map
 // Base coverage drift in NOISE units/sec, before the CLOUD_SPEED slider. World
 // drift = AL_CLOUD_WIND_SPEED * CLOUD_SPEED / AL_CLOUD_COVERAGE_SCALE blocks/sec
 // => 0.008 * 1.0 / 0.00028 ≈ 29 blocks/s at the default (a gentle dreamy roll).
 // This is ~44x slower than the 0.3.1 default (0.35) that field-tested "WAY too
 // fast"; the slider restores brisker motion for those who want it.
-#define AL_CLOUD_WIND_SPEED       0.008   // coverage drift (noise units / sec)
+#define AL_CLOUD_WIND_SPEED       0.024   // coverage drift (noise units / sec) —
+                                          // raised with the finer scale so the
+                                          // world drift speed stays ~29 blocks/s
 #define AL_CLOUD_STORM_BOOST      0.22    // extra coverage added at full rain
 
 // --- Cumulus 3D shaping -----------------------------------------------------
 #define AL_CLOUD_DETAIL_SCALE   0.006  // 3D erosion-noise frequency
 #define AL_CLOUD_DETAIL_OCTAVES 3      // 3D FBM octaves (billow erosion)
-#define AL_CLOUD_EDGE           0.30   // coverage->density remap softness
+#define AL_CLOUD_EDGE           0.24   // coverage->density remap softness (crisper puffs)
 #define AL_CLOUD_BOTTOM_ROUND   0.18   // flat-ish base rise (first 18% of slab)
 #define AL_CLOUD_TOP_ROUND      0.55   // billowy top erodes over the upper 45%
-#define AL_CLOUD_EROSION        0.55   // how hard detail carves cloud edges
-#define AL_CLOUD_DENSITY        1.40   // overall optical density multiplier
+#define AL_CLOUD_EROSION        0.60   // how hard detail carves cloud edges (cauliflower)
+#define AL_CLOUD_DENSITY        1.75   // overall optical density (thicker candy-floss)
 #define AL_CLOUD_EXTINCTION     0.045  // extinction per block per unit density
 
 // --- Sun light march + scattering ------------------------------------------
@@ -733,6 +741,20 @@ const float sunPathRotation = -35.0;
 #define AL_WATER_STEEPNESS    3.0    // crest-pinch (bounded per-wave; ~0.16 total << 1
                                      // so geometry never self-loops, but crests
                                      // sharpen enough for the Jacobian to dip at tops)
+// SHORELINE SAFETY: Gerstner also pulls vertices HORIZONTALLY, which can drag a
+// water vertex away from the solid block beside it and open a seam/void at the
+// shore. We can't detect neighbours in a vertex shader, so we DAMP the horizontal
+// pull to a small fraction (the vertical swell + the analytic normal carry the
+// look). At 0.35 any shore gap is < ~0.08 block — invisible — while crests still
+// pinch. The FRAGMENT normal/Jacobian keep the FULL steepness (shading is
+// unaffected). Set to 0.0 for zero horizontal motion (no gaps at all).
+#define AL_WATER_HORIZ_DAMP   0.35
+// Distant-normal flatten (anti-sparkle): fade the surface normal toward flat over
+// this block range so far crests don't alias into shimmer under FXAA. A..B blocks,
+// MAXFLAT = how far toward flat at the far end.
+#define AL_WATER_NORMAL_FADE_A 55.0
+#define AL_WATER_NORMAL_FADE_B 150.0
+#define AL_WATER_NORMAL_MAXFLAT 0.6
 
 // Micro-ripple normal (domain-warped 3D simplex — capillary waves / wind gusts).
 //   SCALE — world frequency of the fine ripples (~0.9 => sub-block detail)

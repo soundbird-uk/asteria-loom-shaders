@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed (5.1.1) — water robustness + cloud shape
+
+- **Clouds: more, smaller, thicker "candy-floss" puffs.** Tripled the coverage-field
+  frequency (+1 FBM octave) so the sky fills with many distinct puffy clouds instead
+  of one giant blob at high coverage; crisper edges, more cauliflower erosion, higher
+  density (thicker), and a fuller default coverage. Drift speed preserved.
+- **Water shoreline safety.** The Gerstner horizontal pull is damped (`AL_WATER_HORIZ_DAMP`)
+  so water vertices can't drag away from the block beside them and open a seam/void at
+  the shore; the vertical swell and the full-steepness fragment normal are unchanged.
+- **Water anti-sparkle.** The surface normal fades toward flat with distance so far
+  wave crests can't alias into shimmer (FXAA is the default AA; camera jitter is never
+  applied to the displaced water in FXAA/Off mode, so there is no TAA motion-vector
+  flicker on crests).
+- **Refraction edge safety.** Screen-space water refraction (above-water and the
+  underwater wobble) now fades its UV offset to zero toward the screen edges and stays
+  hard-clamped on-screen, so fast camera motion can't smear or black-edge.
+
 ### Added (5.1.0) — hyper-real water overhaul
 
 - **Gerstner ocean (vertex displacement).** Water now physically displaces on a sum

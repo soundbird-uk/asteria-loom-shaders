@@ -61,6 +61,10 @@ void main() {
     // so world->view is its transpose) before projecting.
     if (isWater > 0.5) {
         vec3 disp = alGerstnerDisplace(worldPos.xz, frameTimeCounter);
+        // SHORELINE SAFETY: damp the HORIZONTAL pull so water vertices can't drag
+        // away from the solid block beside them and open a seam/void at the shore.
+        // Vertical swell is kept in full; the fragment normal keeps full steepness.
+        disp.xz *= AL_WATER_HORIZ_DAMP;
         viewPos.xyz += transpose(mat3(gbufferModelViewInverse)) * disp;
     }
 #endif
