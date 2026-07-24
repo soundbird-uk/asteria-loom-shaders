@@ -59,6 +59,56 @@ uniform int heldBlockLightValue2;
 
 in vec2 texcoord;
 
+#if defined(AO) && defined(AL_AO_DENOISE)
+// Depth+normal-aware bilateral denoise of the GTAO buffer, evaluated once at
+// read time. GTAO leaves per-pixel grain (slice/step jitter) that temporal
+// accumulation cannot fully remove because reprojection error at distance
+// rejects history and falls back to the raw, noisy current frame. A spatial
+// bilateral blur is deterministic — no motion vectors, no history, so it can
+// never flicker or jitter with the camera — and edge-stopped on depth AND
+// normal so it smooths flat surfaces without bleeding across creases/corners
+// (which would erase the very contact darkening AO exists to draw).
+float alDenoiseAO(vec2 uv, float centerDepth, vec3 centerN) {
+    // A sky/background pixel (or a poisoned NaN sample) contributes no AO and
+    // must not drag the kernel — bail to fully-lit for the degenerate center.
+    if (centerDepth >= 1.0) return 1.0;
+    float centerLin = alLinearEyeDepth(alScreenToView(uv, centerDepth));
+    vec2  texel     = 1.0 / vec2(textureSize(colortex4, 0));
+
+    float sum = 0.0;
+    float wsum = 0.0;
+    const float sig2 = 2.0 * (AL_AO_DENOISE_SIGMA) * (AL_AO_DENOISE_SIGMA);
+    for (int y = -AL_AO_DENOISE_RADIUS; y <= AL_AO_DENOISE_RADIUS; ++y) {
+        for (int x = -AL_AO_DENOISE_RADIUS; x <= AL_AO_DENOISE_RADIUS; ++x) {
+            vec2  off = vec2(float(x), float(y));
+            vec2  suv = uv + off * texel;
+            // Skip taps that fell off-screen (clamp would fold the edge in).
+            if (suv.x < 0.0 || suv.x > 1.0 || suv.y < 0.0 || suv.y > 1.0) continue;
+
+            float a = texture(colortex4, suv).r;
+            if (!(a >= 0.0 && a <= 1.0)) continue;         // reject NaN/garbage
+
+            float sd = texture(depthtex0, suv).r;
+            if (sd >= 1.0) continue;                        // sky neighbour
+            float sLin = alLinearEyeDepth(alScreenToView(suv, sd));
+            float dz   = abs(sLin - centerLin) / max(centerLin, 1e-4);
+            float wDepth = exp(-(dz * dz) / (AL_AO_DENOISE_DEPTHK * AL_AO_DENOISE_DEPTHK));
+
+            vec3  sN = alDecodeNormal(texture(colortex2, suv).rg);
+            if (dot(sN, centerN) < AL_AO_DENOISE_NORMALK) continue;  // across a crease
+
+            float r2 = off.x * off.x + off.y * off.y;
+            float wSpace = exp(-r2 / sig2);
+
+            float w = wSpace * wDepth;
+            sum  += a * w;
+            wsum += w;
+        }
+    }
+    return (wsum > 1e-5) ? (sum / wsum) : 1.0;
+}
+#endif
+
 /* RENDERTARGETS: 0 */
 layout(location = 0) out vec4 outColor;
 
@@ -151,7 +201,14 @@ void main() {
     // Range-test the AO read (NaN fails the comparison and falls back to 1.0 =
     // fully lit, so a poisoned history frame can never blacken the scene) before
     // the pow — pow(NaN,..) would propagate NaN through all indirect light.
+#ifdef AL_AO_DENOISE
+    // Spatial bilateral denoise (depth+normal edge-stopped). Deterministic:
+    // removes GTAO grain without the distance jitter that temporal reprojection
+    // introduces on its own.
+    float aoRaw = alDenoiseAO(texcoord, depth, N);
+#else
     float aoRaw = texture(colortex4, texcoord).r;
+#endif
     aoRaw = (aoRaw >= 0.0 && aoRaw <= 1.0) ? aoRaw : 1.0;
     ao = pow(aoRaw, AO_STRENGTH);
 #endif

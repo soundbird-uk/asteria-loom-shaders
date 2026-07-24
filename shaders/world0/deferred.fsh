@@ -99,7 +99,7 @@ void main() {
     // and TAA modes) AND the AO's own history (colortex5) accumulates it, so the
     // animated jitter is AVERAGED OUT to smooth AO. Only with AA fully OFF (no
     // accumulator) is it frozen so it can't crawl.
-#ifdef AL_TEMPORAL
+#ifdef AL_TAA
     float fAdv = float(frameCounter);
 #else
     float fAdv = 0.0;

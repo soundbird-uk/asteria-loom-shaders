@@ -309,6 +309,24 @@ const float shadowDistance = 128.0; // [64.0 96.0 128.0 192.0 256.0]
 // reprojected sample (disocclusion / a different surface). ~5%.
 #define AL_AO_DEPTH_REJECT 0.05
 
+// --- AO spatial denoise (bilateral, deterministic) ------------------------
+// GTAO's slice/step jitter leaves per-pixel noise even after temporal
+// accumulation (reprojection error at distance rejects history and falls back
+// to the noisy current frame). A depth-aware bilateral blur run at read time
+// removes that grain deterministically — no motion, no flicker, no distance
+// jitter. Radius in texels of the (half-res) AO buffer; the kernel is a
+// separable-style box of (2*R+1)^2 taps with a Gaussian spatial falloff.
+#define AL_AO_DENOISE            // comment out to disable the bilateral pass
+#define AL_AO_DENOISE_RADIUS 2   // 2 -> 5x5 kernel (25 taps)
+// Spatial Gaussian sigma (texels). Larger = smoother, softer edges.
+#define AL_AO_DENOISE_SIGMA 2.0
+// Depth edge stopping: a neighbour is down-weighted by
+// exp(-(dLinear/center)^2 / DEPTHK^2). Smaller = sharper depth edges kept.
+#define AL_AO_DENOISE_DEPTHK 0.06
+// Normal edge stopping: neighbours facing away are rejected below this dot so
+// the blur never bleeds AO across a crease/corner.
+#define AL_AO_DENOISE_NORMALK 0.86
+
 
 /* =========================================================================
    CLOUDS  (volumetric 2-layer raymarch — cumulus 3D + cirrus 2D)
@@ -854,6 +872,15 @@ const vec3 AL_WATER_TINT = vec3(0.09, 0.19, 0.22);
 #define AL_SSR_THICKNESS     1.10   // max surface thickness accepted as a hit (m)
 #define AL_SSR_REFINE        5      // binary-search refinement iterations
 #define AL_SSR_EDGE_FADE     0.12   // screen-edge reflection fade width (uv)
+// GLOSSY reflection pre-filter (deterministic grain fix). The SSR hit colour is
+// averaged over a small screen-space kernel around the hit so the per-pixel
+// divergence from micro-ripple normals + the frozen dither (which read as the
+// "grid grain" on water viewed from above) is smoothed into a soft gloss. The
+// radius grows with view distance because far water sub-tends fewer pixels, so
+// the same world-space ripples alias into a tighter, harsher grid there.
+#define AL_SSR_GLOSS_TAPS    8       // ring taps averaged (+ the centre)
+#define AL_SSR_GLOSS_RADIUS  1.6     // base kernel radius (texels of colortex0)
+#define AL_SSR_GLOSS_DISTK   0.04    // extra radius per metre of view distance
 // Screen-space REFRACTION: how far (uv) the water normal bends the submerged scene
 // sample. Subtle + distance-faded so the seabed wobbles under the surface without
 // tearing. (5.1.0 water overhaul.)
@@ -995,7 +1022,7 @@ const vec3 AL_UW_SNOW_TINT  = vec3(0.82, 0.86, 0.94);
 //   TAA  — jittered temporal accumulation (sharper sub-pixel detail) resolved in
 //          composite3 with un-jitter + variance clip. Steadier than raw aliasing
 //          but can still crawl slightly on far silhouettes; offered as a choice.
-#define AA_MODE 2 // [0 1 2]
+#define AA_MODE 1 // [0 1 2]
 
 // Derived internal flags (do not set directly — driven by AA_MODE).
 #if AA_MODE == 2
@@ -1004,14 +1031,20 @@ const vec3 AL_UW_SNOW_TINT  = vec3(0.82, 0.86, 0.94);
 #if AA_MODE == 1
     #define AL_FXAA_ON    // spatial FXAA in final.fsh
 #endif
-// AL_TEMPORAL = a temporal RESOLVE runs (composite3 reprojects prev-frame history
-// and blends) — true for BOTH FXAA (anti-flicker) and TAA. The screen-space noise
-// (SSR / GTAO / shadow-PCF dither) is ANIMATED per frame ONLY when this is set, so
-// composite3 can average it out; with AA fully OFF (no accumulator) the dither is
-// frozen instead so it can't crawl. This is the mechanism that removes the grain.
-#if AA_MODE != 0
-    #define AL_TEMPORAL
-#endif
+// Grain policy (revised): screen-space noise sources are handled DETERMINISTICALLY
+// wherever possible, because temporal reprojection without a velocity buffer rejects
+// history at distance and falls back to the raw noisy frame — that is what produced
+// the "distance jitter" in both FXAA and TAA.
+//   * GTAO grain  -> removed by a depth+normal BILATERAL denoise at read time
+//                    (deferred1.fsh, AL_AO_DENOISE). No motion, no flicker.
+//   * SSR grain    -> softened by a distance-scaled GLOSSY blur of the reflection
+//                    (composite.fsh). The dither is FROZEN under FXAA (AL_TAA unset)
+//                    so it is a fixed sub-pixel offset, not crawling noise.
+//   * Shadow PCF   -> per-pixel Vogel rotation is frozen under FXAA; the soft edge
+//                    is smoothed by the sample count, not by temporal averaging.
+// The composite3 temporal RESOLVE still runs (history reproject + variance clip) as
+// an anti-flicker pass in both AA modes; the per-frame dither ANIMATION is enabled
+// only under TAA (AL_TAA), where jitter + resolve genuinely average it.
 
 // --- FXAA shaping (internal, not GUI — composite3.fsh) --------------------
 // Lottes console-FXAA thresholds. EDGE_MIN/EDGE_MUL gate which luma steps count
@@ -1047,7 +1080,7 @@ const vec3 AL_UW_SNOW_TINT  = vec3(0.82, 0.86, 0.94);
 #define AL_TAA_CLIP_GAMMA 1.6
 // Anti-flicker (FXAA / no-jitter) blend ceiling — a touch lower than the TAA
 // ceiling so it quiets shimmer without smearing moving foliage/entities.
-#define AL_TAA_FXAA_MAX_BLEND 0.82
+#define AL_TAA_FXAA_MAX_BLEND 0.75
 
 
 /* =========================================================================

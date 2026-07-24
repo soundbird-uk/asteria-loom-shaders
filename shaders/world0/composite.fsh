@@ -146,6 +146,38 @@ bool alTraceSSR(vec3 origin, vec3 dir, float dither, out vec2 hitUV) {
     return false;
 }
 
+// Glossy pre-filter of an SSR hit colour. Averages colortex0 over a small
+// golden-angle ring around the hit UV so the high-frequency per-pixel variance
+// from micro-ripple normals + the frozen SSR dither (the "grid grain" on water
+// from above) resolves into a smooth gloss. Deterministic — no history, no
+// motion — so it cannot flicker or jitter with the camera. Radius grows with
+// view distance where the ripple pattern aliases hardest. Off-screen and
+// HDR-garbage taps are dropped so it can never smear the screen edge or bloom.
+vec3 alGlossyReflSample(vec2 hitUV, float viewDist) {
+    vec2  texel  = 1.0 / vec2(textureSize(colortex0, 0));
+    float radius = AL_SSR_GLOSS_RADIUS + viewDist * AL_SSR_GLOSS_DISTK;
+
+    vec3  acc = vec3(0.0);
+    float wsum = 0.0;
+    // Centre tap.
+    {
+        vec3 c = texture(colortex0, hitUV).rgb;
+        if (all(greaterThanEqual(c, vec3(0.0))) && all(lessThan(c, vec3(65000.0)))) {
+            acc += c; wsum += 1.0;
+        }
+    }
+    for (int i = 0; i < AL_SSR_GLOSS_TAPS; i++) {
+        float a = float(i) * 2.399963230;                 // golden angle
+        vec2  o = vec2(cos(a), sin(a)) * radius * texel;
+        vec2  suv = hitUV + o;
+        if (suv.x < 0.0 || suv.x > 1.0 || suv.y < 0.0 || suv.y > 1.0) continue;
+        vec3  c = texture(colortex0, suv).rgb;
+        if (!(all(greaterThanEqual(c, vec3(0.0))) && all(lessThan(c, vec3(65000.0))))) continue;
+        acc += c; wsum += 1.0;
+    }
+    return (wsum > 0.5) ? (acc / wsum) : texture(colortex0, hitUV).rgb;
+}
+
 #ifdef REFLECTIVE_BLOCKS
 /*
  Material-dependent reflection for a SOLID reflective block (ice / metal / polished)
@@ -198,14 +230,16 @@ vec3 alReflectiveBlock(vec3 base, float reflAmt, float metal) {
     float ssrW = 1.0 - rough;
     if (ssrW > 0.05) {
         vec2 noiseUV = gl_FragCoord.xy / 256.0;
-    #ifdef AL_TEMPORAL
+    #ifdef AL_TAA
         float dither = fract(texture(noisetex, noiseUV).r + float(frameCounter) * 0.61803398875);
     #else
         float dither = texture(noisetex, noiseUV).r;
     #endif
         vec2 hitUV;
         if (alTraceSSR(P0, Rv, dither, hitUV)) {
-            vec3 hitCol = texture(colortex0, hitUV).rgb;
+            // Glossy pre-filter, widened by roughness so rough metal never chromes
+            // and the SSR grain averages out. dist0*(1+rough) grows the kernel.
+            vec3 hitCol = alGlossyReflSample(hitUV, dist0 * (1.0 + rough * 4.0));
             vec2 e = smoothstep(vec2(0.0), vec2(AL_SSR_EDGE_FADE), hitUV)
                    * (1.0 - smoothstep(vec2(1.0 - AL_SSR_EDGE_FADE), vec2(1.0), hitUV));
             float edgeFade = e.x * e.y * ssrW;
@@ -309,13 +343,15 @@ void main() {
     // frozen only with AA fully off (no accumulator) so it can't crawl.
     vec2 noiseUV = gl_FragCoord.xy / 256.0;        // noisetex is 256x256
     float dither = texture(noisetex, noiseUV).r;
-#ifdef AL_TEMPORAL
+#ifdef AL_TAA
     dither = fract(dither + float(frameCounter) * 0.61803398875);
 #endif
 
     vec2 hitUV;
     if (alTraceSSR(P0, Rv, dither, hitUV)) {
-        vec3 hitCol = texture(colortex0, hitUV).rgb;
+        // Glossy pre-filter: average a small ring around the hit so the SSR
+        // "grid grain" (per-pixel ripple/dither divergence) reads as smooth gloss.
+        vec3 hitCol = alGlossyReflSample(hitUV, dist0);
         // Fade the reflection to the sky sample near the screen edges (the march
         // has no data past them) so reflections don't clip hard.
         vec2 e = smoothstep(vec2(0.0), vec2(AL_SSR_EDGE_FADE), hitUV)

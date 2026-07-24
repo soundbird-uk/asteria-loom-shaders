@@ -133,22 +133,23 @@ vec2 alVogel(int i, int n, float phi) {
 }
 
 float alShadowRotation() {
-    vec2 nz = texture(noisetex, gl_FragCoord.xy / 256.0).xy;
-    // R2 sequence: a1 = 1/plastic-number. Advancing phi by it per frame gives a
-    // maximally-spread temporal offset — BUT that only denoises if the frames are
-    // temporally resolved. Under FXAA/Off (no temporal resolve) the animated
-    // rotation just CRAWLS as grain on soft shadow edges (field report). So the
-    // per-frame advance is applied whenever a TEMPORAL RESOLVE runs (composite3, in
-    // both FXAA and TAA modes) so the animated rotation is AVERAGED OUT to a smooth
-    // soft edge. Only with AA fully OFF (no accumulator) is it frozen, so it can't
-    // crawl. (Animating it without a resolver was the crawl; freezing it without
-    // averaging was the residual static grain — this ties the two together.)
-#ifdef AL_TEMPORAL
+    // Interleaved Gradient Noise (Jimenez) instead of a tiling noisetex lookup.
+    // IGN gives the lowest-variance per-pixel dither for a given tap count and,
+    // crucially, does NOT tile — the old `texture(noisetex, gl_FragCoord/256)`
+    // repeated every 256 px, printing a visible GRID onto soft shadow edges (the
+    // same grid the field report saw). IGN's fine, aperiodic pattern reads as a
+    // smooth penumbra at 12+ samples with no grid and no banding.
+    float ign = fract(52.9829189 *
+                      fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))));
+    // Under TAA the rotation is additionally advanced per frame (jitter + the
+    // composite3 resolve then average it to a sharper edge). Under FXAA/Off it is
+    // frozen so it can't crawl; IGN alone already keeps the frozen edge smooth.
+#ifdef AL_TAA
     float r2 = fract(float(frameCounter) * 0.75487766624669276);
 #else
     float r2 = 0.0;
 #endif
-    return (nz.x + r2) * AL_TAU;
+    return (ign + r2) * AL_TAU;
 }
 
 // One shadow tap. Returns 1.0 = lit, 0.0 = occluded, at `uv` vs reference depth

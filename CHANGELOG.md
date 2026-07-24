@@ -7,26 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Fixed (5.2.1) — real temporal accumulation for SSR / AO / shadow grain
+### Fixed (5.2.2) — deterministic SPATIAL denoising for grain (reverts the 5.2.1 TAA regression)
 
-- **Grain is now temporally ACCUMULATED away, not just frozen.** `composite3` is a
-  full temporal-resolve pass (closest-depth velocity dilation, reprojection via the
-  previous-frame model/projection matrices, YCoCg variance clip, disocclusion
-  depth-reject, HDR-compressed blend) that runs in BOTH FXAA and TAA modes. The
-  missing link: the screen-space dithers (SSR ray-start, GTAO slice/step, shadow-PCF
-  rotation) must be ANIMATED per frame for the accumulator to average them — 5.2.0
-  froze them, which left a static grain that can't average out. They are now animated
-  whenever a temporal resolve runs (`AL_TEMPORAL`), and frozen only with AA fully OFF
-  (no accumulator). Over ~8–10 frames the reprojected history averages the noise to a
-  smooth result for reflections, AO and soft shadow edges.
-- **TAA is now the default** (Medium/High/Ultra), so the accumulation also carries
-  camera jitter for sharp sub-pixel anti-aliasing; the variance clip keeps it sharp,
-  not blurry, and controls ghosting on motion. Potato/Low stay on FXAA (which still
-  gets the temporal anti-flicker accumulation, just without jitter). FXAA-mode
-  accumulation strengthened (0.75→0.82) so it denoises well too.
-- **Water SSR dark-grid infill retained + reinforced** — occluded/downward rays
-  return a dim ocean tone (never black), and with the noise now averaging out the
-  griddy pattern resolves to smooth water.
+- **Why 5.2.1 was wrong.** 5.2.1 leaned entirely on temporal accumulation
+  (`composite3` reproject) and made TAA the default. Without a real velocity buffer,
+  reprojection carries sub-pixel error that grows with distance; the disocclusion /
+  variance test then rejects the reprojected history on far pixels and falls back to
+  the raw, noisy current frame — which is exactly the "jittering in the distance"
+  seen in TAA, and making TAA the default also regressed the FXAA path. Temporal
+  accumulation is the wrong tool for *static* screen-space noise.
+- **AA reverted to FXAA everywhere.** `AA_MODE` and all presets (Medium/High/Ultra)
+  are back on FXAA; the FXAA-mode blend ceiling is back to 0.75. The screen-space
+  dithers are frozen again under FXAA (animated only under TAA), so nothing crawls.
+- **GTAO grain — depth+normal BILATERAL denoise.** The AO buffer is now spatially
+  denoised at read time in `deferred1` with a 5×5 bilateral kernel edge-stopped on
+  linear depth *and* normal, so it smooths flat surfaces without bleeding AO across
+  creases/corners. Deterministic — no history, no motion — so it cannot flicker or
+  jitter with the camera. (`AL_AO_DENOISE`, radius/sigma/edge-K in settings.)
+- **Water SSR "grid grain" — glossy pre-filter.** Each SSR hit colour is averaged
+  over a small golden-angle ring around the hit (`alGlossyReflSample`), radius
+  growing with view distance where the ripple pattern aliases hardest, so the
+  per-pixel divergence that printed a grid onto water-from-above resolves into a
+  smooth gloss. The dark-grid miss-infill (occluded/downward rays → dim ocean tone,
+  never black) is retained. The same pre-filter, widened by roughness, cleans the
+  reflective-block SSR so rough metal never chromes.
+- **Soft-shadow grain — Interleaved Gradient Noise rotation.** The PCF Vogel-disc
+  rotation now uses non-tiling IGN instead of a `noisetex` lookup that repeated every
+  256 px and printed a visible grid onto soft shadow edges. IGN reads as a smooth
+  penumbra at 12+ samples with no grid and no banding, frozen under FXAA.
+- **Honest limitation:** these are deterministic *spatial* fixes. They remove the
+  static grain and the distance jitter without needing per-frame accumulation. A full
+  velocity-buffer TAA (the originally-requested pipeline) would additionally sharpen
+  sub-pixel AA, but it needs a motion-vector G-buffer target that this OpenGL-4.1 /
+  no-compute macOS pipeline doesn't currently carry; adding it is tracked separately.
 
 ### Fixed (5.2.0) — grain, reflectivity, SSR grid, foam
 
