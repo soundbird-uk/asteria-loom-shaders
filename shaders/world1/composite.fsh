@@ -8,6 +8,8 @@
 #include "/lib/clouds_common.glsl"
 #include "/lib/water.glsl"
 #include "/lib/pbr.glsl"
+// Track 1: alSSRThicknessMax (sampler-free SSR Z-thickness window; no samplers/uniforms).
+#include "/lib/rays.glsl"
 
 /*
 ============================================================================
@@ -133,25 +135,43 @@ float alEyeZ(vec3 viewPos) { return -viewPos.z; }
 /*
  SSR raymarch in view space against depthtex0. `origin` is the reflective
  surface's view position, `normalV` its view-space normal and `dir` the reflected
- view direction (unit). Returns true + the hit UV when the ray crosses behind a
- thin surface on-screen; false otherwise.
- Standard scheme: fixed-length steps with a dithered start, detect the crossing
- (rayPos passes behind the sampled surface: rayPos.z < sceneZ), reject when the
- gap exceeds a thickness tolerance (ray slipped behind a foreground object), and
- binary-search between the last in-front and first behind sample to refine.
+ view direction (unit). Returns true + the hit UV ONLY when the ray crosses onto a
+ surface that passes strict Z-thickness validation; false otherwise (the caller
+ then falls through to the sky / analytic in-fill — never a smear).
 
- RAY HYGIENE (5.3.0) — two rejections that the old trace lacked:
-  * INTO-SURFACE rays. reflect() can return a direction pointing back into the
-    geometry when the (rippled / interpolated) normal disagrees with the visible
-    surface. Such a ray immediately marches behind the surface it started on,
-    the very first sample "crosses", and the trace returns the surface's own
-    screen colour — which, for a near-horizontal reflection, is the bright sky
-    horizon band pasted INSIDE the block ("as if you are looking through them").
-    dot(dir, normalV) <= AL_SSR_MIN_DOT is rejected outright.
-  * SELF-INTERSECTION. The march now starts offset ALONG THE NORMAL (scaled with
-    view distance, where a depth texel spans more world), so the first steps
-    cannot re-hit the origin pixel and produce a false, angle-dependent hit —
-    the cause of reflections that only appeared at certain specific angles.
+ STRICT Z-THICKNESS (Track 1, 5.3.0) — the old trace registered a "blind" hit:
+ ANY depth crossing counted, so a ray that merely passed BEHIND a thin object
+ pasted that object's colour onto the reflection. The rewrite validates the
+ crossing in a CONSISTENT LINEAR space (positive eye depth = -view z, via alEyeZ):
+
+     depthDiff = eyeZ(rayPos) - eyeZ(sampledSurface)
+
+ depthDiff > 0 means the ray is now behind the sampled surface. A crossing is a
+ HIT only when 0 < depthDiff < MAX_THICKNESS, where MAX_THICKNESS is DERIVED per
+ step from the ray's per-step depth advance and the hit's eye distance
+ (lib/rays.glsl alSSRThicknessMax) — never a hand-tuned constant. A crossing whose
+ gap exceeds the window is a ray that slipped behind a thin foreground object:
+ the trace returns false immediately (MISS), because everything beyond that first
+ opaque surface is occluded from this view and holds no valid reflection data.
+
+ The binary-search refinement converges onto a VALIDATED hit: it tightens the
+ bracket [in-front, behind] using the SAME eye-depth crossing test, then the
+ converged point is RE-CHECKED against the thickness window before it is accepted,
+ so the returned UV can never be a rejected pass-behind that the coarse step
+ happened to bracket.
+
+ RAY HYGIENE (5.3.0), retained:
+   * INTO-SURFACE rays (dot(dir, normalV) <= AL_SSR_MIN_DOT) are rejected outright
+     — reflect() can point a ray back into the geometry when the rippled normal
+     disagrees with the visible surface, which used to paste the sky horizon band
+     INSIDE the block.
+   * SELF-INTERSECTION — the march starts offset ALONG THE NORMAL (scaled with
+     view distance, where a depth texel spans more world) so the first steps
+     cannot re-hit the origin pixel and fake an angle-dependent hit.
+
+ macOS precision: rayPos and every view-space depth intermediate are highp so the
+ Apple GL 4.1 driver cannot demote the reconstruction/thickness maths to fp16 and
+ destabilise the crossing test (macOS precision rule).
 */
 bool alTraceSSR(vec3 origin, vec3 normalV, vec3 dir, float dither, out vec2 hitUV) {
     hitUV = vec2(0.0);
@@ -159,46 +179,67 @@ bool alTraceSSR(vec3 origin, vec3 normalV, vec3 dir, float dither, out vec2 hitU
     // A reflected ray must leave the surface, never enter it.
     if (dot(dir, normalV) <= AL_SSR_MIN_DOT) return false;
 
-    float stepLen = AL_SSR_MAX_DIST / float(AL_SSR_STEPS);
+    highp float stepLen = AL_SSR_MAX_DIST / float(AL_SSR_STEPS);
     // Normal bias grows with distance: one depth texel covers more world there.
-    float nBias   = AL_SSR_NORMAL_BIAS + length(origin) * AL_SSR_NORMAL_DISTK;
-    vec3  rayPos  = origin + normalV * nBias + dir * stepLen * (0.5 + dither);
+    highp float nBias   = AL_SSR_NORMAL_BIAS + length(origin) * AL_SSR_NORMAL_DISTK;
+    highp vec3  rayPos  = origin + normalV * nBias + dir * stepLen * (0.5 + dither);
+    highp vec3  prevPos = rayPos;   // last IN-FRONT sample (binary-search bracket lo)
 
     for (int i = 0; i < AL_SSR_STEPS; i++) {
+        prevPos = rayPos;
         rayPos += dir * stepLen;
 
-        vec4 clip = gbufferProjection * vec4(rayPos, 1.0);
+        highp vec4 clip = gbufferProjection * vec4(rayPos, 1.0);
         if (clip.w <= 0.0) return false;                       // behind camera
-        vec2 uv = (clip.xy / clip.w) * 0.5 + 0.5;
+        highp vec2 uv = (clip.xy / clip.w) * 0.5 + 0.5;
         if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) return false;
 
-        float sd = texture(depthtex0, uv).r;
-        if (sd >= 1.0) continue;                               // sky here, no hit
-        vec3 scene = alScreenToView(uv, sd);
+        highp float sd = texture(depthtex0, uv).r;
+        if (sd >= 1.0) continue;                               // sky here, no surface
+        highp vec3 scene = alScreenToView(uv, sd);
 
-        // Both z are negative (view forward = -z). rayPos behind surface => more
-        // negative than scene.z => (rayPos.z - scene.z) < 0.
-        if (rayPos.z - scene.z < 0.0) {
-            float thick = scene.z - rayPos.z;                  // positive gap
-            if (thick < AL_SSR_THICKNESS + stepLen) {
-                // Binary-search refine between the previous (in-front) sample and
-                // this (behind) sample.
-                vec3 a = rayPos - dir * stepLen;
-                vec3 b = rayPos;
-                for (int r = 0; r < AL_SSR_REFINE; r++) {
-                    vec3 m = (a + b) * 0.5;
-                    vec4 mc = gbufferProjection * vec4(m, 1.0);
-                    vec2 muv = (mc.xy / mc.w) * 0.5 + 0.5;
-                    float msd = texture(depthtex0, muv).r;
-                    vec3 ms = alScreenToView(muv, msd);
-                    if (m.z - ms.z < 0.0) b = m; else a = m;
-                }
-                vec4 bc = gbufferProjection * vec4(b, 1.0);
-                hitUV = (bc.xy / bc.w) * 0.5 + 0.5;
-                return true;
-            }
-            return false;   // crossed but too thick -> behind an object, reject
+        // Consistent LINEAR space: positive eye depth. depthDiff > 0 => the ray is
+        // now BEHIND the sampled surface (a crossing happened this step).
+        highp float depthDiff = alEyeZ(rayPos) - alEyeZ(scene);
+        if (depthDiff <= 0.0) continue;                        // still in front, keep marching
+
+        // STRICT thickness at the coarse crossing: a gap wider than the derived
+        // window means the ray slipped behind a thin object -> MISS (fall through
+        // to the caller's sky/in-fill). Do NOT keep marching: beyond this first
+        // opaque surface everything is occluded from view.
+        highp float maxThick = alSSRThicknessMax(stepLen, dir, alEyeZ(rayPos));
+        if (depthDiff >= maxThick) return false;
+
+        // Binary-search refine ONTO the validated crossing: tighten the bracket
+        // [a in-front, b behind] with the SAME eye-depth crossing test.
+        highp vec3 a = prevPos;
+        highp vec3 b = rayPos;
+        for (int r = 0; r < AL_SSR_REFINE; r++) {
+            highp vec3  m   = (a + b) * 0.5;
+            highp vec4  mc  = gbufferProjection * vec4(m, 1.0);
+            highp vec2  muv = (mc.xy / mc.w) * 0.5 + 0.5;
+            highp float msd = texture(depthtex0, muv).r;
+            highp vec3  ms  = alScreenToView(muv, msd);
+            if (alEyeZ(m) - alEyeZ(ms) > 0.0) b = m; else a = m;
         }
+
+        // RE-VALIDATE the converged point: it must STILL pass the thickness test
+        // (0 < diff < window) to be accepted, guaranteeing the returned UV is a
+        // validated surface hit and not a bracketed pass-behind.
+        highp vec4  bc  = gbufferProjection * vec4(b, 1.0);
+        if (bc.w <= 0.0) return false;
+        highp vec2  buv = (bc.xy / bc.w) * 0.5 + 0.5;
+        if (buv.x < 0.0 || buv.x > 1.0 || buv.y < 0.0 || buv.y > 1.0) return false;
+        highp float bsd = texture(depthtex0, buv).r;
+        if (bsd >= 1.0) return false;
+        highp vec3  bs    = alScreenToView(buv, bsd);
+        highp float bDiff = alEyeZ(b) - alEyeZ(bs);
+        highp float bWin  = alSSRThicknessMax(stepLen, dir, alEyeZ(b));
+        if (bDiff > 0.0 && bDiff < bWin) {
+            hitUV = buv;
+            return true;
+        }
+        return false;   // converged onto a rejected (too-thick) crossing -> miss
     }
     return false;
 }
@@ -462,6 +503,97 @@ vec3 alReflectiveBlock(vec3 base, float reflAmt, float metal,
 }
 #endif
 
+#ifdef WATER_CAUSTICS
+/*
+============================================================================
+ NORMAL-PROJECTED UNDERWATER CAUSTICS (Track 4, 5.3.0)
+----------------------------------------------------------------------------
+ A REAL refraction-divergence construction, NOT a scrolling-texture multiply.
+
+ Real caustics are the places on the sea floor where sunlight, bent by the wavy
+ surface, CONVERGES. We build exactly that. For a submerged point we take the
+ world position of the water surface directly above it (P0, reconstructed from
+ depthtex0 at this texcoord — the translucent-inclusive depth, which per the Iris
+ buffer docs is the WATER surface), reconstruct the analytic Gerstner surface
+ normal there (lib/water.glsl alGerstnerSurface — the SAME wave model that shades
+ the visible ripples, so the caustics line up with the waves), refract the
+ incoming sunlight through the air->water interface, and project the refracted ray
+ down to the floor. The AREA JACOBIAN of that surface->floor mapping IS the
+ divergence of the refracted light field:
+
+     irradiance ∝ 1 / |J|      (energy conservation: a surface patch dx·dz maps to
+                                a floor patch |J|·dx·dz, so its light concentrates
+                                as |J| shrinks)
+
+ |J| < 1  => neighbouring rays squeeze together  => bright caustic filament.
+ |J| > 1  => rays spread                          => dim gap between filaments.
+ |J| = 1  => dead-flat water                      => neutral (returns gain 0).
+
+ The Jacobian is measured by CENTRAL DIFFERENCES over AL_CAUSTIC_DIV_EPS world
+ metres (sized under the finest Gerstner wavelength): four surface-normal
+ evaluations forming ∂(floorHit)/∂x and ∂(floorHit)/∂z. The refraction ratio is
+ eta = n_air/n_water = 1/1.33; the sun direction sets which way the pattern casts
+ and slides (the pan direction), so the whole field is anchored to sunPosition
+ exactly as a physical caustic is. Pure math, sampler-free; every divisor is
+ guarded so no NaN/Inf can reach the scene.
+
+ macOS precision: the surface positions, refracted directions and the Jacobian
+ are highp so Apple's GL 4.1 driver cannot demote this world-space projection to
+ fp16 and quantise the caustic filaments into blocky steps (macOS precision rule).
+============================================================================
+*/
+#define AL_CAUSTIC_ETA        0.75188   // n_air / n_water (1.0 / 1.33)
+#define AL_CAUSTIC_DIV_EPS    0.28      // central-difference step (world metres)
+#define AL_CAUSTIC_NORMAL_STR 1.15      // Gerstner normal slope scale for the projection
+#define AL_CAUSTIC_MIN_J      0.045     // focus clamp: caps the 1/J singularity
+#define AL_CAUSTIC_MAX_GAIN   3.0       // max brightening deviation above flat water
+#define AL_CAUSTIC_MIN_DOWN   0.05      // floor on the refracted ray's downward component
+
+// Where the sunlight refracted at surface XZ `sxz` meets a floor `dropDepth`
+// metres below. `incident` is the DOWNWARD sun-to-surface direction (unit).
+highp vec2 alCausticFloorHit(highp vec2 sxz, highp float dropDepth,
+                             highp vec3 incident, highp float t) {
+    // Analytic Gerstner surface normal at this XZ (world Y-up frame); the returned
+    // displacement Jacobian is unused here (foam uses it, caustics use light J).
+    highp vec3  n;
+    highp float dispJac;
+    alGerstnerSurface(sxz, t, AL_CAUSTIC_NORMAL_STR, 1.0, n, dispJac);
+    // Refract the downward sunlight into the water (air->water never TIRs, so the
+    // result is always a valid non-zero direction).
+    highp vec3  refr = refract(incident, n, AL_CAUSTIC_ETA);
+    highp float down = max(-refr.y, AL_CAUSTIC_MIN_DOWN);   // guard near-horizontal rays
+    return sxz + refr.xz * (dropDepth / down);
+}
+
+// Caustic light gain at a submerged point: 0 for flat water, positive in the
+// bright filaments (focusing), negative in the shadow gaps (defocusing).
+float alCausticGain(highp vec3 surfWorld, highp float dropDepth,
+                    highp vec3 sunDir, highp float t) {
+    highp vec3  incident = -sunDir;                 // sunlight travels DOWN to the surface
+    highp float e = AL_CAUSTIC_DIV_EPS;
+    highp vec2  s = surfWorld.xz;
+
+    highp vec2 hPX = alCausticFloorHit(s + vec2(e, 0.0), dropDepth, incident, t);
+    highp vec2 hMX = alCausticFloorHit(s - vec2(e, 0.0), dropDepth, incident, t);
+    highp vec2 hPZ = alCausticFloorHit(s + vec2(0.0, e), dropDepth, incident, t);
+    highp vec2 hMZ = alCausticFloorHit(s - vec2(0.0, e), dropDepth, incident, t);
+
+    // Central-difference Jacobian of the surface->floor mapping g(x,z).
+    highp float inv2e = 1.0 / (2.0 * e);
+    highp vec2  dgdx  = (hPX - hMX) * inv2e;        // ∂(floorX,floorZ)/∂x
+    highp vec2  dgdz  = (hPZ - hMZ) * inv2e;        // ∂(floorX,floorZ)/∂z
+    highp float J     = abs(dgdx.x * dgdz.y - dgdx.y * dgdz.x);
+
+    // Irradiance ∝ 1/J; return the deviation from flat water (J==1 -> 0). The
+    // focus singularity is clamped so a crest brightens but can never blow up.
+    highp float irr = 1.0 / max(J, AL_CAUSTIC_MIN_J);
+    highp float g   = clamp(irr - 1.0, -1.0, AL_CAUSTIC_MAX_GAIN);
+    // NaN law: a non-finite Jacobian (should be impossible with the guards, but
+    // Apple fast-math is untrusted) collapses to neutral, never poisons the scene.
+    return (g >= -1.0 && g <= AL_CAUSTIC_MAX_GAIN) ? g : 0.0;
+}
+#endif
+
 void main() {
     vec3 base = texture(colortex0, texcoord).rgb;
     // Iris: a buffer listed in RENDERTARGETS but not written by an invocation
@@ -681,13 +813,28 @@ void main() {
                           * (waterPath * AL_WATER_ABSORB_SCALE * WATER_ABSORPTION));
 
 #ifdef WATER_CAUSTICS
+        // NORMAL-PROJECTED caustics: the divergence of the sunlight refracted by
+        // the water surface directly above this floor pixel (see alCausticGain).
+        // P0 is that surface point (view space, from depthtex0 = the water surface
+        // per Iris' translucent-inclusive depth), P1 the submerged floor. The gain
+        // is 0 for flat water, + in the bright filaments, - in the gaps, so it
+        // scales sunlight physically rather than tinting.
         vec3  sunDir = alSunDirWorld();
         float dayF   = alSmooth(smoothstep(-0.06, 0.16, sunDir.y));   // == alDayFactor
-        vec3  wposB  = alViewToPlayer(P1) + cameraPosition;
-        float caus   = alWaterCaustic(wposB, sunDir, frameTimeCounter * AL_CAUSTIC_SPEED);
-        float dfade  = exp(-waterPath / AL_CAUSTIC_DEPTH_FADE);       // shallow -> strong
-        float gate   = skyLm * dayF * dfade;
-        float cmod   = 1.0 + AL_CAUSTIC_STRENGTH * (caus * 2.0 - 1.0) * gate;
+        highp vec3 surfWorld  = alViewToPlayer(P0) + cameraPosition;
+        highp vec3 floorWorld = alViewToPlayer(P1) + cameraPosition;
+        // VERTICAL drop surface->floor (world Y): the refracted ray is projected
+        // DOWN by this, so it must be the true vertical depth, NOT waterPath (which
+        // is the along-view path length and only governs absorption below).
+        highp float vDrop = max(surfWorld.y - floorWorld.y, 0.0);
+        float caus  = alCausticGain(surfWorld, vDrop, sunDir,
+                                    frameTimeCounter * AL_CAUSTIC_SPEED);
+        // Fade with DEPTH below the surface (deep floors blur/absorb the pattern),
+        // with SUN ELEVATION (grazing sun -> mostly reflected, little transmitted),
+        // and with open-sky access (skyLm): only sunlit, open water floors dapple.
+        float dfade = exp(-vDrop / AL_CAUSTIC_DEPTH_FADE);           // shallow -> strong
+        float gate  = skyLm * dayF * dfade;
+        float cmod  = 1.0 + AL_CAUSTIC_STRENGTH * caus * gate;
         absorb *= max(cmod, 0.0);
 #endif
 

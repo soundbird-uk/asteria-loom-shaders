@@ -7,6 +7,85 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed — bloom is now a real dual-filter pyramid
+
+- **Bloom is a true progressive-downsample + tent-cascade-upsample pyramid
+  (Jimenez/COD dual filtering), replacing the documented single-pass gather
+  deviation.** Previously `composite4` built all 6 colortex9 atlas tiles directly
+  from `colortex0` using hardware mipmaps + a 13-tap fan, and `composite5` summed
+  the tiles with fixed per-level weights — a documented quality/simplicity trade,
+  **not** a strict pyramid. The bloom stage is now a chain of small composite
+  passes that each build **one** level from the **previous** one and pass every
+  other atlas texel through byte-exact (required for Iris' double-buffer flip
+  coherence): `composite4` downsamples the post-TAA scene into level 1;
+  `composite5..composite9` build levels 2..6 each from the previous level (no
+  hardware mips, no bright-pass threshold); `composite10..composite13`
+  tent-upsample the chain back up in place (`U_L = L_L + tent(U_{L+1})`);
+  `composite14` folds the final `U1 = L1 + tent(U2)` into the scene
+  (`scene + (U1 / levels) * BLOOM_STRENGTH * AL_BLOOM_ADD` — additive,
+  energy-bounded, NaN-guarded, preserving the soft/dreamy generous identity).
+- **Auto-exposure metering moved from `composite5` to `composite14`, functionally
+  identical** (same deep-mip metering + frame-time-smoothed adaptation, same
+  `colortex5.a(0,0)` single-writer passthrough and documented composite1-clobber
+  limitation) — `composite5` is now a bloom downsample pass, so the exposure code
+  rode along to the tail combine pass unchanged.
+- New helpers `alBloomDownsampleTile`, `alBloomTentTile`, `alBloomGuard` in
+  `lib/bloom.glsl`; the stale `QUALITY/SIMPLICITY TRADE` block, the dead
+  single-pass-gather note and the per-level `alBloomLevelWeight` (unused by a true
+  pyramid) were removed and the header rewritten to describe the pass chain. New
+  internal `AL_BLOOM_TENT_RADIUS` setting; `AL_BLOOM_ADD` / `BLOOM` comments and
+  the POST section header updated for the new semantics. `shaders.properties` now
+  gates `composite4..composite13` on `BLOOM` (`composite14` always runs for
+  auto-exposure). Docs (`docs/architecture.md`, `docs/architecture/phase4-contract
+  .md`, `README.md`) and `final.fsh`'s exposure references updated. Mirrored
+  byte-for-byte across `world0` / `world1` / `world-1`.
+
+
+### Fixed — auto-exposure is now a real multi-frame integrator
+
+- **Auto-exposure genuinely converges over time instead of a single-step partial
+  correction.** The documented KNOWN LIMITATION was that `composite1` rewrote
+  `colortex5.a = 1.0` fullscreen every frame *before* the exposure pass, so
+  `texelFetch(colortex5,(0,0)).a` in `composite14` read `1.0` rather than last
+  frame's exposure — the loop could never integrate. `composite1` (the only other
+  `colortex5` writer, and the one that runs first) now **preserves** that alpha:
+  it `texelFetch`es the stored `.a` and re-emits it (range-guarded to keep the
+  persistent buffer finite) rather than writing the constant `1.0`. The `.a`
+  channel is not part of the AO history (deferred uses `r`/`g`/`b` only), so this
+  costs one extra read-while-write sampler and leaves the AO denoise/history
+  semantics byte-exact. With a single authoritative exposure writer, `composite14`
+  now runs a true exponential integrator toward the metered target
+  (`rate = 1 - exp(-frameTime / AL_EXPOSURE_TAU)`, ~1 s convergence, frame-rate
+  independent) reading the real previous value. No feedback runaway (the metered
+  average is read from `colortex0` before exposure is applied in `final`); the
+  asymmetric `MIN`/`MAX` + `STRENGTH` target clamp still bounds the multiplier to
+  ~[0.90,1.08] so field-approved dark nights are never brightened. The now-unused
+  `AL_EXPOSURE_ADAPT_MIN` (the old per-frame-rate floor that papered over the
+  clobber) was removed; `settings.glsl`, `composite1`/`composite14` headers,
+  `docs/architecture.md` and `docs/architecture/phase4-contract.md` updated.
+  Mirrored byte-for-byte across `world0` / `world1` / `world-1`.
+
+### Fixed — aerial fog sky-gate on translucent surfaces
+
+- **Aerial fog no longer mis-gates translucent overlays by the geometry behind
+  them.** The fog's sky-exposure gate (`shaders/world*/composite2.fsh`) read the
+  sky lightmap from `colortex2.a` unconditionally. For water and glass that is
+  correct — `gbuffers_water` overwrites `colortex2` with the translucent surface's
+  own normal + lightmap — but *overlay* translucents that write only `colortex0`
+  (particles, weather, translucent entities/blocks, hand water) left `colortex2`
+  holding the **opaque geometry behind them**, so their fog was gated by an
+  unrelated surface's sky access. The gate is now surface-aware: opaque fronts and
+  water/glass gate by their own `colortex2.a`; overlay translucents (detected via
+  `depthtex0 < depthtex1` with a non-`gbuffers_water` matID) gate at **full sky
+  access when open sky is directly behind them** (`depthtex1 == 1`), otherwise fall
+  back to the opaque-behind lightmap as a documented proxy. Caves/interiors still
+  receive **zero** fog and open valleys keep the full amount — no re-introduction
+  of the "bright haze fills caves" bug. No new samplers (reuses `colortex3` /
+  `depthtex1`, already read for the fog-through-glass reroute); NaN guards
+  preserved. The stale `CAVEAT` header comment was replaced with an accurate
+  description, and the header sampler count corrected (6, budget ≤ 16). Mirrored
+  byte-for-byte across `world0` / `world1` / `world-1`.
+
 ## [0.5.0] - 2026-07-25
 
 ### Fixed (5.3.0) — grain, chrome metal, griddy water and painted foam

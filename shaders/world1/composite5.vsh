@@ -2,8 +2,8 @@
 #include "/settings.glsl"
 
 /*
- composite5 (vertex) — fullscreen pass (bloom upsample/combine + auto-exposure).
- Trivial fullscreen setup; all work is in the fragment shader.
+ composite5 (vertex) — fullscreen pass (bloom downsample L2).
+ Trivial fullscreen setup; all bloom work is in the fragment shader.
 */
 
 out vec2 texcoord;

@@ -37,10 +37,15 @@
       (NOT a clamp) that NaN cannot pass, so poison falls through to "current
       only" and self-heals; accepted values are re-sanitised before emit. This is
       the same discipline as deferred.fsh's AO history.
-   4. NEIGHBOURHOOD CLAMP — build a 3x3 min/max colour box in YCoCg and clip the
-      history into it (simple variance-free box clamp; adequate at this scope per
-      contract). This is the primary ghosting control for motion the velocity
-      missed (moving clouds, shading changes, disocclusion residue).
+   4. NEIGHBOURHOOD VARIANCE CLIP — build a 3x3 YCoCg colour box from the first
+      and second moments (mean +/- AL_TAA_CLIP_GAMMA * sigma, intersected with
+      the raw min/max hull so it can never overshoot the real neighbourhood),
+      then CLIP the history into it along the segment from the current sample
+      (alClipToAABB) rather than per-channel clamping it. A per-channel clamp
+      lands on a box corner that does not lie on that segment — a fabricated
+      colour, which is the hue-fringe seen on ghosting silhouettes. This is the
+      primary ghosting control for motion the velocity missed (moving clouds,
+      shading changes, disocclusion residue).
    5. DISOCCLUSION — reset confidence + drop to current on: off-screen reprojection;
       depth mismatch > AL_TAA_DEPTH_REJECT (5%) relative. There is no
       previous-depth buffer, so the CURRENT depth at the reprojected UV is used as
@@ -111,6 +116,53 @@ vec3 alYCoCgToRGB(vec3 y) {
 // Reinhard luma compression for HDR-aware temporal blending (see header §7).
 vec3 alReinhard(vec3 c)    { return c / (1.0 + alLuminance(c)); }
 vec3 alReinhardInv(vec3 c) { return c / max(1.0 - alLuminance(c), 1e-4); }
+
+/*
+ AABB *CLIPPING* (not clamping) of the history sample.
+ --------------------------------------------------------------------------
+ Per-channel clamp() is the cheap version and it is WRONG in a way you can
+ see: it projects the history point onto the box FACE-WISE, independently per
+ channel, so a history colour that is outside the box in two channels lands on
+ a corner that exists nowhere on the segment between the current sample and
+ the history. That invented colour is a hue shift — the classic TAA "ghost
+ rainbow" fringe on moving silhouettes.
+
+ The correct operation is a ray/AABB clip: the current sample is (by
+ construction) INSIDE the neighbourhood box, so we walk the segment
+ current -> history and stop at the box boundary. Solving per channel for the
+ parameter t at which the segment leaves the slab and taking the smallest one
+ gives the exit point; t >= 1 means the history was already inside and is kept
+ untouched.
+
+ All of this is done in YCoCg, so the clip happens along a luma/chroma axis
+ pair where the box is a far tighter fit around the real neighbourhood than an
+ RGB box would be.
+*/
+vec3 alClipToAABB(vec3 curY, vec3 histY, vec3 boxMin, vec3 boxMax) {
+    // The ray ORIGIN must be inside the box for the exit-parameter solve to be
+    // meaningful. curY is one of the nine neighbourhood samples so it always
+    // lies inside the raw min/max hull, but the variance box (mean +/- gamma*
+    // sigma) intersected with that hull can be tighter than curY on a channel
+    // when the neighbourhood is strongly skewed. Clamping the anchor is a no-op
+    // in the normal case and keeps the solve well-posed in the skewed one.
+    vec3 anchor = clamp(curY, boxMin, boxMax);
+    vec3 dir    = histY - anchor;
+
+    // Per-channel exit parameter. A zero component never leaves its slab, so it
+    // must not constrain t — guard the division instead of clamping the result.
+    vec3 t = vec3(1.0);
+    for (int i = 0; i < 3; i++) {
+        float d = dir[i];
+        if (abs(d) > 1.0e-6) {
+            float tMin = (boxMin[i] - anchor[i]) / d;
+            float tMax = (boxMax[i] - anchor[i]) / d;
+            t[i] = max(tMin, tMax);   // the POSITIVE root: exit, not entry
+        }
+    }
+
+    float tExit = clamp(min(min(t.x, t.y), t.z), 0.0, 1.0);
+    return anchor + dir * tExit;
+}
 
 void main() {
     vec3 current = alSanitizeRGB(texture(colortex0, texcoord).rgb);
@@ -254,8 +306,11 @@ void main() {
         }
 
         if (histValid && depthOK) {
-            // Clip history into the current neighbourhood box (YCoCg -> RGB).
-            vec3 histY   = clamp(alRGBToYCoCg(hist.rgb), boxMin, boxMax);
+            // Clip history along the segment toward the current sample until it
+            // lands on the current neighbourhood box (YCoCg -> RGB). See
+            // alClipToAABB: a per-channel clamp would fabricate an off-segment
+            // corner colour and fringe moving silhouettes.
+            vec3 histY   = alClipToAABB(curY, alRGBToYCoCg(hist.rgb), boxMin, boxMax);
             vec3 histRGB = alSanitizeRGB(alYCoCgToRGB(histY));
 
             float prevConf = clamp(hist.a, 0.0, AL_TAA_CONF_MAX);

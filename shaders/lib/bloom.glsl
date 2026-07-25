@@ -4,12 +4,17 @@
 /*
  lib/bloom.glsl — bloom mip-chain tile atlas layout + dual-filter kernels.
 
- Threshold-free, energy-conserving mip bloom (brief §6). The bloom pyramid is
- packed into ONE buffer (colortex9, RGBA16F, cleared each frame) as a horizontal
- "mip strip" of 6 tiles, so a single composite4 pass can write the whole chain
- and a single composite5 pass can read it back. This mirrors the sky-view-LUT
- tile idiom (lib/atmosphere*.glsl): a documented sub-rectangle, sampled with a
- clamped inset so no bilinear tap ever bleeds across a tile edge.
+ Threshold-free, energy-conserving mip bloom (brief §6), implemented as a REAL
+ dual-filter pyramid (Jimenez 2014 "Next Generation Post Processing in Call of
+ Duty: Advanced Warfare" / Kawase-style dual filtering): a progressive DOWNSAMPLE
+ (each level built from the PREVIOUS, coarser-by-one level — never from colortex0
+ or hardware mips) followed by a tent-filter cascade UPSAMPLE (each coarse level
+ 3x3-tent-upsampled and added back onto the next finer level, walking up).
+
+ The pyramid is packed into ONE buffer (colortex9, RGBA16F) as a horizontal "mip
+ strip" of 6 tiles. This mirrors the sky-view-LUT tile idiom
+ (lib/atmosphere*.glsl): a documented sub-rectangle, sampled with a clamped inset
+ so no bilinear tap ever bleeds across a tile edge.
 
  --------------------------------------------------------------------------
  ATLAS LAYOUT (colortex9, coordinates in [0,1] UV over the full buffer)
@@ -29,19 +34,36 @@
    └───────────────┘                   L6 : x[31/32,63/64],y[0,1/64]
 
  Total width used = 63/64 < 1, height <= 1/2 — the tiles never overlap (their
- x-columns are disjoint), and the buffer is cleared each frame so unused texels
- stay 0 (they contribute nothing if ever sampled). All wider levels sit to the
- right of L1, so the whole chain reads in one pass with no dependency cycle.
+ x-columns are disjoint). Each level is a screen-aspect tile whose pixel
+ resolution is screen/2^L; tile L only ever samples tile L-1 (downsample) or tile
+ L+1 (upsample), always with the clamped inset so no tap crosses a tile edge.
 
- QUALITY/SIMPLICITY TRADE (documented per contract §5): composite4 does NOT do
- a strict progressive downsample (mip N from mip N-1); a single pass cannot read
- the target it writes. Instead every tile is built directly from colortex0 with
- hardware mipmaps supplying the pre-blur (textureLod at LOD ~ L) and a 13-tap
- dual-filter fan adding the wide, grain-free blur. composite5 then sums the
- tiles with per-level weights (a single-pass gather, not a strict tent-cascade
- upsample — the deviation is intentional and documented in composite5.fsh). For
- the pack's soft/dreamy identity this reads identically to a full dual-filter
- pyramid at a fraction of the passes.
+ REAL PYRAMID, EXPRESSED AS SEQUENTIAL Iris PASSES (contract §5). Iris cannot let
+ a program read the target it writes, and its double-buffer flip means any pass
+ that writes colortex9 must write EVERY texel of it (a texel it skips shows stale
+ 2-passes-ago content in the flipped buffer). So the pyramid is a chain of small
+ composite passes, each of which computes ONE tile and passes ALL other texels
+ through byte-exact (texelFetch copy), keeping the flip coherent:
+
+     composite4 : DOWNSAMPLE scene(colortex0) -> tile L1   (13-tap fan, LOD 0)
+     composite5 : DOWNSAMPLE tile L1 -> tile L2            (from the PREV level)
+     composite6 : DOWNSAMPLE tile L2 -> tile L3
+     composite7 : DOWNSAMPLE tile L3 -> tile L4
+     composite8 : DOWNSAMPLE tile L4 -> tile L5
+     composite9 : DOWNSAMPLE tile L5 -> tile L6            (widest, 1/64 res)
+     composite10: UPSAMPLE   U5 = L5 + tent(U6=L6)         (3x3 tent, in place)
+     composite11: UPSAMPLE   U4 = L4 + tent(U5)
+     composite12: UPSAMPLE   U3 = L3 + tent(U4)
+     composite13: UPSAMPLE   U2 = L2 + tent(U3)
+     composite14: COMBINE    U1 = L1 + tent(U2), add into scene (+ auto-exposure)
+
+ Each downsample reads only the previous level; each upsample overwrites its own
+ tile in place (reading its still-original L_k plus the already-upsampled coarser
+ U_{k+1}). U1 is never stored — the combine pass folds the final tent+add straight
+ into the scene. So U1 = L1 + tent(L2 + tent(L3 + ... )) is the full dual-filter
+ pyramid: each tent is energy-preserving, so U1's energy ~ sum of the level
+ energies (~AL_BLOOM_LEVELS x one level); the combine normalises by the level
+ count to keep the added bloom energy-bounded and NaN-guarded.
  --------------------------------------------------------------------------
 */
 
@@ -89,8 +111,9 @@ int alBloomFromAtlas(vec2 atlasUV, out vec2 localUV) {
  in Call of Duty: Advanced Warfare"). Samples a 4x4 neighbourhood as one centre
  2x2 box plus four overlapping corner boxes; the centre box carries half the
  weight, killing the "fireflies" a naive box filter leaves. `d` is the sample
- step (one destination-level texel, in source UV). `lod` picks the hardware mip
- that supplies the pre-blur for this level.
+ step (one SOURCE texel, in source UV). `lod` is 0 in the real pyramid (the
+ source is already the correct resolution — no hardware mips are used); the
+ parameter is kept so composite4 can fan the full-res scene into tile L1.
 */
 vec3 alBloomDownsample(sampler2D tex, vec2 uv, vec2 d, float lod) {
     vec3 a = textureLod(tex, uv + d * vec2(-2.0, -2.0), lod).rgb;
@@ -118,30 +141,68 @@ vec3 alBloomDownsample(sampler2D tex, vec2 uv, vec2 d, float lod) {
     return sum * 0.25;
 }
 
-// NOTE: composite5 combines the chain with a single BILINEAR gather per tile
-// (each tile is already dual-filter blurred by composite4, so a plain
-// alBloomToAtlas() sample reads smoothly — a per-tile 9-tap tent added no
-// visible smoothing for its cost). The tent-upsample helper that lived here was
-// dead code and has been removed; alBloomToAtlas() + alBloomLevelWeight() are
-// the whole read path. If a strict tent cascade is ever wanted, reintroduce it
-// as a documented multi-pass upsample, not a single-pass gather.
+/*
+ Progressive DOWNSAMPLE of a tile ALREADY in the atlas (the real pyramid step:
+ dest level = srcLevel + 1, built from srcLevel — never from colortex0/mips).
+ Same 13-tap Jimenez fan as above, but every tap is mapped into the source tile
+ with alBloomToAtlas() so the clamped inset stops any tap bleeding into a
+ neighbour tile. `localUV` is 0..1 over the screen for the destination texel;
+ `dLocal` is ONE source-tile texel expressed in source-tile-local UV.
+*/
+vec3 alBloomDownsampleTile(sampler2D atlas, int srcLevel, vec2 localUV,
+                           vec2 dLocal, vec2 atlasTexel) {
+    vec3 a = texture(atlas, alBloomToAtlas(srcLevel, localUV + dLocal*vec2(-2.0,-2.0), atlasTexel)).rgb;
+    vec3 b = texture(atlas, alBloomToAtlas(srcLevel, localUV + dLocal*vec2( 0.0,-2.0), atlasTexel)).rgb;
+    vec3 c = texture(atlas, alBloomToAtlas(srcLevel, localUV + dLocal*vec2( 2.0,-2.0), atlasTexel)).rgb;
+    vec3 e = texture(atlas, alBloomToAtlas(srcLevel, localUV + dLocal*vec2(-2.0, 0.0), atlasTexel)).rgb;
+    vec3 f = texture(atlas, alBloomToAtlas(srcLevel, localUV,                          atlasTexel)).rgb;
+    vec3 g = texture(atlas, alBloomToAtlas(srcLevel, localUV + dLocal*vec2( 2.0, 0.0), atlasTexel)).rgb;
+    vec3 h = texture(atlas, alBloomToAtlas(srcLevel, localUV + dLocal*vec2(-2.0, 2.0), atlasTexel)).rgb;
+    vec3 i = texture(atlas, alBloomToAtlas(srcLevel, localUV + dLocal*vec2( 0.0, 2.0), atlasTexel)).rgb;
+    vec3 j = texture(atlas, alBloomToAtlas(srcLevel, localUV + dLocal*vec2( 2.0, 2.0), atlasTexel)).rgb;
+    vec3 k = texture(atlas, alBloomToAtlas(srcLevel, localUV + dLocal*vec2(-1.0,-1.0), atlasTexel)).rgb;
+    vec3 l = texture(atlas, alBloomToAtlas(srcLevel, localUV + dLocal*vec2( 1.0,-1.0), atlasTexel)).rgb;
+    vec3 m = texture(atlas, alBloomToAtlas(srcLevel, localUV + dLocal*vec2(-1.0, 1.0), atlasTexel)).rgb;
+    vec3 n = texture(atlas, alBloomToAtlas(srcLevel, localUV + dLocal*vec2( 1.0, 1.0), atlasTexel)).rgb;
 
-// Per-level combine weights (dreamy/soft: slightly favour the WIDE levels so the
-// glow reads as a broad, painterly halo rather than a tight ring). Normalised to
-// sum 1.0 so the summed bloom is an energy-preserving weighted average of the
-// levels — no term can inject unbounded energy. Index by level 1..6.
-float alBloomLevelWeight(int L) {
-    // L1(tight) .. L6(widest). Monotone increasing toward wide.
-    // raw: 0.10 0.13 0.16 0.18 0.20 0.23  (sum = 1.00)
-    if (L <= 1) return 0.10;
-    if (L == 2) return 0.13;
-    if (L == 3) return 0.16;
-    if (L == 4) return 0.18;
-    if (L == 5) return 0.20;
-    return 0.23;
+    vec3 sum  = (k + l + m + n) * 0.5;
+    sum += (a + b + e + f) * 0.125;
+    sum += (b + c + f + g) * 0.125;
+    sum += (e + f + h + i) * 0.125;
+    sum += (f + g + i + j) * 0.125;
+    return sum * 0.25;
 }
 
-// Range-validate a bloom-atlas read (colortex9 is cleared, but be NaN-robust and
+/*
+ 3x3 tent UPSAMPLE of a coarser tile already in the atlas (Jimenez dual-filter
+ upsample, [1 2 1; 2 4 2; 1 2 1]/16). Reads the srcLevel tile (the coarser
+ U_{L+1}) around `localUV`, each tap clamped into that tile. `sLocal` is the tap
+ step in the source tile's local UV (one source texel * AL_BLOOM_TENT_RADIUS).
+ The result is the smooth, wide contribution that the caller adds onto the next
+ finer level to walk the pyramid back up.
+*/
+vec3 alBloomTentTile(sampler2D atlas, int srcLevel, vec2 localUV,
+                     vec2 sLocal, vec2 atlasTexel) {
+    vec3 sum = vec3(0.0);
+    sum += texture(atlas, alBloomToAtlas(srcLevel, localUV + sLocal*vec2(-1.0,-1.0), atlasTexel)).rgb * 1.0;
+    sum += texture(atlas, alBloomToAtlas(srcLevel, localUV + sLocal*vec2( 0.0,-1.0), atlasTexel)).rgb * 2.0;
+    sum += texture(atlas, alBloomToAtlas(srcLevel, localUV + sLocal*vec2( 1.0,-1.0), atlasTexel)).rgb * 1.0;
+    sum += texture(atlas, alBloomToAtlas(srcLevel, localUV + sLocal*vec2(-1.0, 0.0), atlasTexel)).rgb * 2.0;
+    sum += texture(atlas, alBloomToAtlas(srcLevel, localUV,                          atlasTexel)).rgb * 4.0;
+    sum += texture(atlas, alBloomToAtlas(srcLevel, localUV + sLocal*vec2( 1.0, 0.0), atlasTexel)).rgb * 2.0;
+    sum += texture(atlas, alBloomToAtlas(srcLevel, localUV + sLocal*vec2(-1.0, 1.0), atlasTexel)).rgb * 1.0;
+    sum += texture(atlas, alBloomToAtlas(srcLevel, localUV + sLocal*vec2( 0.0, 1.0), atlasTexel)).rgb * 2.0;
+    sum += texture(atlas, alBloomToAtlas(srcLevel, localUV + sLocal*vec2( 1.0, 1.0), atlasTexel)).rgb * 1.0;
+    return sum * (1.0 / 16.0);
+}
+
+// Guard a value about to be WRITTEN into the bloom atlas: reject NaN/negatives
+// (comparisons fail on NaN) and bound HDR so one hot texel can't poison the tile
+// the next pass samples. Used by every downsample/upsample pass.
+vec3 alBloomGuard(vec3 v) {
+    bool ok = (v.r >= 0.0) && (v.g >= 0.0) && (v.b >= 0.0);
+    return ok ? min(v, vec3(60000.0)) : vec3(0.0);
+}
 // bound HDR so a single hot texel can't blow the sum). Comparisons reject NaN.
 vec3 alBloomValidate(vec3 v) {
     bool ok = (v.r >= 0.0) && (v.g >= 0.0) && (v.b >= 0.0)

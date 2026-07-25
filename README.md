@@ -58,7 +58,7 @@ Water & post (Phase 4, shipped):
 - **Deterministic grain removal** — a depth+normal bilateral denoise on GTAO, a glossy
   pre-filter on SSR, and non-tiling (IGN) dithers, so reflections, AO and soft shadows are
   clean without the distance jitter that pure temporal accumulation introduces.
-- **Bloom** — threshold-free, energy-conserving mip-chain bloom driving emissive spill.
+- **Bloom** — threshold-free, energy-conserving dual-filter pyramid bloom (progressive downsample + tent-cascade upsample) driving emissive spill.
 - **AgX tonemap** with mip-average auto-exposure and temporal adaptation, plus
   biome-adaptive grading and **weather storytelling** (rain desaturates and cools, thunder
   darkens, post-rain wetness lifts freshness, lightning flashes brighten the frame).

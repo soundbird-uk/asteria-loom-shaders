@@ -32,6 +32,16 @@
 */
 
 #include "/lib/common.glsl"
+// TRACK 2 reflection reuses the pack's OWN analytic atmosphere (alSkyRadiance,
+// alDirectColor). That core — lib/atmosphere_common.glsl — is, like this file,
+// strictly SAMPLER-FREE and UNIFORM-FREE (its LUT-sampling sibling
+// lib/atmosphere.glsl is what adds colortex6, and we deliberately do NOT include
+// that here), and it is #ifndef-guarded, so pulling it in is safe in every
+// program that already includes water.glsl (vertex + fragment, all worlds,
+// composite) and never re-declares a uniform a consumer already owns. This lets
+// the water surface reflect the REAL time-of-day sky instead of a constant blue,
+// without inventing a second sky model.
+#include "/lib/atmosphere_common.glsl"
 
 // --- Private hashes / value noise (no uniforms) ----------------------------
 // Pure-math hash (no bit ops — GL 3.30/4.1 / Apple-path safe).
@@ -179,13 +189,16 @@ float alShoreWaveW(int i, float shoreFactor) {
 
 // World-space Gerstner displacement (x,z pinch toward crests, y height).
 // shoreFactor (0 shallow/calm .. 1 deep/rough) attenuates the big swells near land.
+// The phase `th` mixes WORLD position with TIME (frameTimeCounter), so it is kept
+// `highp` — on Apple-silicon GL4.1 a demoted 16-bit phase would band/stair the
+// waves badly once wp grows large. See alGerstnerSurface for the matching fold.
 vec3 alGerstnerDisplace(vec2 wp, float t, float shoreFactor) {
-    vec3 disp = vec3(0.0);
+    highp vec3 disp = vec3(0.0);
     for (int i = 0; i < AL_WATER_WAVE_N; i++) {
         vec2 dir; float ki, ai, wi, qi;
         alGerstnerParams(i, dir, ki, ai, wi, qi);
         ai *= alShoreWaveW(i, shoreFactor);
-        float th = dot(wp, dir) * ki + t * wi + float(i) * 1.3;
+        highp float th = dot(wp, dir) * ki + t * wi + float(i) * 1.3;
         float s = sin(th), c = cos(th);
         disp.x += qi * ai * dir.x * c;
         disp.z += qi * ai * dir.y * c;
@@ -194,30 +207,81 @@ vec3 alGerstnerDisplace(vec2 wp, float t, float shoreFactor) {
     return disp;
 }
 
-// Analytic surface normal (world Y-up) + Jacobian determinant of the horizontal
-// displacement. `strength` scales the horizontal slope of the normal; shoreFactor
-// attenuates the big-swell contribution near land (fine ripples preserved).
+/*
+============================================================================
+ TRACK 3 — JACOBIAN-DETERMINANT WHITECAP FOAM (open-water compression foam)
+----------------------------------------------------------------------------
+ alGerstnerSurface returns the analytic world Y-up normal AND a NORMALIZED
+ WAVE-FOLD measure derived from the Jacobian of the horizontal Gerstner map,
+ both accumulated INSIDE the single existing wave loop (two extra adds, no extra
+ trig) so the instruction budget is unchanged.
+
+ The horizontal displacement map is
+   P.xz(x) = x + SUM_i Q_i A_i D_i cos(theta_i),   theta_i = k_i (D_i . x) + w_i t
+ (exactly the alGerstnerDisplace above). Its Jacobian determinant's first-order
+ area term is the divergence
+   div P.xz - 2 = SUM_i Q_i A_i k_i (D_i . D_i) (-sin theta_i)
+              = -SUM_i Q_i A_i k_i sin(theta_i)        (D_i is a unit vector)
+ giving the textbook fold determinant
+   J_raw = 1 - SUM_i Q_i A_i k_i sin(theta_i).
+ This is the brief's `J = 1 - sum_i Q_i A_i k_i cos(...)` with sin in place of
+ cos, purely because THIS pack drives the horizontal displacement with cos, so
+ its x-derivative is -sin — same Q_i (steepness), A_i (amplitude), k_i (wave
+ number) and w_i (angular frequency) the displacement itself uses, phase-locked
+ to the same frameTimeCounter term; NOT a parallel fake wave sum.
+
+ WHY IT IS NORMALIZED. The pack deliberately BOUNDS per-wave steepness with
+ q_i = STEEPNESS/(k_i N) so the summed surface never self-intersects on the block
+ grid. As a direct consequence the raw determinant only ever dips to ~0.69
+ (measured over the whole surface across time) and NEVER reaches the classic
+ J < 0 (or even J < 0.2) fully-folded crest — a literal `foldJ < 0.2` test on
+ J_raw would spawn ZERO foam. To make the fold an amplitude-independent measure
+ whose sub-0.2 tail is genuinely populated by the sharpest crests, the signed
+ compression C = SUM_i Q_i A_i k_i sin(theta_i) is divided by its own analytic
+ maximum Cmax = SUM_i Q_i A_i k_i (every wave crest-aligned, sin = 1):
+   foldJ = 1 - C / Cmax  in [0, 2]
+ which reads 0 at the TIGHTEST achievable crest, 1 at flat rest and 2 in the
+ deepest trough. foldJ is a strictly monotonic (hence C-infinity) rescale of the
+ real Jacobian compression, so the crest RANKING is identical to J_raw's — the
+ foam still marks precisely the most-compressed water, only on a scale where the
+ brief's < 0.2 threshold is meaningful. Cmax is guarded (>= 1e-4) so no divide by
+ zero. `highp` throughout: C and the phase mix world position with time.
+
+ The caller ramps foam with a smoothstep on foldJ (no branch, no pop) and full
+ whitecap at foldJ < AL_WATER_JFOAM_FULL (= 0.20, the brief's fold threshold).
+============================================================================
+*/
+// Foam ramp on the normalized fold (see above). Foam is FULL below FULL (the
+// brief's J < 0.2 fully-folded crest) and rises continuously up to ONSET, above
+// which open water carries no crest foam.
+#define AL_WATER_JFOAM_FULL   0.20   // foldJ below this = solid whitecap (brief J<0.2)
+#define AL_WATER_JFOAM_ONSET  0.62   // foldJ above this = no crest foam (soft C1 edge)
+
+// Analytic surface normal (world Y-up) + the normalized wave-fold `foldJ`.
+// `strength` scales the horizontal slope of the normal; shoreFactor attenuates
+// the big-swell contribution near land (fine ripples preserved).
 void alGerstnerSurface(vec2 wp, float t, float strength, float shoreFactor,
-                       out vec3 nrm, out float jac) {
-    float dhdx = 0.0, dhdz = 0.0, nySum = 0.0;
-    float jxx = 0.0, jzz = 0.0, jxz = 0.0;
+                       out vec3 nrm, out float foldJ) {
+    highp float dhdx = 0.0, dhdz = 0.0;
+    highp float cComp = 0.0;   // C    = SUM Q_i A_i k_i sin(theta_i)  (signed compression)
+    highp float cNorm = 0.0;   // Cmax = SUM Q_i A_i k_i               (crest-aligned bound)
     for (int i = 0; i < AL_WATER_WAVE_N; i++) {
         vec2 dir; float ki, ai, wi, qi;
         alGerstnerParams(i, dir, ki, ai, wi, qi);
         ai *= alShoreWaveW(i, shoreFactor);
-        float th = dot(wp, dir) * ki + t * wi + float(i) * 1.3;
+        highp float th = dot(wp, dir) * ki + t * wi + float(i) * 1.3;
         float s = sin(th), c = cos(th);
         float ka = ki * ai;
         dhdx  += dir.x * ka * c;
         dhdz  += dir.y * ka * c;
-        nySum += qi * ka * s;
-        float wa = qi * ka * s;                 // shared Jacobian term
-        jxx += dir.x * dir.x * wa;
-        jzz += dir.y * dir.y * wa;
-        jxz += dir.x * dir.y * wa;
+        float wa = qi * ka * s;                 // Q_i A_i k_i sin(theta_i)
+        cComp += wa;                            // signed horizontal compression C
+        cNorm += qi * ka;                       // its crest-aligned maximum Cmax
     }
-    nrm = normalize(vec3(-dhdx * strength, max(1.0 - nySum, 0.02), -dhdz * strength));
-    jac = (1.0 - jxx) * (1.0 - jzz) - jxz * jxz;   // < 0 where crests fold
+    // cComp doubles as the vertical foreshortening of the normal (SUM q_i k_i a_i
+    // sin), so the height field and the fold stay derived from one accumulation.
+    nrm = normalize(vec3(-dhdx * strength, max(1.0 - cComp, 0.02), -dhdz * strength));
+    foldJ = 1.0 - cComp / max(cNorm, 1e-4);     // 0 tight crest .. 1 rest .. 2 trough
 }
 
 // --- 3D simplex noise (Ashima/McEwan; GL3.30-safe, no bit ops) --------------
@@ -363,6 +427,88 @@ float alWaterFoamErode(float drive, float mask) {
     // NOTE: `drive` is NOT applied again here — it is already baked into `v`, so
     // re-multiplying would square it and leave the foam far too sparse to see.
     return alSaturate(eroded * fil);
+}
+
+/*
+============================================================================
+ TRACK 2 — DYNAMIC ENVIRONMENT REFLECTION (sun/moon-aware, day/night-blended)
+----------------------------------------------------------------------------
+ alWaterSkyReflection evaluates the radiance the water reflects along a WORLD-
+ space reflection vector. It exists to ERADICATE the flat hard-coded blue that
+ water reflections used to fall back to: the colour returned here tracks the real
+ time-of-day sky and both celestial bodies, continuously, with no `if (day)`
+ branch anywhere.
+
+ THREE additive parts, all from the pack's OWN atmosphere library (no second sky
+ model, no LUT sampler — this file stays sampler-free, so the closed-form march is
+ evaluated directly; consumers that DO own the sky-view LUT can still layer their
+ alSkySample result over this):
+
+   1. SKY DOME. alSkyRadiance(reflDir, sunDir) — the identical analytic single-
+      scatter model prepare.fsh bakes into colortex6 — sampled along the reflected
+      ray. This already contains the Rayleigh/Mie glow around BOTH the sun and the
+      (anti-solar) moon, scaled here by SKY_BRIGHTNESS to match the baked LUT.
+
+   2. SUN / MOON SPECULAR-ATMOSPHERIC RESPONSE, driven by the dot product of the
+      reflection vector with each body's world direction (the brief's requirement:
+      reflect . sunPosition and reflect . moonPosition). Each body gets TWO cosine
+      lobes: a BROAD halo (the near-disc atmospheric brightening) and a TIGHT
+      glint (the mirrored disc itself, which a screen-space trace can NEVER capture
+      because the sun/moon disc is not in the depth buffer). The sun lobes use the
+      pack's warm key colour alDirectColor(); the moon lobes use the cool AL_MOON_TINT.
+
+   3. CONTINUOUS DAY/NIGHT CROSSFADE. The sun and moon responses are mixed by a
+      day factor computed as alSmooth(smoothstep(-0.06, 0.16, sunDir.y)) — the
+      EXACT ramp lib/lighting.glsl::alDayFactor uses (re-derived inline here so
+      this file need not include the lighting lib, which would drag in colliding
+      uniforms). smoothstep is C1 and alSmooth (a Hermite) keeps it C1 at the
+      endpoints, so the sun glint hands over to the moon glint seamlessly through
+      dawn/dusk — no discontinuity, no step, mathematically continuous as required.
+
+ `highp` on the directions and the accumulator: these are world-space + celestial
+ intermediates whose small angular differences (the tight glint) must not be
+ crushed to 16 bits on Apple-silicon drivers.
+============================================================================
+*/
+#define AL_WATER_REFL_SKY_GAIN        1.00   // sky-dome reflectance (dielectric water)
+#define AL_WATER_REFL_SUN_BROAD_POW   14.0   // broad reflected-sun halo tightness
+#define AL_WATER_REFL_SUN_BROAD_GAIN  0.55
+#define AL_WATER_REFL_SUN_TIGHT_POW   320.0  // tight mirrored-sun-disc glint
+#define AL_WATER_REFL_SUN_TIGHT_GAIN  6.0
+#define AL_WATER_REFL_MOON_BROAD_POW  28.0   // broad reflected-moon halo
+#define AL_WATER_REFL_MOON_BROAD_GAIN 0.28
+#define AL_WATER_REFL_MOON_TIGHT_POW  440.0  // tight mirrored-moon-disc glint
+#define AL_WATER_REFL_MOON_TIGHT_GAIN 1.7
+
+vec3 alWaterSkyReflection(highp vec3 reflDir, highp vec3 sunDirWorld,
+                          highp vec3 moonDirWorld) {
+    reflDir      = normalize(reflDir);
+    sunDirWorld  = normalize(sunDirWorld);
+    moonDirWorld = normalize(moonDirWorld);
+
+    // (1) Physical sky dome along the reflected ray (pack's own atmosphere model).
+    highp vec3 sky = alSkyRadiance(reflDir, sunDirWorld) * SKY_BRIGHTNESS;
+
+    // (2) Per-body specular/atmospheric response from reflect . body.
+    highp float muSun  = max(dot(reflDir, sunDirWorld),  0.0);
+    highp float muMoon = max(dot(reflDir, moonDirWorld), 0.0);
+    vec3 sunCol  = alDirectColor(sunDirWorld);          // warm, atmosphere-tinted key
+    vec3 moonCol = AL_MOON_TINT * SUN_INTENSITY;        // cool night key
+    vec3 sunResp  = sunCol  * (AL_WATER_REFL_SUN_BROAD_GAIN  * pow(muSun,  AL_WATER_REFL_SUN_BROAD_POW)
+                             + AL_WATER_REFL_SUN_TIGHT_GAIN  * pow(muSun,  AL_WATER_REFL_SUN_TIGHT_POW));
+    vec3 moonResp = moonCol * (AL_WATER_REFL_MOON_BROAD_GAIN * pow(muMoon, AL_WATER_REFL_MOON_BROAD_POW)
+                             + AL_WATER_REFL_MOON_TIGHT_GAIN * pow(muMoon, AL_WATER_REFL_MOON_TIGHT_POW));
+
+    // (3) C1-continuous day/night crossfade (matches alDayFactor exactly).
+    float day = alSmooth(smoothstep(-0.06, 0.16, sunDirWorld.y));
+    vec3 bodies = mix(moonResp, sunResp, day);
+
+    vec3 refl = sky * AL_WATER_REFL_SKY_GAIN + bodies;
+    // NaN/Inf guard (comparisons, not isnan): never poison the blended surface.
+    if (!all(greaterThanEqual(refl, vec3(0.0))) || !all(lessThan(refl, vec3(1e4)))) {
+        refl = sky;
+    }
+    return max(refl, vec3(0.0));
 }
 
 #endif // AL_LIB_WATER
