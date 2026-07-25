@@ -28,10 +28,36 @@
    colour helpers (alAmbientColor / blocklight tint ramp) so particle tint stays
    consistent with the scene, but never calls the directional alLightPhase1.
 
- Sampler count: 1 (gtexture). No shadow samplers, no noisetex, no LUT.
+ DEPTH OCCLUSION (5.4 field bug: particles drawn THROUGH water and blocks):
+ `particles.ordering = after` moves this program into the post-deferred phase,
+ where Iris rebinds the framebuffer for the forward colortex0 write. Particles
+ that arrive there without a working depth test paint over geometry that is in
+ front of them — block-break crumbs seen through the block, potion swirls
+ floating on top of the water surface they are under.
+
+ So the pass no longer TRUSTS the fixed-function depth test: it re-runs it in the
+ fragment stage against the scene depth buffers and discards anything that lies
+ behind the geometry already on screen:
+   depthtex0 = ALL geometry, translucents included (this is what puts particles
+               BEHIND a water surface — water depth exists only here);
+   depthtex1 = OPAQUE-only geometry (this is what puts particles behind solid
+               blocks even in the frames/orderings where depthtex0 has not yet
+               received the translucent pass).
+ Both are read with texelFetch at the fragment's own integer pixel, so there is
+ no filtering, no half-texel offset and no viewWidth/viewHeight round-trip — the
+ comparison is EXACTLY the one the hardware depth test would make, in the same
+ non-linear [0,1] window-space Z, at highp. The test is `>` (strictly behind),
+ never `>=`, so a particle exactly coplanar with the geometry it sits on (a
+ crumb on a block face) still draws, and the redundant case (hardware test also
+ working) produces an identical image.
+
+ Sampler count: 3 (gtexture, depthtex0, depthtex1). No shadow samplers, no
+ noisetex, no LUT.
 */
 
 uniform sampler2D gtexture;
+uniform sampler2D depthtex0;   // ALL geometry (translucents included: water)
+uniform sampler2D depthtex1;   // opaque-only geometry
 uniform float alphaTestRef;
 uniform vec3 sunPosition;           // view space; only for atmosphere day-scale
 uniform mat4 gbufferModelViewInverse;
@@ -44,6 +70,16 @@ in vec4 glcolor;
 layout(location = 0) out vec4 outColor;
 
 void main() {
+    // --- Manual depth occlusion (see header) ------------------------------
+    // Window-space Z of this fragment vs the scene depth already on screen.
+    // highp: at far distances the non-linear depth values differ in the last
+    // few mantissa bits, and a mediump compare there would either leak
+    // particles through distant geometry or cull ones that are in front.
+    ivec2 px = ivec2(gl_FragCoord.xy);
+    highp float sceneDepth = min(texelFetch(depthtex0, px, 0).r,
+                                 texelFetch(depthtex1, px, 0).r);
+    if (gl_FragCoord.z > sceneDepth) discard;   // strictly behind -> occluded
+
     vec4 tex = texture(gtexture, texcoord) * glcolor;
     if (tex.a < alphaTestRef) discard;      // keep cutout discard
 

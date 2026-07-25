@@ -31,8 +31,11 @@ layout(location = 1) out vec4 outNormalLm;   // colortex2
 layout(location = 2) out vec4 outMaterial;   // colortex3
 
 void main() {
-    vec4 albedo = texture(gtexture, texcoord) * glcolor;
-    if (albedo.a < alphaTestRef) discard;
+    vec4 tex    = texture(gtexture, texcoord);
+    if (tex.a < alphaTestRef) discard;        // cutout mask: TEXTURE alpha only
+
+    vec4 albedo = tex * glcolor;
+    if (albedo.a <= 0.0) discard;             // no coverage at all
 
     outAlbedo   = vec4(albedo.rgb, 1.0);
     outNormalLm = vec4(alEncodeNormal(wnormal), lmcoord);
