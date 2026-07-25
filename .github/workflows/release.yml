@@ -1,0 +1,88 @@
+name: release
+
+# Publishes an installable pack zip to the repo's Releases page.
+#
+#   git tag v0.5.0 && git push origin v0.5.0
+#
+# ...builds AsteriaLoom-0.5.0.zip and attaches it to release "v0.5.0".
+# `workflow_dispatch` does the same for a manually supplied version, which is
+# useful for re-cutting a release whose upload failed.
+
+on:
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+"
+      - "v[0-9]+.[0-9]+.[0-9]+-*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to release, without the leading v (e.g. 0.5.0)"
+        required: true
+        type: string
+      prerelease:
+        description: "Mark the release as a pre-release"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Package and publish
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install glslang
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y glslang-tools
+
+      - name: Resolve version
+        id: version
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            version="${GITHUB_REF_NAME#v}"
+          else
+            version="${INPUT_VERSION#v}"
+          fi
+          if [ -z "${version}" ]; then
+            echo "::error::could not resolve a version to release"
+            exit 1
+          fi
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "tag=v${version}" >> "$GITHUB_OUTPUT"
+
+      - name: Validate shaders (all profiles x all programs, all targets)
+        run: python3 tools/validate.py --target all
+
+      - name: Package installable zip
+        run: python3 tools/package.py --version "${{ steps.version.outputs.version }}"
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+          VERSION: ${{ steps.version.outputs.version }}
+          PRERELEASE: ${{ inputs.prerelease }}
+        run: |
+          set -euo pipefail
+          asset="dist/AsteriaLoom-${VERSION}.zip"
+          test -f "${asset}"
+
+          args=(--title "Asteria Loom ${TAG}" --notes "Install: download \`AsteriaLoom-${VERSION}.zip\` and drop it into \`.minecraft/shaderpacks/\`. See [CHANGELOG.md](https://github.com/${GITHUB_REPOSITORY}/blob/${TAG}/CHANGELOG.md) for what changed.")
+          case "${TAG}" in
+            *-*) args+=(--prerelease) ;;
+            *) [ "${PRERELEASE:-false}" = "true" ] && args+=(--prerelease) || true ;;
+          esac
+
+          if gh release view "${TAG}" >/dev/null 2>&1; then
+            gh release upload "${TAG}" "${asset}" --clobber
+          else
+            gh release create "${TAG}" "${asset}" "${args[@]}"
+          fi

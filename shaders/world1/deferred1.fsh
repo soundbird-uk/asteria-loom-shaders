@@ -5,6 +5,12 @@
 #include "/lib/color.glsl"
 #include "/lib/encoding.glsl"
 #include "/lib/space.glsl"
+#ifdef AL_SHADOW_TEMPORAL
+// Tell lib/shadow.glsl that THIS pass accumulates its shadow result over time,
+// so the per-pixel Vogel disc rotation must advance every frame (a frozen
+// rotation would accumulate the same taps and converge to the same grainy edge).
+#define AL_SHADOW_ANIMATE
+#endif
 #include "/lib/shadow.glsl"
 #include "/lib/contact.glsl"
 #include "/lib/lighting.glsl"
@@ -48,6 +54,14 @@ uniform sampler2D colortex3;   // matID + flags
 uniform sampler2D colortex4;   // AO .r (1 = unoccluded), confidence .g
 #endif
 uniform sampler2D depthtex0;
+#ifdef AL_SHADOW_TEMPORAL
+// Shadow visibility history (clear=false, persists across frames):
+//   r = accumulated visibility, g = confidence, b = eye depth when written.
+// Iris flip rule: this composite-style pass reads the 'main' buffer and writes
+// the 'alt' one, so reading it here while also listing it in RENDERTARGETS is
+// legal and returns the previous frame's content (nothing else writes it).
+uniform sampler2D colortex11;
+#endif
 
 uniform vec3 sunPosition;          // view space
 uniform vec3 shadowLightPosition;  // view space, toward dominant light
@@ -110,11 +124,69 @@ float alDenoiseAO(vec2 uv, float centerDepth, vec3 centerN) {
 }
 #endif
 
-/* RENDERTARGETS: 0 */
+// The shadow history target is bound UNCONDITIONALLY (not behind
+// #ifdef AL_SHADOW_TEMPORAL): the RENDERTARGETS directive is a comment that the
+// pipeline parses before preprocessing, so the declared `out` set must not depend
+// on an option. With accumulation disabled the pass simply writes a neutral reset
+// value into colortex11 and nothing reads it.
+/* RENDERTARGETS: 0,11 */
 layout(location = 0) out vec4 outColor;
+layout(location = 1) out vec4 outShadowHist;   // -> colortex11 (r=vis, g=conf, b=eyeZ)
+
+#ifdef AL_SHADOW_TEMPORAL
+/*
+ SHADOW TEMPORAL ACCUMULATION (colortex11).
+
+ PCSS/PCF estimates the penumbra from a handful of randomly rotated Vogel taps,
+ so one frame of it is a NOISY estimate of the true visibility — that grain is
+ the fuzzy speckle along every soft shadow edge. lib/shadow.glsl now advances the
+ rotation every frame (AL_SHADOW_ANIMATE above), so each frame is an INDEPENDENT
+ estimate; averaging those estimates over time converges to the true penumbra at
+ no extra per-frame tap cost.
+
+ History is reprojected through the shared motion vector (lib/space.glsl) and
+ accepted only when the reprojected pixel is on-screen and its recorded eye depth
+ still matches — a disocclusion resets rather than smears. It is additionally
+ CLAMPED to the current estimate +/- AL_SHADOW_T_CLAMP: wide enough that the tap
+ noise still averages out, tight enough that a moving occluder cannot drag a
+ stale shadow behind it.
+
+ NaN law: colortex11 has clear=false so its first-frame contents are undefined;
+ every acceptance test is a comparison, which NaN fails, so garbage falls through
+ to "use the current frame" and can never poison the image.
+*/
+float alAccumulateShadow(float current, vec3 viewPos, out vec4 histOut) {
+    float eyeZ   = alLinearEyeDepth(viewPos);
+    float result = alSaturate(current);
+    float conf   = AL_SHADOW_T_CONF_STEP;
+
+    vec2 prevUV; float prevEyeZ;
+    if (alMotionVector(viewPos, texcoord, prevUV, prevEyeZ)) {
+        vec4 hist = texture(colortex11, prevUV);
+        if (hist.r >= 0.0 && hist.r <= 1.0 &&
+            hist.g >= 0.0 && hist.g <= 1.0 &&
+            alHistoryDepthOK(hist.b, prevEyeZ, AL_SHADOW_T_DEPTH_REJECT)) {
+            float clamped = clamp(hist.r,
+                                  result - AL_SHADOW_T_CLAMP,
+                                  result + AL_SHADOW_T_CLAMP);
+            float blend = min(AL_SHADOW_T_MAX_BLEND, hist.g);
+            result = mix(result, clamped, blend);
+            conf   = min(hist.g + AL_SHADOW_T_CONF_STEP, AL_SHADOW_T_MAX_BLEND);
+        }
+    }
+
+    result = (result >= 0.0 && result <= 1.0) ? result : alSaturate(current);
+    histOut = vec4(result, conf, (eyeZ > 0.0 && eyeZ < 65000.0) ? eyeZ : 0.0, 1.0);
+    return result;
+}
+#endif
 
 void main() {
     float depth = texture(depthtex0, texcoord).r;
+    // Iris writes GARBAGE into any target listed in RENDERTARGETS that an
+    // invocation does not write, so every early-out below sets a valid history
+    // value. Depth 0 makes the next frame's depth test reject it (a clean reset).
+    outShadowHist = vec4(1.0, 0.0, 0.0, 1.0);
 
 #if DEBUG_VIEW == 7
     // Pipeline probe A (bypasses ALL lighting): raw fullscreen interpolants +
@@ -186,10 +258,31 @@ void main() {
         float csFade = alSaturate(1.0 - length(viewPos) / AL_CONTACT_MAX_DIST);
         if (csFade > 0.0) {
             vec3  viewLightDir = normalize(shadowLightPosition);
-            float dither = texture(noisetex, gl_FragCoord.xy / 256.0).x;
+            // Interleaved Gradient Noise instead of the 256px-TILING noisetex
+            // lookup: the tiling lookup printed a repeating grid into the contact
+            // shadows (part of the "fuzzy grain everywhere"). IGN does not tile and
+            // is spatially coherent, so neighbouring rays march together. It is
+            // advanced per frame whenever something resolves it (TAA, or this
+            // pass's own shadow accumulation) and frozen otherwise.
+            float dither = fract(52.9829189 * fract(dot(gl_FragCoord.xy,
+                                                        vec2(0.06711056, 0.00583715))));
+#if defined(AL_TAA) || defined(AL_SHADOW_TEMPORAL)
+            dither = fract(dither + float(frameCounter) * 0.61803398875);
+#endif
             float cs = alContactShadow(depthtex0, viewPos, viewLightDir, dither);
             shadowVis *= mix(1.0, cs, csFade);
         }
+    }
+#endif
+
+#ifdef AL_SHADOW_TEMPORAL
+    // Accumulate the (PCSS + contact) visibility over time — see the header note.
+    // The hand keeps its unshadowed 1.0 and is excluded: it is drawn with a near
+    // projection, so `viewPos` (and therefore the motion vector) is invalid there.
+    if (matID != AL_MATID_HAND) {
+        vec4 shadowHist;
+        shadowVis = alAccumulateShadow(shadowVis, viewPos, shadowHist);
+        outShadowHist = shadowHist;
     }
 #endif
 

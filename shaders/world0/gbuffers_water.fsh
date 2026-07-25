@@ -191,9 +191,12 @@ void main() {
             // negative where crests pinch/overhang -> whitecap foam there.
             crestFoam = 1.0 - smoothstep(AL_WATER_FOAM_JAC_LO, AL_WATER_FOAM_JAC_HI, jac);
             crestFoam *= microAmt;                     // fade the fine foam with range
-            // WHISPY FRACTAL breakup: modulate by a domain-warped noise so crest foam
-            // reads as chaotic whiskers, not a smooth uniform cap.
-            crestFoam *= 0.15 + 0.85 * alWaterFoamNoise(waterRefXZ, frameTimeCounter);
+            // WHISPY FRACTAL breakup: the Jacobian drive is ERODED through the
+            // domain-warped ridged noise field (lib/water.glsl), not merely
+            // multiplied by it, so the whitecap tears into broken filaments with
+            // holes and ragged edges instead of reading as a smooth painted cap.
+            crestFoam = alWaterFoamErode(crestFoam,
+                                         alWaterFoamNoise(waterRefXZ, frameTimeCounter));
 #endif
         }
 #endif

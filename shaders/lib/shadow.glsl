@@ -81,6 +81,11 @@ float alShadowDistortDerivScale(vec2 pxy) {
 // (which only needs the warp, and must not declare shadow samplers).
 #if (defined SHADOWS || defined CONTACT_SHADOWS) && !defined AL_SHADOW_VSH
 uniform sampler2D noisetex;        // 256x256 blue-ish noise, for per-pixel rotation / dither
+// frameCounter is declared HERE (not in the SHADOWS-only block below) because the
+// CONTACT_SHADOWS path in deferred1 also advances its dither per frame, and that
+// path compiles with SHADOWS off. One declaration, guarded by this file's include
+// guard, so it can never collide with a caller's own.
+uniform int frameCounter;
 #endif
 
 #if defined SHADOWS && !defined AL_SHADOW_VSH
@@ -113,7 +118,6 @@ uniform sampler2D noisetex;        // 256x256 blue-ish noise, for per-pixel rota
 
 uniform mat4 shadowModelView;
 uniform mat4 shadowProjection;
-uniform int  frameCounter;
 
 // PCSS needs a raw depth read for the blocker search.
 //  * software path (default): shadowtex1 is raw -> always available.
@@ -144,7 +148,12 @@ float alShadowRotation() {
     // Under TAA the rotation is additionally advanced per frame (jitter + the
     // composite3 resolve then average it to a sharper edge). Under FXAA/Off it is
     // frozen so it can't crawl; IGN alone already keeps the frozen edge smooth.
-#ifdef AL_TAA
+    // AL_SHADOW_ANIMATE is defined by a pass that TEMPORALLY ACCUMULATES the
+    // result itself (deferred1, colortex11): there the rotation MUST advance in
+    // every AA mode, because a frozen pattern accumulates to itself and would
+    // converge to the same grainy edge it started with. Passes without their own
+    // history (forward translucents) leave it undefined and keep the old rule.
+#if defined(AL_TAA) || defined(AL_SHADOW_ANIMATE)
     float r2 = fract(float(frameCounter) * 0.75487766624669276);
 #else
     float r2 = 0.0;

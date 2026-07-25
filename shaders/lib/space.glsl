@@ -74,4 +74,59 @@ float alLinearEyeDepth(vec3 viewPos) {
     return -viewPos.z;
 }
 
+/*
+ MOTION VECTOR + history lookup, shared by every temporal accumulation pass
+ (GTAO history in deferred, shadow history in deferred1, SSR history in
+ composite). Iris exposes no motion-vector buffer and no built-in TAA jitter
+ uniform, so the vector is DERIVED here from the previous-frame matrices exactly
+ as the Iris uniform docs describe: re-express the point in the previous frame's
+ player space (camera-delta), apply gbufferPreviousModelView /
+ gbufferPreviousProjection, divide, and take the screen-space difference.
+
+   viewPos   — this frame's VIEW-space position of the surface point.
+   curUV     — this frame's screen uv of that point (usually texcoord; pass the
+               UN-JITTERED uv if the caller jitters, so the vector is jitter-free).
+   prevUV    — out: previous-frame screen uv (only valid when the call returns true).
+               The screen-space motion vector, if a caller ever needs it, is
+               simply prevUV - curUV.
+   prevEyeZ  — out: the point's eye depth in the PREVIOUS frame, for the
+               depth-consistency test against the stored history depth.
+
+ Returns false — and leaves the outputs at safe defaults — when the point was
+ behind the previous camera, lands off-screen, or produces a non-finite result.
+ Every test is a comparison, so NaN fails it and falls through to `false`
+ (the pack's NaN law: a poisoned history can never be accepted).
+*/
+bool alMotionVector(vec3 viewPos, vec2 curUV,
+                    out vec2 prevUV, out float prevEyeZ) {
+    prevUV   = curUV;
+    prevEyeZ = -1.0;
+
+    vec3 prevView = alPlayerToPrevView(alViewToPlayer(viewPos));
+    vec4 clip     = gbufferPreviousProjection * vec4(prevView, 1.0);
+    if (!(clip.w > 0.0)) return false;                 // behind the previous camera
+
+    vec2 uv = (clip.xy / clip.w) * 0.5 + 0.5;
+    if (!(uv.x > 0.0 && uv.x < 1.0 && uv.y > 0.0 && uv.y < 1.0)) return false;
+
+    float z = alLinearEyeDepth(prevView);
+    if (!(z > 0.0 && z < 65000.0)) return false;
+
+    prevUV   = uv;
+    prevEyeZ = z;
+    return true;
+}
+
+/*
+ Depth-consistency test for a reprojected history sample. `storedZ` is the eye
+ depth the history buffer recorded for that texel, `expectZ` the depth we now
+ predict for the same surface. Relative (not absolute) so the tolerance scales
+ with distance. NaN fails both comparisons -> rejected.
+*/
+bool alHistoryDepthOK(float storedZ, float expectZ, float tolerance) {
+    if (!(storedZ > 0.0 && storedZ < 65000.0)) return false;
+    if (!(expectZ > 0.0 && expectZ < 65000.0)) return false;
+    return (abs(expectZ - storedZ) / max(storedZ, 0.001)) < tolerance;
+}
+
 #endif // AL_LIB_SPACE

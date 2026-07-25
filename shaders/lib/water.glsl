@@ -294,23 +294,75 @@ vec3 alBlendNormals(vec3 base, vec3 detail) {
     return normalize(vec3(base.xz + detail.xz, base.y * detail.y));
 }
 
-// WHISPY FRACTAL FOAM mask in [0,1]: a domain-warped multi-octave 3D simplex field
-// (z = time) that breaks foam into chaotic, filamentary whiskers instead of a
-// uniform band. High-contrast so it reads as broken foam, not haze.
+/*
+ WHISPY FRACTAL FOAM mask in [0,1] — lib/water.glsl's foam noise field.
+
+ Structure (5.3.0 rewrite):
+   1. TWO-STAGE DOMAIN WARP. The sample point is displaced by a low-frequency
+      3D-simplex vector (stage 1, coarse: bends the whole foam sheet into
+      organic tongues) and then again by a higher-frequency, counter-offset
+      vector (stage 2, fine: shears those tongues into whiskers). A single warp
+      stage produces rounded blobs; the second stage is what makes the field
+      filamentary.
+   2. RIDGED OCTAVES. Each octave is 1 - |simplex| rather than plain simplex.
+      Plain fBm is smooth and gaussian-ish, which reads as a soft gradient —
+      exactly the "uniform painted band" complaint. Ridged noise concentrates
+      its energy into thin crests, so the fractal sum is a web of filaments.
+   3. z = time, so the whole field evolves and drifts instead of being a static
+      texture painted onto the water.
+
+ Returned unclamped in [0,1] and deliberately NOT thresholded here: the callers
+ combine it with their own drive term (Jacobian for crest foam, depth mask for
+ shoreline foam) and then erode with alWaterFoamErode, so the threshold acts on
+ the PRODUCT and chews the band's edge into whiskers rather than fading it.
+*/
 float alWaterFoamNoise(vec2 wp, float t) {
     vec3 q = vec3(wp * AL_WATER_FOAM_SCALE, t * 0.28);
-    // two domain-warp passes for organic, non-grid whiskers
+    // Stage 1 — coarse domain warp (organic tongues).
     vec3 w1 = vec3(alSimplex3(q), alSimplex3(q + 19.3), alSimplex3(q + 7.1));
     q += w1 * AL_WATER_FOAM_WARP;
+    // Stage 2 — fine, counter-offset warp (shears the tongues into whiskers).
+    vec3 q2 = q * 2.17 + 4.7;
+    vec3 w2 = vec3(alSimplex3(q2 + 3.1), alSimplex3(q2 - 8.9), alSimplex3(q2 + 12.7));
+    q += w2 * AL_WATER_FOAM_WARP2;
+
     float f = 0.0, amp = 0.6, freq = 1.0, norm = 0.0;
-    for (int i = 0; i < 3; i++) {
-        f    += amp * alSimplex3(q * freq);
+    for (int i = 0; i < AL_WATER_FOAM_OCTAVES; i++) {
+        // Ridged octave: 1 - |n| puts the maximum on the noise's zero crossings,
+        // which are thin curves -> filaments instead of blobs.
+        f    += amp * (1.0 - abs(alSimplex3(q * freq)));
         norm += amp;
         freq *= 2.1;
         amp  *= 0.5;
     }
-    float n = f / max(norm, 1e-4) * 0.5 + 0.5;          // -> [0,1]
-    return alSaturate(smoothstep(0.35, 0.75, n));        // high-contrast whiskers
+    return alSaturate(f / max(norm, 1e-4));
+}
+
+/*
+ FOAM EROSION. `drive` is the physical foam amount the caller computed (crest
+ Jacobian fold, or shoreline depth proximity), `mask` the fractal field above.
+
+ Instead of `foam = drive * mask` (which only DIMS a band that keeps its smooth
+ shape), the product is pushed through a smoothstep threshold: everywhere the
+ combined value fails to clear AL_WATER_FOAM_ERODE_LO the foam is removed
+ outright, so the band develops holes and ragged, broken edges. A high-frequency
+ filament term is then added back near the threshold, which is where real foam
+ tears into whiskers.
+
+ Returns 0 exactly where there is no foam, so callers can keep their cheap
+ `if (foam > 0.001)` guards.
+*/
+float alWaterFoamErode(float drive, float mask) {
+    if (drive <= 0.0) return 0.0;
+    float v = alSaturate(drive) * mask;
+    float eroded = smoothstep(AL_WATER_FOAM_ERODE_LO, AL_WATER_FOAM_ERODE_HI, v);
+    // Filament gain: strongest where the eroded edge is (0<e<1), so the whiskers
+    // appear along the torn boundary rather than in the solid interior.
+    float edge = eroded * (1.0 - eroded) * 4.0;
+    float fil  = 1.0 + AL_WATER_FOAM_FIL * edge * (mask * 2.0 - 1.0);
+    // NOTE: `drive` is NOT applied again here — it is already baked into `v`, so
+    // re-multiplying would square it and leave the foam far too sparse to see.
+    return alSaturate(eroded * fil);
 }
 
 #endif // AL_LIB_WATER

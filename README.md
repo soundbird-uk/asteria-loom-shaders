@@ -178,6 +178,17 @@ runs on every push.
 - **CI.** [`.github/workflows/validate.yml`](.github/workflows/validate.yml) runs the
   validator across all five profiles on every push and uploads the packaged zip as a build
   artifact.
+- **Releases.** [`.github/workflows/release.yml`](.github/workflows/release.yml) publishes
+  the pack to the
+  [Releases](https://github.com/soundbird-uk/asteria-loom-shaders/releases) page. Pushing a
+  `vX.Y.Z` tag validates the pack, builds `AsteriaLoom-X.Y.Z.zip`, and attaches it to a
+  release of that tag (tags with a `-suffix`, e.g. `v0.5.0-rc1`, are marked pre-release):
+  ```sh
+  git tag v0.5.0
+  git push origin v0.5.0
+  ```
+  The same workflow can be run manually from the Actions tab with an explicit version if a
+  release needs re-cutting.
 
 Contributors should start with [`docs/architecture.md`](docs/architecture.md) for the pass
 chain, buffer layout, and the macOS GL 4.1 constraints that shape the whole design.

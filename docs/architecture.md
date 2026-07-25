@@ -30,12 +30,16 @@ prepare → shadow → gbuffers(opaque) → deferred → deferred1 → gbuffers(
 - **deferred** — GTAO: horizon-based AO from depth + normal, temporally blended against the
   colortex5 history. Writes the current-frame AO to colortex4. Gated on `AO` (Potato/Low skip it).
 - **deferred1** — the main lighting pass: PCSS shadows + contact shadows + hemisphere ambient
-  + warm blocklight, consuming the G-buffer, shadow textures, sky LUT and AO. Writes colortex0.
+  + warm blocklight, consuming the G-buffer, shadow textures, sky LUT and AO. Writes colortex0
+  and the shadow-visibility history colortex11 (the PCSS taps are rotated per frame and
+  temporally accumulated, so soft shadow edges converge instead of speckling).
 - **gbuffers (translucent)** — water, hand_water, weather, translucent entities, forward-lit
   and blended onto colortex0. `gbuffers_water` **also** re-writes surface normal/lightmap
   (colortex2) and material ID (colortex3) so the water composite can find it.
-- **composite** — water effects: SSR on water/ice pixels + Beer-Lambert absorption tint of the
-  submerged scene + projected caustics.
+- **composite** — water effects: SSR on water/ice pixels (temporally accumulated through the
+  colortex10 history, with an analytic in-fill so a failed ray never resolves to black) +
+  Beer-Lambert absorption tint of the submerged scene + projected caustics + the GGX
+  micro-facet reflection for reflective/metal blocks (`lib/pbr.glsl`). Writes colortex0 and 10.
 - **composite1** — volumetric clouds raymarch + temporal blend; keeps the AO-history and
   cloud-history copies (writes colortex0, 5, 7).
 - **composite2** — aerial-perspective fog, plus the underwater-medium branch when the eye is
@@ -67,7 +71,7 @@ flowchart LR
 
 ## Buffer layout (current)
 
-colortex0–3 hold the scene colour and G-buffer; colortex4–9 hold effect state and temporal
+colortex0–3 hold the scene colour and G-buffer; colortex4–11 hold effect state and temporal
 histories. Formats come from the Phase 1–4 contracts.
 
 | Buffer | Format | Contents | Cleared |
@@ -82,9 +86,12 @@ histories. Formats come from the Phase 1–4 contracts.
 | colortex7 | RGBA16F | Cloud history: `rgb` = in-scattered radiance, `a` = transmittance | **no** |
 | colortex8 | RGBA16F | TAA history: `rgb` = resolved colour, `a` = blend confidence | **no** |
 | colortex9 | RGBA16F | Bloom mip atlas (6 levels packed as tiles; layout in `lib/bloom.glsl`) | yes |
+| colortex10 | RGBA16F | SSR history: `rgb` = accumulated reflection radiance, `a` = the reflective surface's eye depth | **no** |
+| colortex11 | RGBA16F | Shadow history: `r` = resolved visibility, `g` = confidence, `b` = eye depth | **no** |
+| colortex12 | R8 | SSR confidence: `r` = the history ceiling the pixel has earned (one `AL_SSR_T_CONF_STEP` per consecutively accepted frame) | **no** |
 
 Depth: depthtex0/1 as usual. Shadow: shadowtex0/1 (plain depth textures — the software
-compare path). The persistent (`clear=false`) buffers 5–8 rely on **NaN-proof
+compare path). The persistent (`clear=false`) buffers 5–8, 10 and 11 rely on **NaN-proof
 range-validated reads** so an undefined first frame self-heals; this is a standing law of the
 pack, not an optional nicety.
 
