@@ -249,7 +249,7 @@ const float shadowDistance = 128.0; // [64.0 96.0 128.0 192.0 256.0]
 // `if (blockers < 0.5) return 1.0` early-out turns any raw-read discrepancy into
 // fully-lit EVERYWHERE) and over-shadowing on macOS. It cannot be proven correct
 // in CI (no Mac GL driver), so it is quarantined here. Enabling it ALSO requires
-// setting `shadowHardwareFiltering = true` in shaders.properties.
+// setting the GLSL const `shadowHardwareFiltering = true` (final.fsh).
 //#define AL_SHADOW_HW
 
 // Distortion warp strength k in (0,1): factor = (1-k) + k*length(ndc.xy).

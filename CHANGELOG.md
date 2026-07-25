@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — every temporal buffer was being wiped each frame (silent pipeline break)
+
+- **`clear.colortexN = false` is not an Iris directive.** Buffer clearing is
+  controlled by the GLSL constant `const bool <bufferName>Clear = false;`, read
+  from shader source; there is no `clear.<buffer>` key in `shaders.properties`.
+  The seven declarations the pack kept there were parsed as unknown properties
+  and silently dropped, so `colortex5` (AO history **and** the persistent
+  auto-exposure slot), `colortex6` (sky LUT), `colortex7` (cloud history),
+  `colortex8` (TAA history), `colortex10`/`colortex12` (SSR history +
+  confidence) and `colortex11` (shadow-visibility history) were cleared to
+  `vec4(0)` after every single frame. Every multi-frame feature in the pack was
+  therefore inert — the histories' NaN/range guards saw the cleared zeros,
+  rejected them as invalid and fell back to "current frame only" *every* frame,
+  and the exposure integrator re-read `0` instead of the previous value. Nothing
+  errored, which is exactly why it went unnoticed. The declarations now live as
+  live GLSL in `world*/final.fsh` next to the buffer-format block, with the
+  per-buffer rationale; `shaders.properties` keeps a pointer note.
+- **`shadowHardwareFiltering = false` was dropped for the same reason** — it is
+  also a GLSL const directive, not a properties key. It is now declared
+  explicitly (`const bool shadowHardwareFiltering = false;`) so the pack's
+  software-compare shadow path is stated rather than inherited from the default.
+- Stale comments corrected: `composite2` (not `composite1`) is the aerial-fog
+  pass gated by `AERIAL_FOG`.
+
 ### Fixed — translucency & entity pipeline (particles, signboards, item frames)
 
 - **Particles no longer render through water and solid blocks.** With
