@@ -50,6 +50,7 @@
 
 uniform sampler2D gtexture;
 uniform vec3 sunPosition;          // view space
+uniform vec3 moonPosition;         // view space (Track 2: reflected-moon glint driver)
 uniform vec3 shadowLightPosition;  // view space, toward dominant light
 uniform mat4 gbufferModelViewInverse;
 uniform vec3 cameraPosition;       // world-space camera (waves + cloud shadow)
@@ -136,8 +137,9 @@ void main() {
     vec4 tex = texture(gtexture, texcoord) * glcolor;
 
     vec3  Ng = normalize(wnormal);
-    vec3  wLightDir = normalize(mat3(gbufferModelViewInverse) * shadowLightPosition);
-    vec3  wSunDir   = normalize(mat3(gbufferModelViewInverse) * sunPosition);
+    highp vec3 wLightDir = normalize(mat3(gbufferModelViewInverse) * shadowLightPosition);
+    highp vec3 wSunDir   = normalize(mat3(gbufferModelViewInverse) * sunPosition);
+    highp vec3 wMoonDir  = normalize(mat3(gbufferModelViewInverse) * moonPosition);
     float dayFactor = alDayFactor(wSunDir);
 
     if (isWater > 0.5) {
@@ -160,10 +162,13 @@ void main() {
         // world Y-up, flipped for undersides.
         if (abs(Ng.y) > 0.5) {
             float dist = length(playerPos);
-            // Analytic Gerstner normal + Jacobian at the UNDISPLACED rest position.
-            // shoreFactor attenuates big swells near land (fine ripples preserved).
-            vec3  gN; float jac;
-            alGerstnerSurface(waterRefXZ, frameTimeCounter, 1.0, waterShore, gN, jac);
+            // Analytic Gerstner normal + NORMALIZED WAVE-FOLD at the UNDISPLACED
+            // rest position. shoreFactor attenuates big swells near land (fine
+            // ripples preserved). foldJ (0 tightest crest .. 1 rest .. 2 trough)
+            // is the Jacobian compression of the SAME wave sum, phase-locked to
+            // the same frameTimeCounter term — see lib/water.glsl Track 3.
+            vec3  gN; float foldJ;
+            alGerstnerSurface(waterRefXZ, frameTimeCounter, 1.0, waterShore, gN, foldJ);
             // FOOTPRINT ANTI-ALIASING: world units of ripple coordinate that this
             // one pixel spans. When it approaches a ripple wavelength the ripples
             // are sub-pixel and alias into the dark grid grain on water-from-above;
@@ -187,9 +192,13 @@ void main() {
             if (Ng.y < 0.0) N.y = -N.y;                // undersides
             N = normalize(N);
 #ifdef WATER_FOAM
-            // JACOBIAN CREST FOAM: the horizontal-displacement Jacobian folds
-            // negative where crests pinch/overhang -> whitecap foam there.
-            crestFoam = 1.0 - smoothstep(AL_WATER_FOAM_JAC_LO, AL_WATER_FOAM_JAC_HI, jac);
+            // JACOBIAN CREST FOAM (Track 3): whitecaps ride the wave-fold measure
+            // foldJ from alGerstnerSurface — the normalized Jacobian compression of
+            // the actual Gerstner sum. Foam is FULL on the tightest crests
+            // (foldJ < AL_WATER_JFOAM_FULL = 0.20, the brief's J<0.2 fold) and
+            // ramps to zero by AL_WATER_JFOAM_ONSET, a C1 smoothstep so it never
+            // pops in/out.
+            crestFoam = 1.0 - smoothstep(AL_WATER_JFOAM_FULL, AL_WATER_JFOAM_ONSET, foldJ);
             crestFoam *= microAmt;                     // fade the fine foam with range
             // WHISPY FRACTAL breakup: the Jacobian drive is ERODED through the
             // domain-warped ridged noise field (lib/water.glsl), not merely
@@ -219,6 +228,21 @@ void main() {
         float shadowVis = alShadowVisibility(playerPos, N, NdotL);
         vec3 color = alLightPhase1(albedoLin, N, lmcoord, shadowVis, wLightDir,
                                    wSunDir, playerPos + cameraPosition, dayFactor);
+
+        // --- Track 2: DYNAMIC ENVIRONMENT REFLECTION -------------------------
+        // The rippled WORLD normal N steers the reflection vector; the reflected
+        // radiance (sky dome + sun/moon glint, day/night-continuous — see
+        // lib/water.glsl::alWaterSkyReflection) replaces the flat hard-coded blue
+        // the surface used to fall back to. It is weighted by the GEOMETRIC-plane
+        // Fresnel (cosV, not the rippled N, so looking straight down stays
+        // see-through and only grazing angles mirror) and gated by the sky
+        // lightmap so cave / covered water never reflects the open sky.
+        highp vec3 Iw = normalize(playerPos);            // camera -> surface (world)
+        highp vec3 Rw = reflect(Iw, N);                  // reflect about rippled normal
+        highp vec3 envRefl = alWaterSkyReflection(Rw, wSunDir, wMoonDir);
+        float reflFres = min(fres, AL_WATER_REFLECT_MAX);
+        float skyGate  = smoothstep(0.0, 0.35, lmcoord.y);
+        color = mix(color, envRefl, reflFres * skyGate);
 
         // Crest foam: lit with the SAME lighting model as the water (foam albedo),
         // so it darkens to moonlit grey at night instead of glowing white (field

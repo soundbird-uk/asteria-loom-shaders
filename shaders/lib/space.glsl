@@ -47,14 +47,64 @@ vec3 alViewDirToWorld(vec3 v) {
  fullscreen pass that reprojects gets them for free (declaring an unused uniform
  is harmless — Iris still supplies it, glslang ignores it).
 */
-uniform mat4 gbufferPreviousModelView;
-uniform mat4 gbufferPreviousProjection;
-uniform vec3 cameraPosition;
-uniform vec3 previousCameraPosition;
+/*
+ PRECISION LAW FOR THE REPROJECTION PATH (macOS / Apple Silicon)
+ -------------------------------------------------------------------------
+ Two independent precision hazards live on this exact code path, and both
+ show up as the SAME symptom: distant geometry jitters/crawls under TAA
+ while nearby geometry looks fine.
+
+ 1. STORAGE precision. Apple Silicon drivers aggressively demote GLSL that
+    is not explicitly qualified to 16-bit (`half`). A 16-bit float has a
+    10-bit mantissa: at a world coordinate of a few thousand blocks the
+    representable step is already larger than a pixel's worth of parallax,
+    so the reprojection lands on the wrong texel and the history swims.
+    Every matrix and every position on this path is therefore explicitly
+    `highp` (32-bit). In `#version 330 compatibility` the qualifier is
+    legal and inherited by the expressions built from these operands.
+
+ 2. CANCELLATION. `cameraPosition - previousCameraPosition` is a difference
+    of two LARGE, NEARLY EQUAL numbers (Iris wraps cameraPosition at ~30000
+    blocks, so the operands can reach 3e4 while their difference is a
+    fraction of a block). Even in 32-bit that subtraction discards most of
+    the delta's significant bits — catastrophic cancellation. Iris exposes
+    the split form for exactly this reason: `cameraPositionInt` (integer
+    block counts) and `cameraPositionFract` ([0,1) remainder), plus the
+    previous-frame twins. Subtracting the INTEGER parts as integers is
+    EXACT, and the fractional parts are both small, so their difference is
+    exact too. No large float difference is ever formed.
+
+ The split uniforms are Iris-exclusive, so they are guarded by IS_IRIS; the
+ fallback keeps the plain (still `highp`) subtraction so the pack continues
+ to compile and run on OptiFine.
+*/
+uniform highp mat4 gbufferPreviousModelView;
+uniform highp mat4 gbufferPreviousProjection;
+uniform highp vec3 cameraPosition;
+uniform highp vec3 previousCameraPosition;
+
+#ifdef IS_IRIS
+uniform ivec3 cameraPositionInt;          // Iris-exclusive: integer block part
+uniform ivec3 previousCameraPositionInt;
+uniform highp vec3 cameraPositionFract;   // Iris-exclusive: [0,1) remainder
+uniform highp vec3 previousCameraPositionFract;
+#endif
+
+// Frame-to-frame camera translation, computed without catastrophic
+// cancellation wherever Iris supplies the split camera position.
+highp vec3 alCameraDelta() {
+#ifdef IS_IRIS
+    highp vec3 iDelta = vec3(cameraPositionInt - previousCameraPositionInt);
+    highp vec3 fDelta = cameraPositionFract - previousCameraPositionFract;
+    return iDelta + fDelta;
+#else
+    return cameraPosition - previousCameraPosition;
+#endif
+}
 
 // Current-frame player-space position -> previous-frame VIEW space.
 vec3 alPlayerToPrevView(vec3 playerPos) {
-    vec3 prevPlayer = playerPos + (cameraPosition - previousCameraPosition);
+    highp vec3 prevPlayer = playerPos + alCameraDelta();
     return (gbufferPreviousModelView * vec4(prevPlayer, 1.0)).xyz;
 }
 
@@ -62,8 +112,8 @@ vec3 alPlayerToPrevView(vec3 playerPos) {
 // Returns vec3(uv.xy, ndcDepth), all in [0,1] when the point is on-screen and
 // in front of the previous camera (caller checks the range for validity).
 vec3 alPrevViewToScreen(vec3 prevView) {
-    vec4 clip = gbufferPreviousProjection * vec4(prevView, 1.0);
-    vec3 ndc  = clip.xyz / clip.w;
+    highp vec4 clip = gbufferPreviousProjection * vec4(prevView, 1.0);
+    highp vec3 ndc  = clip.xyz / clip.w;
     return ndc * 0.5 + 0.5;
 }
 
