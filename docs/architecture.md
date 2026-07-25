@@ -19,7 +19,7 @@ Iris runs a fixed sequence of passes each frame. The current chain:
 
 ```
 prepare → shadow → gbuffers(opaque) → deferred → deferred1 → gbuffers(translucent)
-  → composite → composite1 → composite2 → composite3 → composite4 → composite5 → final
+  → composite → composite1 → composite2 → composite3 → composite4 … composite14 → final
 ```
 
 - **prepare** — bakes the sky-view LUT tile (atmosphere) into colortex6, once per frame.
@@ -46,9 +46,19 @@ prepare → shadow → gbuffers(opaque) → deferred → deferred1 → gbuffers(
   submerged. Gated on `AERIAL_FOG`.
 - **composite3** — TAA resolve: reproject + neighbourhood clamp; writes colortex0 and the
   TAA history colortex8.
-- **composite4** — bloom downsample tile chain into the colortex9 atlas. Gated on `BLOOM`.
-- **composite5** — bloom upsample/combine into the scene, and writes the adapted-exposure
-  value back into colortex5's spare alpha at texel (0,0).
+- **composite4 … composite9** — bloom pyramid **downsample**: a real dual-filter
+  progressive downsample into the colortex9 tile atlas. composite4 fans the scene
+  into level 1; composite5…composite9 build levels 2…6, each from the **previous**
+  level (never from colortex0/hardware mips). Gated on `BLOOM`.
+- **composite10 … composite13** — bloom pyramid **tent-cascade upsample**: each
+  coarse level is 3×3-tent-upsampled and added onto the next finer level in place
+  (U5…U2), walking the pyramid back up. Gated on `BLOOM`.
+- **composite14** — bloom **combine** (final level U1 = L1 + tent(U2), added into
+  the scene) plus auto-exposure metering; writes the adapted-exposure value back
+  into colortex5's spare alpha at texel (0,0). Always runs (auto-exposure);
+  bloom-combine is `#ifdef BLOOM`. Each atlas pass writes every colortex9 texel
+  (pass-through copy) to stay coherent under Iris' double-buffer flip — see
+  `lib/bloom.glsl`.
 - **final** — mip-average auto-exposure → AgX tonemap → biome/weather grade → linear-to-sRGB
   → optional debug view. Holds the canonical buffer-format `const` block.
 
@@ -63,9 +73,10 @@ flowchart LR
   C0 --> C1[composite1<br/>clouds]
   C1 --> C2[composite2<br/>aerial fog + underwater]
   C2 --> C3[composite3<br/>TAA]
-  C3 --> C4[composite4<br/>bloom downsample]
-  C4 --> C5[composite5<br/>bloom combine + exposure]
-  C5 --> F[final<br/>AgX + grade + debug]
+  C3 --> C4[composite4..9<br/>bloom downsample pyramid]
+  C4 --> C5[composite10..13<br/>bloom tent upsample]
+  C5 --> C5b[composite14<br/>bloom combine + exposure]
+  C5b --> F[final<br/>AgX + grade + debug]
   SKY[sky programs] -->|colortex0| D1
 ```
 
@@ -85,7 +96,7 @@ histories. Formats come from the Phase 1–4 contracts.
 | colortex6 | RGBA16F | Sky-view LUT tile (top-left 256×128 = lat-long sky radiance; read via `alSkySample(dir)`) | **no** |
 | colortex7 | RGBA16F | Cloud history: `rgb` = in-scattered radiance, `a` = transmittance | **no** |
 | colortex8 | RGBA16F | TAA history: `rgb` = resolved colour, `a` = blend confidence | **no** |
-| colortex9 | RGBA16F | Bloom mip atlas (6 levels packed as tiles; layout in `lib/bloom.glsl`) | yes |
+| colortex9 | RGBA16F | Bloom pyramid tile atlas (6 levels packed as tiles; real dual-filter down/up pyramid, layout in `lib/bloom.glsl`) | yes |
 | colortex10 | RGBA16F | SSR history: `rgb` = accumulated reflection radiance, `a` = the reflective surface's eye depth | **no** |
 | colortex11 | RGBA16F | Shadow history: `r` = resolved visibility, `g` = confidence, `b` = eye depth | **no** |
 | colortex12 | R8 | SSR confidence: `r` = the history ceiling the pixel has earned (one `AL_SSR_T_CONF_STEP` per consecutively accepted frame) | **no** |
@@ -131,7 +142,7 @@ shaders/
 ├── deferred.vsh/.fsh       # GTAO
 ├── deferred1.vsh/.fsh      # lighting
 ├── composite.vsh/.fsh      # water FX
-├── composite1..5.vsh/.fsh  # clouds, fog, TAA, bloom down, bloom combine
+├── composite1..14.vsh/.fsh # clouds, fog, TAA, bloom pyramid (down/up/combine)
 └── final.vsh/.fsh          # AgX + grade + debug
 ```
 

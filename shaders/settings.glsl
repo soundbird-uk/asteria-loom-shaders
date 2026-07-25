@@ -1070,18 +1070,22 @@ const vec3 AL_UW_SNOW_TINT  = vec3(0.82, 0.86, 0.94);
 /* =========================================================================
    POST  (bloom + AgX tonemap + auto-exposure — Phase 4)
    -------------------------------------------------------------------------
-   Bloom is a threshold-free energy-conserving mip pyramid (composite4 builds a
-   6-level tile atlas in colortex9; composite5 sums + mixes it into the scene).
-   final then does auto-exposure (mip-average, metered in composite5 and read
+   Bloom is a threshold-free energy-conserving REAL dual-filter pyramid: a
+   progressive downsample (composite4..composite9 build the 6-level tile atlas in
+   colortex9, each level from the PREVIOUS level) then a tent-cascade upsample
+   (composite10..composite13) whose final level-1 tent+add is folded into the
+   scene by the combine pass composite14 (layout + kernels in lib/bloom.glsl).
+   final then does auto-exposure (mip-average, metered in composite14 and read
    from colortex5.a) -> AgX soft-filmic tonemap (lib/tonemap.glsl) -> biome +
    weather grade (lib/grade.glsl) -> sRGB. The AgX defaults are calibrated so
    the noon/night LEVELS carry over from the old placeholder within ~10%.
    ========================================================================= */
 
-// Master bloom toggle. Also gates the downsample pass itself via
-// `program.composite4.enabled = BLOOM` (POTATO off — real perf win). composite5
-// still runs for auto-exposure; its bloom-combine is `#ifdef BLOOM` so with
-// bloom off the scene passes through untouched.
+// Master bloom toggle. Also gates the downsample/upsample passes themselves via
+// `program.composite4..composite13.enabled = BLOOM` (POTATO off — real perf
+// win). The combine pass composite14 still runs for auto-exposure; its
+// bloom-combine is `#ifdef BLOOM` so with bloom off the scene passes through
+// untouched.
 #define BLOOM // [BLOOM]
 
 // Bloom strength. Scales the scene<->bloom mix weight (energy-conserving lerp).
@@ -1089,17 +1093,24 @@ const vec3 AL_UW_SNOW_TINT  = vec3(0.82, 0.86, 0.94);
 #define BLOOM_STRENGTH 1.0 // [0.5 0.75 1.0 1.25 1.5]
 
 // --- Bloom shaping (internal, not GUI) ------------------------------------
-// ADDITIVE bloom weight w in `scene + bloomSum * w`, before BLOOM_STRENGTH.
+// ADDITIVE bloom weight w in `scene + bloom * w`, before BLOOM_STRENGTH.
 // Additive (not a crossfade): bright emissives GAIN a soft halo and NOTHING is
-// dimmed (the brief's "generous bloom / emissive spill"). bloomSum is a
-// normalised weighted average of the 6 levels, so the added energy is bounded;
-// AgX's soft highlight rolloff in final absorbs it without clipping. Tuned
-// (numeric sim through the AgX path) so a night torch halo gains ~2.1x while a
-// noon midtone shifts <2%: scene L=0.18 + bloomSum~0.18 -> +1.7% display; a
-// torch-lit dark halo (scene~0.02 + bloomSum~1.0) -> ~2.1x brighter; the torch
-// CORE (already saturated) is unchanged. BLOOM_STRENGTH scales this (1.5 ->
-// halo ~2.5x, noon ~+2.5%).
+// dimmed (the brief's "generous bloom / emissive spill"). `bloom` is the full
+// dual-filter pyramid U1 = L1 + tent(U2), normalised by the level count so it is
+// an energy-preserving average magnitude of the 6 levels (each tent is
+// energy-preserving), so the added energy is bounded; AgX's soft highlight
+// rolloff in final absorbs it without clipping. Tuned (numeric sim through the
+// AgX path) so a night torch halo gains ~2.1x while a noon midtone shifts <2%:
+// scene L=0.18 + bloom~0.18 -> +1.7% display; a torch-lit dark halo (scene~0.02
+// + bloom~1.0) -> ~2.1x brighter; the torch CORE (already saturated) is
+// unchanged. BLOOM_STRENGTH scales this (1.5 -> halo ~2.5x, noon ~+2.5%).
 #define AL_BLOOM_ADD 0.04
+
+// Tent-upsample tap radius (in source-tile texels) for the pyramid's dual-filter
+// UPSAMPLE (lib/bloom.glsl alBloomTentTile). 1.0 is the standard COD/Jimenez
+// 3x3 tent; larger spreads each level's contribution wider (softer, dreamier,
+// but can over-smooth fine glow). Keep near 1.0.
+#define AL_BLOOM_TENT_RADIUS 1.0
 
 // Exposure user bias. Multiplies the auto-adapted exposure in final (auto
 // exposure now does the metering; this is the manual trim on top). 1.0 = no

@@ -29,9 +29,15 @@
  ZERO fog, preserving Phase 2's cave darkness; open valleys keep the full
  amount. Combined with the sea-level DENSITY FLOOR in lib/fog.glsl this fixes
  the reviewer's "bright haze fills caves / below-sea space" bug.
- CAVEAT: colortex2 is the OPAQUE G-buffer. Where depthtex0 is a translucent
- surface, the sky lightmap sampled belongs to the opaque geometry BEHIND it —
- an accepted approximation (the translucent layer is thin relative to the fog).
+ TRANSLUCENT SKY GATE (replaces the old opaque-G-buffer caveat): gbuffers_water
+ OVERWRITES colortex2 for water/glass with the translucent surface's OWN normal+
+ lightmap, so those pixels gate by their own sky access. OVERLAY translucents
+ (particles, weather, translucent entities/blocks, hand water — all
+ RENDERTARGETS: 0) write only colortex0, leaving colortex2 as the OPAQUE geometry
+ BEHIND them; for those the gate uses FULL sky access when open sky is behind
+ (depthtex1 == 1), else the opaque-behind lightmap as a proxy — never silently
+ mis-gating a translucent by unrelated geometry, while keeping caves dark. See
+ the gate code in main().
 
  --------------------------------------------------------------------------
  UNIFORM VERIFICATION (exact Iris names) — evidence:
@@ -51,9 +57,9 @@
    (lib/fog.glsl) so the pack degrades gracefully if they ever change.
  --------------------------------------------------------------------------
 
- Sampler count: 4 (colortex0, colortex2, depthtex0, + colortex6 via the
- atmosphere include). Budget ≤5. No loops; a couple of exp() only — trivially
- cheap, kept on in every profile.
+ Sampler count: 6 (colortex0, colortex2, colortex3, depthtex0, depthtex1, +
+ colortex6 via the atmosphere include). Budget ≤16. No loops; a couple of exp()
+ only — trivially cheap, kept on in every profile.
 */
 
 // colortex6 (sky-view LUT tile) is declared and OWNED by lib/atmosphere.glsl
@@ -322,16 +328,21 @@ void main() {
         return;
     }
 
+    // FRONT-SURFACE CLASSIFICATION (shared by the fog-through-glass depth reroute
+    // and the sky-exposure gate below). colortex3.r = matID of whatever is drawn
+    // here; depthtex1 = OPAQUE-only depth, so depth < dOpaque means a translucent
+    // surface sits in FRONT of the opaque geometry (or open sky) behind it.
+    int   frontMatID       = alDecodeMatID(texture(colortex3, texcoord).r);
+    float dOpaque          = texture(depthtex1, texcoord).r;
+    bool  frontTranslucent = depth < dOpaque - 1e-5;
+
     // FOG THROUGH GLASS: for a translucent surface (glass/ice/slime/portal), fog
     // by the OPAQUE geometry BEHIND it (depthtex1) so distant fog is visible
     // THROUGH the glass instead of the near glass-surface distance leaving it
     // unfogged. Water keeps its own surface depth (its depth-tint/absorption is
     // handled in composite). Glass against open sky keeps the glass depth.
     float fogDepth = depth;
-    if (alDecodeMatID(texture(colortex3, texcoord).r) == AL_MATID_TRANSLUCENT) {
-        float dOpaque = texture(depthtex1, texcoord).r;
-        if (dOpaque < 1.0) fogDepth = dOpaque;
-    }
+    if (frontMatID == AL_MATID_TRANSLUCENT && dOpaque < 1.0) fogDepth = dOpaque;
 
     // Reconstruct the world-relative view ray from depth.
     vec3  viewPos   = alScreenToView(texcoord, fogDepth);
@@ -349,9 +360,25 @@ void main() {
     }
     vec3  worldDir  = (dist > 1.0e-4) ? playerPos / dist : vec3(0.0, 1.0, 0.0);
 
-    // Sky-exposure gate input: raw sky lightmap (colortex2.a). Range-clamped so
-    // a stray value can't push the smoothstep out of [0,1].
-    float skyLm = alSaturate(texture(colortex2, texcoord).a);
+    // SKY-EXPOSURE GATE INPUT (colortex2.a = sky lightmap), range-clamped so a
+    // stray value can't push the smoothstep out of [0,1]. WHOSE lightmap sits in
+    // colortex2 depends on the front surface (see header TRANSLUCENT SKY GATE):
+    //  * Opaque front, OR a water/glass surface (matID WATER/TRANSLUCENT, which
+    //    gbuffers_water drew, OVERWRITING colortex2 with its OWN normal+lightmap):
+    //    colortex2.a is THIS surface's own sky access — gate by it directly.
+    //  * An OVERLAY translucent that wrote only colortex0 (particles, weather,
+    //    translucent entities/blocks, hand water): colortex2 still holds the OPAQUE
+    //    geometry behind it. If OPEN SKY is behind it (depthtex1 == 1) the overlay
+    //    is fully sky-exposed -> gate 1; otherwise use the opaque-behind lightmap
+    //    as a proxy (a thin overlay shares the sky exposure of what it covers),
+    //    which also KEEPS CAVES DARK (opaque cave behind -> lm ~0 -> zero fog).
+    float skyLm;
+    if (!frontTranslucent
+        || frontMatID == AL_MATID_WATER || frontMatID == AL_MATID_TRANSLUCENT) {
+        skyLm = alSaturate(texture(colortex2, texcoord).a);
+    } else {
+        skyLm = (dOpaque >= 1.0) ? 1.0 : alSaturate(texture(colortex2, texcoord).a);
+    }
 
     // World-space sun direction for the time-of-day scene tone / night factor.
     vec3 worldSunDir = normalize(alViewDirToWorld(sunPosition));

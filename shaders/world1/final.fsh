@@ -11,7 +11,7 @@
 
  Pipeline (Phase 4): colortex0 (HDR scene, post bloom-combine)
    -> auto-exposure multiply  (adapted value from colortex5.a texel (0,0),
-      metered+smoothed by composite5) x EXPOSURE user bias
+      metered+smoothed by composite14) x EXPOSURE user bias
    -> AgX tonemap             (lib/tonemap.glsl — soft-filmic, calibrated to
       carry the field-approved noon/night levels within ~10%; replaces the old
       placeholder ACES fit)
@@ -44,7 +44,7 @@
    colortex4    RG16F    GTAO: r = AO (1 = unoccluded), g = confidence. Cleared.
    colortex5    RGBA16F  AO history: r = AO, g = confidence, b = linear depth,
                          a = ADAPTED EXPOSURE (at texel (0,0) only — written by
-                         composite5, read here; elsewhere .a is AO-history spare
+                         composite14, read here; elsewhere .a is AO-history spare
                          and preserved byte-exact). `clear.colortex5 = false`
                          (persists across frames for temporal accumulation — set
                          in shaders.properties).
@@ -114,7 +114,7 @@ uniform sampler2D colortex1;
 uniform sampler2D colortex2;
 uniform sampler2D colortex3;
 uniform sampler2D colortex4;   // GTAO term (DEBUG_VIEW 6)
-uniform sampler2D colortex5;   // .a(0,0) = adapted exposure (from composite5)
+uniform sampler2D colortex5;   // .a(0,0) = adapted exposure (from composite14)
 uniform sampler2D depthtex0;
 
 uniform float near;

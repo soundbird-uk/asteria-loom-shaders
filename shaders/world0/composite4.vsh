@@ -2,7 +2,7 @@
 #include "/settings.glsl"
 
 /*
- composite4 (vertex) — fullscreen pass (bloom downsample tile chain).
+ composite4 (vertex) — fullscreen pass (bloom downsample L1).
  Trivial fullscreen setup; all bloom work is in the fragment shader.
 */
 

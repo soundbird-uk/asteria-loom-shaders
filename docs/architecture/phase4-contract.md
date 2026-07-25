@@ -32,8 +32,10 @@ current composite(clouds)→composite1, current composite1(fog)→composite2
 | composite1 | Volumetric clouds + AO/cloud histories (former composite; unchanged) | 0,5,7 |
 | composite2 | Aerial fog + UNDERWATER medium (former composite1 + §3 underwater) | 0 |
 | **composite3** (NEW) | TAA resolve | 0,8 |
-| **composite4** (NEW) | Bloom downsample tile chain | 9 |
-| **composite5** (NEW) | Bloom upsample/combine + apply to scene | 0 |
+| **composite4** (NEW) | Bloom pyramid downsample L1 (from scene) | 9 |
+| **composite5..9** (NEW) | Bloom pyramid downsample L2..L6 (each from the previous level) | 9 |
+| **composite10..13** (NEW) | Bloom pyramid tent-cascade upsample U5..U2 (in place) | 9 |
+| **composite14** (NEW) | Bloom combine (U1 = L1 + tent(U2)) into scene + auto-exposure | 0,5 |
 | final | Exposure (mip-average + temporal) → AgX → biome/weather grade → sRGB + debug views | — |
 
 ## 2. New buffers (ATMOSPHERE-agent-style: formats added to final.fsh comment block by the TAA agent)
@@ -114,16 +116,20 @@ final.fsh; writes must preserve the AO history rgb semantics exactly.)
 
 ## 5. Bloom (BLOOM/GRADE agent — MEDIUM effort)
 
-- Threshold-free energy-conserving mip bloom: composite4 builds a 6-level tile
-  atlas in colortex9 (tile layout + UV helpers in lib/bloom.glsl, sky-LUT-tile
-  pattern: each level samples the PREVIOUS pass's output — since a single pass
-  cannot read its own target, structure as: composite4 samples colortex0 (post-TAA)
-  and writes ALL tiles using progressively wider 13-tap-style downsample fans
-  computed FROM colortex0 mips: enable `const bool colortex0MipmapEnabled = true;`
-  for composite4 so hardware mips supply the pre-blur — document the
-  quality/simplicity trade); composite5 tent-upsamples the tile chain, sums with
-  per-level weights (soft, generous — dreamy identity), and mixes into colortex0:
-  `scene + bloom * BLOOM_STRENGTH * 0.0x` energy-conserving formulation.
+- Threshold-free energy-conserving REAL dual-filter bloom pyramid (Jimenez/COD):
+  a progressive DOWNSAMPLE followed by a tent-cascade UPSAMPLE, packed into the
+  colortex9 tile atlas (tile layout + UV helpers in lib/bloom.glsl, sky-LUT-tile
+  no-bleed pattern). Because a single Iris pass cannot read the target it writes,
+  and its double-buffer flip means any pass writing colortex9 must write EVERY
+  texel, the pyramid is a chain of small passes, each computing ONE tile and
+  passing all other texels through byte-exact: composite4 downsamples the
+  post-TAA scene (colortex0) into level 1; composite5..composite9 build levels
+  2..6 each from the PREVIOUS level (strict progressive downsample — NO hardware
+  mips / no bright-pass threshold); composite10..composite13 tent-upsample the
+  chain back up (U_L = L_L + tent(U_{L+1}), in place); composite14 folds the
+  final level U1 = L1 + tent(U2) into colortex0:
+  `scene + (U1 / levels) * BLOOM_STRENGTH * AL_BLOOM_ADD` (additive, energy-
+  bounded, NaN-guarded — the dreamy/generous identity).
 - Emissive spill: blocklight-bright pixels naturally exceed 1.0 and bloom; verify
   torch/campfire/glowstone bloom visibly at night (tie into the darker nights).
 - Options: `BLOOM` toggle (on, POTATO off), `BLOOM_STRENGTH` slider
@@ -138,8 +144,8 @@ final.fsh; writes must preserve the AO history rgb semantics exactly.)
   so noon/night match current field-approved levels within ~10%.
 - **Auto exposure (Mac path)**: `const bool colortex0MipmapEnabled = true;` on
   final; sample a deep mip (≈average scene luminance) → target EV; temporal
-  adaptation: read previous adapted value from colortex5.a texel (0,0) (composite5
-  writes it back alongside its colour output — composite5 gains RENDERTARGETS 0,5
+  adaptation: read previous adapted value from colortex5.a texel (0,0) (composite14
+  writes it back alongside its colour output — composite14 has RENDERTARGETS 0,5
   writing colortex5 with rgb passthrough of AO history and a=exposure ONLY at
   texel (0,0), preserving AO history semantics everywhere else — implement
   carefully and document; NaN-law with sane clamps [0.25, 4.0] EV range, smooth
@@ -162,7 +168,7 @@ final.fsh; writes must preserve the AO history rgb semantics exactly.)
 |---|---|
 | WATER | gbuffers_water.*, gbuffers_hand_water.*, lib/water.glsl (new), composite.* (new pass), the isEyeInWater branch of composite2.fsh, [WATER] options sections |
 | TAA | lib/jitter.glsl (new), composite3.* (new), one-line jitter include in every gbuffers vsh EXCEPT water/hand_water (WATER agent does those two), colortex8 + colortex9 format consts in final.fsh comment block, TAA option |
-| BLOOM/GRADE | composite4.*, composite5.*, lib/bloom.glsl, lib/tonemap.glsl, lib/grade.glsl, final.fsh body (tonemap/exposure/grade — coordinate: TAA agent only touches final.fsh's format comment block, one surgical edit each), BLOOM/EXPOSURE options, weather/biome grade |
+| BLOOM/GRADE | composite4..composite14.*, lib/bloom.glsl, lib/tonemap.glsl, lib/grade.glsl, final.fsh body (tonemap/exposure/grade — coordinate: TAA agent only touches final.fsh's format comment block, one surgical edit each), BLOOM/EXPOSURE options, weather/biome grade |
 
 Nobody touches: deferred.fsh, deferred1.fsh, composite1.* (clouds), composite2.*
 except WATER's isEyeInWater branch, lib/lighting.glsl, lib/fog.glsl, tools/, docs/.
