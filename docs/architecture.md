@@ -88,6 +88,7 @@ histories. Formats come from the Phase 1–4 contracts.
 | colortex9 | RGBA16F | Bloom mip atlas (6 levels packed as tiles; layout in `lib/bloom.glsl`) | yes |
 | colortex10 | RGBA16F | SSR history: `rgb` = accumulated reflection radiance, `a` = the reflective surface's eye depth | **no** |
 | colortex11 | RGBA16F | Shadow history: `r` = resolved visibility, `g` = confidence, `b` = eye depth | **no** |
+| colortex12 | R8 | SSR confidence: `r` = the history ceiling the pixel has earned (one `AL_SSR_T_CONF_STEP` per consecutively accepted frame) | **no** |
 
 Depth: depthtex0/1 as usual. Shadow: shadowtex0/1 (plain depth textures — the software
 compare path). The persistent (`clear=false`) buffers 5–8, 10 and 11 rely on **NaN-proof

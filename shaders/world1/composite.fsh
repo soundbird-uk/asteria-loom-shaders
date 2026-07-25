@@ -35,7 +35,9 @@
       composite program reads the 'main' buffer and writes the 'alt' buffer, so
       reading colortex10 here while also listing it in RENDERTARGETS is legal and
       returns last frame's content (nothing else writes it); `clear.colortex10 =
-      false` keeps it alive across frames.
+      false` keeps it alive across frames. colortex12 (R8) carries the matching
+      per-pixel CONFIDENCE so a freshly disoccluded pixel ramps up to the history
+      ceiling over several frames instead of locking onto one noisy frame.
 
    2. ABSORPTION — where an opaque surface sits behind the water (depthtex1 >
       depthtex0), tint the pixel by Beer-Lambert over the water PATH LENGTH
@@ -64,7 +66,7 @@
  they still WRITE BOTH render targets: Iris documents that a buffer listed in
  RENDERTARGETS and not written by an invocation receives GARBAGE data.
 
- SAMPLER BUDGET (recount): 9 of 16 (Mac GL 4.1 limit; the pack's own <=14) —
+ SAMPLER BUDGET (recount): 10 of 16 (Mac GL 4.1 limit; the pack's own <=14) —
    1 colortex0  (scene, SSR hit colour + base)
    2 colortex2  (water ripple normal .rg + lightmap .ba)
    3 colortex3  (matID mask)
@@ -73,11 +75,15 @@
    6 noisetex   (declared by lib/water.glsl's includes; SSR itself uses IGN)
    7 colortex6  (sky-view LUT, via lib/atmosphere.glsl alSkySample)
    8 colortex10 (SSR temporal history)
-   9 colortex1  (albedo, only under REFLECTIVE_BLOCKS)
+   9 colortex12 (SSR temporal confidence)
+  10 colortex1  (albedo, only under REFLECTIVE_BLOCKS)
  lib/space.glsl, lib/pbr.glsl and lib/clouds_common.glsl add only matrices/plain
  uniforms (no samplers). NaN-law: every clear=false read (colortex6, colortex10)
  is range-validated before use; reconstruction is guarded; the result falls back
  to the untouched scene on any non-finite value (fail toward the plain scene).
+ colortex12 is R8, so the hardware clamps it to [0,1] and it can never hold a NaN
+ even on its undefined first frame — the worst an uncleared texel can do is grant
+ a full history ceiling for one frame.
 ============================================================================
 */
 
@@ -97,6 +103,7 @@ uniform sampler2D depthtex0;   // translucent-inclusive depth (water surface)
 uniform sampler2D depthtex1;   // opaque-only depth (behind the water)
 uniform sampler2D noisetex;    // blue-ish noise for the dithered SSR start
 uniform sampler2D colortex10;  // SSR temporal history: rgb = reflection, a = eye depth
+uniform sampler2D colortex12;  // SSR temporal confidence: r = earned history ceiling
 #ifdef REFLECTIVE_BLOCKS
 uniform sampler2D colortex1;   // albedo — metal F0 IS the block's own colour
 #endif
@@ -111,9 +118,14 @@ uniform int frameCounter;      // Iris: frame index (wraps) for the R2 dither
 
 in vec2 texcoord;
 
-/* RENDERTARGETS: 0,10 */
+// The SSR history targets are bound UNCONDITIONALLY (not behind
+// #ifdef AL_SSR_TEMPORAL): the RENDERTARGETS directive is a comment the pipeline
+// parses BEFORE preprocessing, so the declared `out` set must not depend on an
+// option. With accumulation disabled the pass simply writes a neutral reset.
+/* RENDERTARGETS: 0,10,12 */
 layout(location = 0) out vec4 outColor;   // -> colortex0 (water-reflected scene)
 layout(location = 1) out vec4 outSSR;     // -> colortex10 (SSR history: rgb + eye depth)
+layout(location = 2) out vec4 outSSRConf; // -> colortex12 (SSR history: r = confidence)
 
 // View-space linear eye distance in front of the camera (positive).
 float alEyeZ(vec3 viewPos) { return -viewPos.z; }
@@ -259,20 +271,36 @@ vec3 alGlossyReflSample(vec2 hitUV, float viewDist, out vec3 ringMean, out vec3 
  only when the reprojected pixel is on-screen AND its recorded eye depth agrees
  with the depth we now predict, so a disocclusion resets instead of smearing.
  `outHistory` is the value to store back (rgb = accumulated reflection, a = the
- CURRENT eye depth, which is what the NEXT frame will predict and compare).
+ CURRENT eye depth, which is what the NEXT frame will predict and compare) and
+ `outConf` is the matching confidence for colortex12.
+
+ Two independent terms gate how much history survives:
+   CEILING — the confidence earned so far, read from colortex12 and raised by
+             AL_SSR_T_CONF_STEP on every consecutively accepted frame. A pixel
+             that just disoccluded starts at one step (~1/7th of the ceiling), so
+             it converges over several frames instead of instantly locking onto a
+             single noisy frame — the shadow history (deferred1) works the same way.
+   TRUST   — how far the history had to be statistically clipped THIS frame. A
+             stable reflection is barely clipped and keeps its full ceiling; a
+             changing one is clipped hard and drops back to reactive immediately,
+             which is what keeps the result sharp rather than ghosted.
 
  NaN law: every acceptance test is a comparison, so a poisoned history texel
  (colortex10 has clear=false, and its first-frame contents are undefined) fails
- every one of them and falls through to `current`.
+ every one of them and falls through to `current`. colortex12 is R8, so it cannot
+ hold a NaN at all; its undefined first frame is clamped into [0,1] and can only
+ ever grant a ceiling the TRUST term still has to agree with.
 */
 vec3 alAccumulateSSR(vec3 current, vec3 viewPos, vec3 mean, vec3 sigma,
-                     out vec4 outHistory) {
+                     out vec4 outHistory, out float outConf) {
     float eyeZ = alLinearEyeDepth(viewPos);
     vec3  result = current;
+    // A rejected history resets the ramp to its first step, so the NEXT frame
+    // may blend at most AL_SSR_T_CONF_STEP of it.
     float conf   = AL_SSR_T_CONF_STEP;
 
-    vec2 prevUV, motion; float prevEyeZ;
-    if (alMotionVector(viewPos, texcoord, prevUV, motion, prevEyeZ)) {
+    vec2 prevUV; float prevEyeZ;
+    if (alMotionVector(viewPos, texcoord, prevUV, prevEyeZ)) {
         vec4 hist = texture(colortex10, prevUV);
         bool ok = all(greaterThanEqual(hist.rgb, vec3(0.0)))
                && all(lessThan(hist.rgb, vec3(65000.0)))
@@ -283,15 +311,15 @@ vec3 alAccumulateSSR(vec3 current, vec3 viewPos, vec3 mean, vec3 sigma,
             vec3 lo = mean - AL_SSR_T_CLIP_GAMMA * sigma;
             vec3 hi = mean + AL_SSR_T_CLIP_GAMMA * sigma;
             vec3 clipped = clamp(hist.rgb, min(lo, hi), max(lo, hi));
-            // Confidence ramps with the number of consecutive accepted frames.
-            // It is derived from how far the history had to be clipped: a stable
-            // reflection is barely clipped and converges to the ceiling, a
-            // changing one is clipped hard and stays reactive.
             float drift = length(clipped - hist.rgb) / (length(mean) + 1.0e-3);
             float trust = alSaturate(1.0 - drift);
-            float blend = min(AL_SSR_T_MAX_BLEND, AL_SSR_T_MAX_BLEND * trust);
+            // Ceiling earned so far (clamped: colortex12's undefined first frame
+            // is in-range garbage, never more than the ceiling we allow anyway).
+            float earned = clamp(texture(colortex12, prevUV).r,
+                                 0.0, AL_SSR_T_MAX_BLEND);
+            float blend  = min(earned, AL_SSR_T_MAX_BLEND * trust);
             result = mix(current, clipped, blend);
-            conf   = blend;
+            conf   = min(earned + AL_SSR_T_CONF_STEP, AL_SSR_T_MAX_BLEND);
         }
     }
 
@@ -299,6 +327,7 @@ vec3 alAccumulateSSR(vec3 current, vec3 viewPos, vec3 mean, vec3 sigma,
              && all(lessThan(result, vec3(65000.0)));
     result = good ? result : current;
     outHistory = vec4(result, (eyeZ > 0.0 && eyeZ < 65000.0) ? eyeZ : 0.0);
+    outConf    = good ? conf : AL_SSR_T_CONF_STEP;
     return result;
 }
 #endif
@@ -328,8 +357,10 @@ vec3 alAccumulateSSR(vec3 current, vec3 viewPos, vec3 mean, vec3 sigma,
  while the surface is smooth enough for it to be meaningful. NaN-safe: any
  non-finite result falls back to `base`.
 */
-vec3 alReflectiveBlock(vec3 base, float reflAmt, float metal, out vec4 histOut) {
+vec3 alReflectiveBlock(vec3 base, float reflAmt, float metal,
+                       out vec4 histOut, out float confOut) {
     histOut = vec4(0.0);
+    confOut = 0.0;
 
     float d0 = texture(depthtex0, texcoord).r;
     vec3  P0 = alScreenToView(texcoord, d0);
@@ -398,8 +429,13 @@ vec3 alReflectiveBlock(vec3 base, float reflAmt, float metal, out vec4 histOut) 
             bool okHit = all(greaterThanEqual(hitCol, vec3(0.0)))
                       && all(lessThan(hitCol, vec3(65000.0)));
             if (okHit) {
-                envRefl   = mix(envRefl, hitCol, edgeFade);
-                ringMean  = mix(envRefl, mean, edgeFade);
+                // Both mixes must start from the SAME in-fill reference: reading
+                // the already-updated envRefl here would blend it twice and drag
+                // the temporal clip box toward hitCol near the screen edges
+                // (where edgeFade is partial), letting stale history survive.
+                vec3 infill = envRefl;
+                envRefl   = mix(infill, hitCol, edgeFade);
+                ringMean  = mix(infill, mean,   edgeFade);
                 ringSigma = sigma * edgeFade;
             }
         }
@@ -407,7 +443,7 @@ vec3 alReflectiveBlock(vec3 base, float reflAmt, float metal, out vec4 histOut) 
 #endif
 
 #ifdef AL_SSR_TEMPORAL
-    envRefl = alAccumulateSSR(envRefl, P0, ringMean, ringSigma, histOut);
+    envRefl = alAccumulateSSR(envRefl, P0, ringMean, ringSigma, histOut, confOut);
 #endif
 
     // --- Micro-facet composition ------------------------------------------
@@ -432,7 +468,8 @@ void main() {
     // receives GARBAGE. Every early-out below therefore leaves a valid history
     // value; vec4(0.0) is the "no reflection here" reset (depth 0 fails the next
     // frame's alHistoryDepthOK test, so it can never be blended in).
-    outSSR = vec4(0.0);
+    outSSR     = vec4(0.0);
+    outSSRConf = vec4(0.0);
 
 #if DEBUG_VIEW != 0
     // Keep the debug probes / raw-channel views exactly as upstream wrote them —
@@ -448,10 +485,12 @@ void main() {
     // Reflective solid blocks (ice / metal / polished) and reflective translucent
     // ice — tagged with reflectivity in colortex3.b (+ metalness in .a). Not water.
     if (mat != AL_MATID_WATER && m3.b > 0.01) {
-        vec4 blockHist;
-        vec3 blockCol = alReflectiveBlock(base, m3.b, m3.a, blockHist);
-        outColor = vec4(blockCol, 1.0);
-        outSSR   = blockHist;
+        vec4  blockHist;
+        float blockConf;
+        vec3 blockCol = alReflectiveBlock(base, m3.b, m3.a, blockHist, blockConf);
+        outColor   = vec4(blockCol, 1.0);
+        outSSR     = blockHist;
+        outSSRConf = vec4(blockConf);
         return;
     }
 #endif
@@ -563,8 +602,11 @@ void main() {
         bool okHit = all(greaterThanEqual(hitCol, vec3(0.0)))
                   && all(lessThan(hitCol, vec3(65000.0)));
         if (okHit) {
-            refl      = mix(refl, hitCol, edgeFade);
-            ringMean  = mix(refl, mean, edgeFade);
+            // Same in-fill reference for both mixes (see the block path above):
+            // reading the updated refl would double-blend the clip-box centre.
+            vec3 infill = refl;
+            refl      = mix(infill, hitCol, edgeFade);
+            ringMean  = mix(infill, mean,   edgeFade);
             ringSigma = sigma * edgeFade;
         }
     }
@@ -575,7 +617,9 @@ void main() {
     // This is what removes the residual per-frame graininess that no spatial
     // filter can: the stochastic ray start + micro-ripple normals average out
     // over ~12 frames while the statistical clip keeps the result sharp.
-    refl = alAccumulateSSR(refl, P0, ringMean, ringSigma, outSSR);
+    float waterConf;
+    refl = alAccumulateSSR(refl, P0, ringMean, ringSigma, outSSR, waterConf);
+    outSSRConf = vec4(waterConf);
 #endif
 
     // SUN GLINT: the sun disc is not in the depth buffer, so SSR can never reflect

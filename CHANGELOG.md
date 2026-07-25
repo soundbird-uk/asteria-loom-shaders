@@ -75,6 +75,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   by a fixed brightness curve, so it stops glowing plain white and darkens naturally
   at night.
 
+- **Review follow-ups (5.3.0).** Three defects found reviewing the temporal work
+  above:
+  - The SSR confidence ramp was documented but never actually stored, so a pixel
+    that had just come back into view jumped straight to the full history ceiling
+    on its first accepted frame — exactly the ghosting the ramp exists to prevent
+    — and `AL_SSR_T_CONF_STEP` was a settings knob that did nothing. The earned
+    confidence now lives in the new **colortex12** (`R8`, `clear=false`) and rises
+    one step per consecutively accepted frame, mirroring the shadow history.
+    `R8` is deliberate: the hardware clamps it to `[0,1]`, so this uncleared
+    buffer cannot hold a NaN.
+  - Both SSR paths (reflective blocks and water) built the temporal clip-box
+    centre from an *already updated* reflection value, double-blending it away
+    from the analytic in-fill. Near the screen edges (partial `edgeFade`) that
+    shifted the clip box toward the raw hit colour and let more stale history
+    survive than intended. Both now mix from a single pre-update reference.
+  - `alMotionVector` had an out-parameter for the screen-space motion vector that
+    no caller ever read; it is gone (`prevUV - curUV` recovers it if ever needed).
+
 ### Fixed (5.2.5) — cave openings now fog with distance like the terrain around them
 
 - **The unfogged dark hole at a cave mouth is gone.** Aerial fog is sky-gated

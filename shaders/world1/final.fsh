@@ -74,6 +74,12 @@
    colortex11   RGBA16F  Shadow-visibility temporal history (5.3.0): r = resolved
                          visibility, g = confidence, b = eye depth.
                          `clear.colortex11 = false`; written by deferred1.
+   colortex12   R8       SSR temporal CONFIDENCE (5.3.0): r = the history ceiling
+                         the pixel has earned, raised one AL_SSR_T_CONF_STEP per
+                         consecutively accepted frame. R8 is deliberate: it is a
+                         [0,1] scalar the hardware clamps, so this clear=false
+                         buffer can never hold a NaN. Read+written by composite
+                         alongside colortex10.
    shadowcolor0 RGBA8    reserved for Phase 2 (coloured/translucent shadows);
                          Phase 1's shadow pass is depth-only, so nothing is
                          allocated yet — this only reserves the format.
@@ -93,6 +99,7 @@ const int colortex8Format = RGBA16F;
 const int colortex9Format = RGBA16F;
 const int colortex10Format = RGBA16F;
 const int colortex11Format = RGBA16F;
+const int colortex12Format = R8;
 const int shadowcolor0Format = RGBA8;
 */
 

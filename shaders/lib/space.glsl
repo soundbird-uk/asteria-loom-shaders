@@ -87,7 +87,8 @@ float alLinearEyeDepth(vec3 viewPos) {
    curUV     — this frame's screen uv of that point (usually texcoord; pass the
                UN-JITTERED uv if the caller jitters, so the vector is jitter-free).
    prevUV    — out: previous-frame screen uv (only valid when the call returns true).
-   motion    — out: prevUV - curUV, the screen-space motion vector.
+               The screen-space motion vector, if a caller ever needs it, is
+               simply prevUV - curUV.
    prevEyeZ  — out: the point's eye depth in the PREVIOUS frame, for the
                depth-consistency test against the stored history depth.
 
@@ -97,9 +98,8 @@ float alLinearEyeDepth(vec3 viewPos) {
  (the pack's NaN law: a poisoned history can never be accepted).
 */
 bool alMotionVector(vec3 viewPos, vec2 curUV,
-                    out vec2 prevUV, out vec2 motion, out float prevEyeZ) {
+                    out vec2 prevUV, out float prevEyeZ) {
     prevUV   = curUV;
-    motion   = vec2(0.0);
     prevEyeZ = -1.0;
 
     vec3 prevView = alPlayerToPrevView(alViewToPlayer(viewPos));
@@ -113,7 +113,6 @@ bool alMotionVector(vec3 viewPos, vec2 curUV,
     if (!(z > 0.0 && z < 65000.0)) return false;
 
     prevUV   = uv;
-    motion   = uv - curUV;
     prevEyeZ = z;
     return true;
 }

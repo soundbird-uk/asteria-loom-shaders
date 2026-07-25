@@ -159,8 +159,8 @@ float alAccumulateShadow(float current, vec3 viewPos, out vec4 histOut) {
     float result = alSaturate(current);
     float conf   = AL_SHADOW_T_CONF_STEP;
 
-    vec2 prevUV, motion; float prevEyeZ;
-    if (alMotionVector(viewPos, texcoord, prevUV, motion, prevEyeZ)) {
+    vec2 prevUV; float prevEyeZ;
+    if (alMotionVector(viewPos, texcoord, prevUV, prevEyeZ)) {
         vec4 hist = texture(colortex11, prevUV);
         if (hist.r >= 0.0 && hist.r <= 1.0 &&
             hist.g >= 0.0 && hist.g <= 1.0 &&

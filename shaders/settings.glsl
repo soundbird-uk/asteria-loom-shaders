@@ -994,7 +994,11 @@ const vec3 AL_WATER_TINT = vec3(0.09, 0.19, 0.22);
 // reproject the previous frame's resolved reflection through the motion vector
 // (lib/space.glsl alMotionVector) and accumulate.
 //   MAX_BLEND    — history ceiling (0.92 => ~12-frame effective average).
-//   CONF_STEP    — how fast a freshly disoccluded pixel earns that ceiling.
+//   CONF_STEP    — how fast a freshly disoccluded pixel earns that ceiling. The
+//                  earned confidence lives in colortex12 (R8) and rises one step
+//                  per consecutively accepted frame, so a pixel that just came
+//                  into view converges over ~7 frames instead of locking onto a
+//                  single noisy one. Same mechanism as the shadow history.
 //   DEPTH_REJECT — relative eye-depth disagreement that rejects history.
 //   CLIP_GAMMA   — the accumulated history is clipped to mean +/- gamma*sigma of
 //                  the CURRENT frame's glossy ring taps (the same statistical
