@@ -808,7 +808,7 @@ const float sunPathRotation = -35.0;
 #define AL_WATER_WAVE_K       0.28   // base wavenumber (2pi/lambda); 0.28 ~ 22-block swell
 #define AL_WATER_WAVE_GAIN    1.28
 #define AL_WATER_WAVE_AMP     0.148  // base swell amplitude (world metres); 0.148 = ocean feel
-#define AL_WATER_AMP_GAIN     0.80   // slightly steeper amplitude decay so short chop < long swells
+#define AL_WATER_AMP_GAIN     0.80   // gentler amplitude decay per octave so short chop < long swells
 #define AL_WATER_WAVE_SPEED   0.68   // dispersion rate; faster for long open-water swells
 #define AL_WATER_STEEPNESS    3.8    // crest-pinch (bounded per-wave; higher = sharper whitecap tops
                                      // without self-loop; Jacobian dips more -> more crest foam)
@@ -837,7 +837,7 @@ const float sunPathRotation = -35.0;
 #define AL_WATER_MICRO_AMP    0.13   // stronger capillary-ripple tilt for visible fine texture
 #define AL_WATER_MICRO_SPEED  0.80
 #define AL_WATER_MICRO_WARP   0.70   // stronger warp = more organic, non-grid micro ripples
-#define AL_WATER_MICRO_FADE   32.0   // micro detail visible from slightly further away
+#define AL_WATER_MICRO_FADE   32.0   // micro detail visible from noticeably further away (was 26)
 
 // --- Footprint normal anti-aliasing (fixes the "grid grain" on water) -------
 // The ripple normal is high-frequency world-space detail. When a single screen
@@ -1013,7 +1013,7 @@ const vec3 AL_WATER_TINT = vec3(0.09, 0.19, 0.22);
 // Screen-space REFRACTION: how far (uv) the water normal bends the submerged scene
 // sample. Subtle + distance-faded so the seabed wobbles under the surface without
 // tearing. (5.1.0 water overhaul.)
-#define AL_WATER_REFRACT     0.022  // slightly less UV offset (was 0.028); reduces "rubber-glass" warp
+#define AL_WATER_REFRACT     0.022  // moderately reduced UV offset (was 0.028); less "rubber-glass" warp
 
 // --- Absorption (internal, not GUI) ----------------------------------------
 // Beer-Lambert tint of the SUBMERGED scene by the water path length between the
