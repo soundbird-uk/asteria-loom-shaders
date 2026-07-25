@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-07-25
+
 ### Fixed (5.3.0) — grain, chrome metal, griddy water and painted foam
 
 - **The fuzzy, noisy grain across reflections, AO and shadow edges is gone.** SSR
@@ -957,5 +959,6 @@ macOS (OpenGL 4.1).
   distortion, SSAO, TAA, volumetric clouds, the atmosphere model, SSR, bloom, the AgX
   grade, Distant Horizons programs, world folders, and the advanced tier.
 
-[Unreleased]: https://github.com/soundbird-uk/asteria-loom-shaders/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/soundbird-uk/asteria-loom-shaders/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/soundbird-uk/asteria-loom-shaders/releases/tag/v0.5.0
 [0.1.0]: https://github.com/soundbird-uk/asteria-loom-shaders/releases/tag/v0.1.0
