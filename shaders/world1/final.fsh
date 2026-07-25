@@ -45,20 +45,20 @@
    colortex5    RGBA16F  AO history: r = AO, g = confidence, b = linear depth,
                          a = ADAPTED EXPOSURE (at texel (0,0) only — written by
                          composite14, read here; elsewhere .a is AO-history spare
-                         and preserved byte-exact). `clear.colortex5 = false`
-                         (persists across frames for temporal accumulation — set
-                         in shaders.properties).
+                         and preserved byte-exact). `colortex5Clear = false`
+                         (persists across frames for temporal accumulation —
+                         declared below).
    colortex6    RGBA16F  Sky-view LUT: top-left 256x128 tile = analytic
                          atmosphere radiance (azimuth x horizon-biased
                          elevation, mapping documented in lib/atmosphere_common
                          .glsl). Rest of the buffer unused. Baked once per frame
-                         by the prepare pass. `clear.colortex6 = false` (set in
-                         shaders.properties) -> reads are NaN-proof range-
-                         validated with an analytic fallback.
+                         by the prepare pass. `colortex6Clear = false` (declared
+                         below) -> reads are NaN-proof range-validated with an
+                         analytic fallback.
    colortex7    RGBA16F  Cloud history (CLOUDS agent): rgb = in-scattered
-                         radiance, a = transmittance. `clear.colortex7 = false`.
+                         radiance, a = transmittance. `colortex7Clear = false`.
    colortex8    RGBA16F  TAA history (TAA agent): rgb = resolved scene colour,
-                         a = blend confidence. `clear.colortex8 = false`
+                         a = blend confidence. `colortex8Clear = false`
                          (persists across frames for temporal reprojection) ->
                          reads are NaN-proof range-validated in composite3.fsh.
    colortex9    RGBA16F  Bloom tile atlas (BLOOM agent): mip chain packed as
@@ -68,12 +68,12 @@
    colortex10   RGBA16F  SSR temporal history (5.3.0): rgb = accumulated
                          reflection radiance, a = the reflective surface's eye
                          depth when it was written (the reprojection test).
-                         `clear.colortex10 = false`; composite.fsh reads it
+                         `colortex10Clear = false`; composite.fsh reads it
                          ('main') and writes it ('alt') in the same pass, which
                          Iris allows for composite-style programs.
    colortex11   RGBA16F  Shadow-visibility temporal history (5.3.0): r = resolved
                          visibility, g = confidence, b = eye depth.
-                         `clear.colortex11 = false`; written by deferred1.
+                         `colortex11Clear = false`; written by deferred1.
    colortex12   R8       SSR temporal CONFIDENCE (5.3.0): r = the history ceiling
                          the pixel has earned, raised one AL_SSR_T_CONF_STEP per
                          consecutively accepted frame. R8 is deliberate: it is a
@@ -108,6 +108,53 @@ const int shadowcolor0Format = RGBA8;
 // reads their literal text with no macro expansion, so the option must BE the
 // constant. They are NOT redeclared here (settings.glsl is already included
 // above) to avoid a duplicate directive.
+
+/*
+==========================================================================
+ CANONICAL BUFFER-CLEAR DECLARATIONS  (5.4 — pipeline-breaking fix)
+--------------------------------------------------------------------------
+ Buffer clearing is controlled by the GLSL directive
+     const bool <bufferName>Clear = <true|false>;   // "any GLSL shader file"
+ and NOT by a `clear.<buffer>` key in shaders.properties — no such key exists
+ in Iris, so the seven `clear.colortexN = false` lines this pack used to carry
+ there were parsed as unknown properties and silently DROPPED. Every temporal
+ buffer was therefore wiped to vec4(0) after every frame, which quietly
+ disabled EVERY multi-frame feature in the pack: the TAA history never
+ accumulated, SSR/shadow/cloud/AO histories were rejected as invalid on every
+ single frame (their range guards saw the cleared zeros and fell back to
+ "current frame only"), and the auto-exposure integrator re-read 0 instead of
+ last frame's value. The pack still rendered — the guards are honest — it just
+ rendered as if it had no temporal passes at all.
+ Unlike the format directives above these are ordinary, valid GLSL (a bool
+ literal initialiser), so they are LIVE code, not comments. Iris parses this
+ once for the whole pack; the rationale for each buffer:
+   colortex5  AO temporal history + the persistent auto-exposure slot .a(0,0)
+   colortex6  sky-view LUT tile (rebaked by prepare each frame; skipping the
+              clear just avoids a pointless full-buffer wipe)
+   colortex7  volumetric-cloud history (reprojected by composite1)
+   colortex8  TAA history (reprojected by composite3)
+   colortex10 SSR reflection history      (read+written by composite)
+   colortex11 shadow-visibility history   (read+written by deferred1)
+   colortex12 SSR temporal confidence, R8 (read+written by composite)
+ Every read of these buffers is NaN-proof range-validated, so the now genuinely
+ UNDEFINED first frame still self-heals — that contract is unchanged.
+==========================================================================
+*/
+const bool colortex5Clear  = false;
+const bool colortex6Clear  = false;
+const bool colortex7Clear  = false;
+const bool colortex8Clear  = false;
+const bool colortex10Clear = false;
+const bool colortex11Clear = false;
+const bool colortex12Clear = false;
+
+// Shadow sampling mode. Also a GLSL const directive (Iris reads
+// `shadowHardwareFiltering` from shader source, not from shaders.properties),
+// declared explicitly here so the pack's choice is stated rather than inherited
+// from the default: shadowtex0/1 stay PLAIN depth textures, and lib/shadow.glsl
+// does the compare in software (raw `.r` read + `step` + Vogel PCF). That is the
+// field-proven path and behaves identically on Windows and macOS.
+const bool shadowHardwareFiltering = false;
 
 uniform sampler2D colortex0;
 uniform sampler2D colortex1;

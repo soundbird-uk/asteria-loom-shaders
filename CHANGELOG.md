@@ -7,6 +7,78 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — every temporal buffer was being wiped each frame (silent pipeline break)
+
+- **`clear.colortexN = false` is not an Iris directive.** Buffer clearing is
+  controlled by the GLSL constant `const bool <bufferName>Clear = false;`, read
+  from shader source; there is no `clear.<buffer>` key in `shaders.properties`.
+  The seven declarations the pack kept there were parsed as unknown properties
+  and silently dropped, so `colortex5` (AO history **and** the persistent
+  auto-exposure slot), `colortex6` (sky LUT), `colortex7` (cloud history),
+  `colortex8` (TAA history), `colortex10`/`colortex12` (SSR history +
+  confidence) and `colortex11` (shadow-visibility history) were cleared to
+  `vec4(0)` after every single frame. Every multi-frame feature in the pack was
+  therefore inert — the histories' NaN/range guards saw the cleared zeros,
+  rejected them as invalid and fell back to "current frame only" *every* frame,
+  and the exposure integrator re-read `0` instead of the previous value. Nothing
+  errored, which is exactly why it went unnoticed. The declarations now live as
+  live GLSL in `world*/final.fsh` next to the buffer-format block, with the
+  per-buffer rationale; `shaders.properties` keeps a pointer note.
+- **`shadowHardwareFiltering = false` was dropped for the same reason** — it is
+  also a GLSL const directive, not a properties key. It is now declared
+  explicitly (`const bool shadowHardwareFiltering = false;`) so the pack's
+  software-compare shadow path is stated rather than inherited from the default.
+- Stale comments corrected: `composite2` (not `composite1`) is the aerial-fog
+  pass gated by `AERIAL_FOG`.
+
+### Fixed — translucency & entity pipeline (particles, signboards, item frames)
+
+- **Particles no longer render through water and solid blocks.** With
+  `particles.ordering = after` the particle pass runs in the post-deferred
+  forward phase, where a particle that reaches the fragment stage without a
+  working depth test paints straight over geometry in front of it (block-break
+  crumbs seen through the block, potion swirls sitting on top of the water they
+  are under). `gbuffers_particles.fsh` now re-runs the depth test itself: it
+  `texelFetch`es the fragment's own pixel from **`depthtex0`** (all geometry —
+  the only buffer that carries the water surface) and **`depthtex1`** (opaque
+  only, which still occludes correctly in the orderings where the translucent
+  pass has not yet reached `depthtex0`), takes the nearer of the two and
+  discards the fragment when its `gl_FragCoord.z` is **strictly** greater. The
+  comparison is done in window-space Z at `highp`, at the exact integer pixel —
+  no filtering, no half-texel slop, no `viewWidth`/`viewHeight` round-trip — and
+  the strict `>` keeps particles that are exactly coplanar with the surface they
+  sit on. Where the fixed-function test already worked, the result is identical.
+- **Signboards are visible again (no more text floating in mid-air).** The
+  opaque G-buffer programs tested `texture.a * gl_Color.a` against
+  `alphaTestRef`, which conflates two different things: the atlas **cutout mask**
+  (texture alpha) and a per-draw **modulator** (vertex alpha — entity fade,
+  layer tint, dye). A block-entity draw arriving with a low vertex alpha was
+  therefore deleted wholesale, which is exactly what happened to a sign's wooden
+  backing while its translucent text layer (`gbuffers_block_translucent`,
+  unaffected) kept drawing and was left hanging in the air. `gbuffers_entities`,
+  `gbuffers_block`, `gbuffers_textured_lit` and `gbuffers_textured` now test the
+  **texture** alpha against Iris' `alphaTestRef` for the cutout, and only drop
+  the fragment for the modulated result when it has **no coverage at all**
+  (`a <= 0`). No new thresholds, and opaque/cutout entity and block-entity parts
+  can no longer be discarded by a test meant for translucent layers.
+- **Item frames, glow item frames and paintings stop vanishing.** These entities
+  hang FLUSH against a block face, so their backing quad is (near-)coplanar with
+  it and loses a `GL_LESS` depth test wherever both depths quantise to the same
+  value — "it appears when placed, then disappears". New `shaders/entity
+  .properties` tags them as ID **10060**, and `gbuffers_entities.vsh` reads
+  `entityId` to (a) make their exemption from **any** future vertex displacement
+  explicit and permanent — displacement into the wall is the other way flat
+  entities disappear, and this program deliberately applies none — and (b) give
+  them depth priority by scaling the view-space position about the camera by
+  `1 - AL_DECAL_DEPTH_BIAS`. That slides the vertex along its own view ray toward
+  the eye, so the projected screen position is **mathematically unchanged**
+  (`x/z` and `y/z` are invariant under a uniform scale about the view origin) and
+  only depth moves. The bias is relative to eye distance — matching how depth
+  precision itself behaves (~1.2e-4 relative at 100 blocks for a 24-bit buffer at
+  `near = 0.05`, so 5e-4 clears it ~4x) — rather than a fixed magic epsilon, and
+  it displaces the surface by only 2.5 mm at 5 blocks, always toward the viewer.
+- Mirrored byte-for-byte across `world0` / `world1` / `world-1`.
+
 ### Changed — bloom is now a real dual-filter pyramid
 
 - **Bloom is a true progressive-downsample + tent-cascade-upsample pyramid

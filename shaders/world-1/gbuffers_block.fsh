@@ -7,6 +7,14 @@
 /*
  gbuffers_block (fragment) — block entities into the opaque G-buffer.
 
+ ALPHA TEST (5.4, "signboard invisible while the sign text floats in mid-air"):
+ signs, chests, banners and beds all arrive here. The cutout mask of these draws
+ is the TEXTURE alpha; gl_Color.a is a per-draw modulator (layer tint / fade), so
+ the two are tested SEPARATELY — texture alpha against Iris' alphaTestRef, and
+ the modulated result only for zero coverage. A combined test discarded the
+ opaque wooden backing of a sign outright while its translucent text layer
+ (gbuffers_block_translucent) kept drawing. Same rule as gbuffers_entities.
+
  END PORTAL / GATEWAY (block.properties 10003): vanilla renders these with a
  special block-entity renderer that Iris does not reproduce, so they read as flat
  black. We detect them via mc_Entity and paint a revamped 3D parallax STARFIELD
@@ -58,8 +66,11 @@ void main() {
         return;
     }
 
-    vec4 albedo = texture(gtexture, texcoord) * glcolor;
-    if (albedo.a < alphaTestRef) discard;
+    vec4 tex    = texture(gtexture, texcoord);
+    if (tex.a < alphaTestRef) discard;        // cutout mask: TEXTURE alpha only
+
+    vec4 albedo = tex * glcolor;
+    if (albedo.a <= 0.0) discard;             // no coverage at all
 
     outAlbedo   = vec4(albedo.rgb, 1.0);
     outNormalLm = vec4(alEncodeNormal(N), lmcoord);

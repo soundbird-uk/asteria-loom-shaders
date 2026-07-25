@@ -36,7 +36,7 @@
       into a stable, SHARP reflection instead of a grainy one. Iris flip rule: a
       composite program reads the 'main' buffer and writes the 'alt' buffer, so
       reading colortex10 here while also listing it in RENDERTARGETS is legal and
-      returns last frame's content (nothing else writes it); `clear.colortex10 =
+      returns last frame's content (nothing else writes it); `colortex10Clear =
       false` keeps it alive across frames. colortex12 (R8) carries the matching
       per-pixel CONFIDENCE so a freshly disoccluded pixel ramps up to the history
       ceiling over several frames instead of locking onto one noisy frame.

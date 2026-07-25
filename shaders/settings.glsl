@@ -93,6 +93,24 @@
 // colour and blooms a coloured halo. HDR — AgX rolls it off, bloom spreads it.
 #define AL_EMISSIVE_STRENGTH  4.5
 
+// Depth priority for FLAT, FLUSH decal entities — item frames, glow item frames
+// and paintings (entity.properties 10060), applied in gbuffers_entities.vsh.
+// Those entities are (near-)coplanar with the block face they hang on, and a
+// coplanar surface drawn after the terrain loses the GL_LESS depth test wherever
+// the two depths quantise to the same value — the "item frame vanishes a moment
+// after it is placed" bug. The vertex is scaled about the camera in view space
+// by (1 - this), which slides it along its own view ray toward the eye: the
+// projected screen position is mathematically unchanged (x/z, y/z are invariant
+// under a uniform scale about the view origin), so only the depth moves.
+// DERIVATION (not a magic epsilon): the bias is RELATIVE to eye distance, which
+// is how depth-buffer precision itself behaves. For a 24-bit depth buffer with
+// near = 0.05 the relative depth resolution at eye distance z is about
+// z * 2^-24 / near — ~7.6e-5 at 64 blocks (the entity render range) and ~1.2e-4
+// at 100 blocks. 5e-4 clears both by ~4x, while displacing the surface by only
+// 2.5 mm at 5 blocks and 5 cm at 100 blocks — sub-pixel, and always TOWARD the
+// viewer, so a frame can never sink into the wall it is mounted on.
+#define AL_DECAL_DEPTH_BIAS 5e-4
+
 // Held-light strength (0.4.4b — "a torch in offhand doesn't illuminate stuff").
 // A warm point light around the CAMERA driven by the held item's light value
 // (heldBlockLightValue / _2), so carrying a torch/lantern/glowstone lights the
@@ -231,7 +249,7 @@ const float shadowDistance = 128.0; // [64.0 96.0 128.0 192.0 256.0]
 // `if (blockers < 0.5) return 1.0` early-out turns any raw-read discrepancy into
 // fully-lit EVERYWHERE) and over-shadowing on macOS. It cannot be proven correct
 // in CI (no Mac GL driver), so it is quarantined here. Enabling it ALSO requires
-// setting `shadowHardwareFiltering = true` in shaders.properties.
+// setting the GLSL const `shadowHardwareFiltering = true` (final.fsh).
 //#define AL_SHADOW_HW
 
 // Distortion warp strength k in (0,1): factor = (1-k) + k*length(ndc.xy).

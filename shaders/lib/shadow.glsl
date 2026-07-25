@@ -104,7 +104,7 @@ uniform int frameCounter;
 // compare samplers + hardware PCF. QUARANTINED — this path produced the 0.2.x
 // field regressions (zero shadows on Windows via the blocker-search early-out;
 // over-shadowing on macOS) and cannot be proven correct in CI. Enabling it also
-// requires shadowHardwareFiltering = true in shaders.properties.
+// requires `const bool shadowHardwareFiltering = true;` (a GLSL directive).
 #ifdef AL_SHADOW_HW
     #ifdef IRIS_FEATURE_SEPARATE_HARDWARE_SAMPLERS
     uniform sampler2D       shadowtex0;    // raw depth of everything (blocker search)
