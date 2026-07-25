@@ -7,6 +7,7 @@
 #include "/lib/atmosphere.glsl"
 #include "/lib/clouds_common.glsl"
 #include "/lib/water.glsl"
+#include "/lib/pbr.glsl"
 
 /*
 ============================================================================
@@ -19,10 +20,22 @@
    1. SSR — reconstruct the water surface view position from depthtex0, decode
       the ripple normal, reflect the view ray and RAYMARCH it in VIEW SPACE
       against depthtex0 (16/24/32 steps by SSR_QUALITY, binary-search refined,
-      dithered start, screen-edge + thickness rejection). Hit -> sample the
-      post-translucent scene (colortex0); miss/off-screen -> alSkySample of the
-      world reflected dir. Blended over the water via Schlick Fresnel (f0=0.02).
-      Gated INTERNALLY by SSR so absorption + caustics still run with SSR off.
+      dithered start, normal-biased origin, screen-edge + thickness rejection).
+      Hit -> sample the post-translucent scene (colortex0); miss/off-screen ->
+      the analytic IN-FILL (sky for up rays, the water's own depth-tinted body
+      colour for horizon/downward rays — NEVER black). Blended over the water via
+      Schlick Fresnel (f0=0.02). Gated INTERNALLY by SSR so absorption + caustics
+      still run with SSR off.
+
+   1b. SSR TEMPORAL ACCUMULATION (colortex10) — the reflection resolved above is
+      reprojected through the motion vector (lib/space.glsl alMotionVector) and
+      blended with the previous frame's result, clipped to mean +/- gamma*sigma of
+      this frame's glossy ring taps. That converts the per-pixel ray/ripple noise
+      into a stable, SHARP reflection instead of a grainy one. Iris flip rule: a
+      composite program reads the 'main' buffer and writes the 'alt' buffer, so
+      reading colortex10 here while also listing it in RENDERTARGETS is legal and
+      returns last frame's content (nothing else writes it); `clear.colortex10 =
+      false` keeps it alive across frames.
 
    2. ABSORPTION — where an opaque surface sits behind the water (depthtex1 >
       depthtex0), tint the pixel by Beer-Lambert over the water PATH LENGTH
@@ -40,21 +53,31 @@
       scaled by water-depth falloff, the water surface's sky lightmap, and the
       day factor. Soft, dreamy, slow.
 
- The pass ALWAYS runs (NOT gated on SSR — that would kill absorption/caustics
- with SSR off, contract §6). Non-water pixels take a one-line early-out.
+   4. REFLECTIVE BLOCKS (REFLECTIVE_BLOCKS) — a full micro-facet GGX reflection
+      (lib/pbr.glsl): F0 = albedo for metals / 0.04 for dielectrics, weighted by
+      the split-sum environment BRDF so a ROUGH metal reflects a dim, blurred
+      environment instead of a chrome mirror, and energy-conserving against the
+      forward-lit base.
 
- SAMPLER BUDGET (recount): 7 of 8 max —
+ The pass ALWAYS runs (NOT gated on SSR — that would kill absorption/caustics
+ with SSR off, contract §6). Non-water pixels take a one-line early-out — but
+ they still WRITE BOTH render targets: Iris documents that a buffer listed in
+ RENDERTARGETS and not written by an invocation receives GARBAGE data.
+
+ SAMPLER BUDGET (recount): 9 of 16 (Mac GL 4.1 limit; the pack's own <=14) —
    1 colortex0  (scene, SSR hit colour + base)
    2 colortex2  (water ripple normal .rg + lightmap .ba)
    3 colortex3  (matID mask)
    4 depthtex0  (translucent-inclusive = water surface depth; SSR march target)
    5 depthtex1  (opaque-only depth = scene behind the water)
-   6 noisetex   (SSR dither)
+   6 noisetex   (declared by lib/water.glsl's includes; SSR itself uses IGN)
    7 colortex6  (sky-view LUT, via lib/atmosphere.glsl alSkySample)
- lib/space.glsl and lib/clouds_common.glsl add only matrices/plain uniforms
- (no samplers). <= 8. NaN-law: every clear=false read (colortex6) is range-
- validated in its accessor; reconstruction is guarded; the result falls back to
- the untouched scene on any non-finite value (fail toward the plain scene).
+   8 colortex10 (SSR temporal history)
+   9 colortex1  (albedo, only under REFLECTIVE_BLOCKS)
+ lib/space.glsl, lib/pbr.glsl and lib/clouds_common.glsl add only matrices/plain
+ uniforms (no samplers). NaN-law: every clear=false read (colortex6, colortex10)
+ is range-validated before use; reconstruction is guarded; the result falls back
+ to the untouched scene on any non-finite value (fail toward the plain scene).
 ============================================================================
 */
 
@@ -73,8 +96,9 @@ uniform sampler2D colortex3;   // matID .r, reflectivity .b, metalness .a
 uniform sampler2D depthtex0;   // translucent-inclusive depth (water surface)
 uniform sampler2D depthtex1;   // opaque-only depth (behind the water)
 uniform sampler2D noisetex;    // blue-ish noise for the dithered SSR start
+uniform sampler2D colortex10;  // SSR temporal history: rgb = reflection, a = eye depth
 #ifdef REFLECTIVE_BLOCKS
-uniform sampler2D colortex1;   // albedo — metal reflections tint by the block's own colour
+uniform sampler2D colortex1;   // albedo — metal F0 IS the block's own colour
 #endif
 
 // Forward matrices for the view-space raymarch projection. lib/space.glsl owns
@@ -87,25 +111,46 @@ uniform int frameCounter;      // Iris: frame index (wraps) for the R2 dither
 
 in vec2 texcoord;
 
-/* RENDERTARGETS: 0 */
+/* RENDERTARGETS: 0,10 */
 layout(location = 0) out vec4 outColor;   // -> colortex0 (water-reflected scene)
+layout(location = 1) out vec4 outSSR;     // -> colortex10 (SSR history: rgb + eye depth)
 
 // View-space linear eye distance in front of the camera (positive).
 float alEyeZ(vec3 viewPos) { return -viewPos.z; }
 
 /*
- SSR raymarch in view space against depthtex0. `origin` is the water surface
- view position, `dir` the reflected view direction (unit). Returns true + the
- hit UV when the ray crosses behind a thin surface on-screen; false otherwise.
+ SSR raymarch in view space against depthtex0. `origin` is the reflective
+ surface's view position, `normalV` its view-space normal and `dir` the reflected
+ view direction (unit). Returns true + the hit UV when the ray crosses behind a
+ thin surface on-screen; false otherwise.
  Standard scheme: fixed-length steps with a dithered start, detect the crossing
  (rayPos passes behind the sampled surface: rayPos.z < sceneZ), reject when the
  gap exceeds a thickness tolerance (ray slipped behind a foreground object), and
  binary-search between the last in-front and first behind sample to refine.
+
+ RAY HYGIENE (5.3.0) — two rejections that the old trace lacked:
+  * INTO-SURFACE rays. reflect() can return a direction pointing back into the
+    geometry when the (rippled / interpolated) normal disagrees with the visible
+    surface. Such a ray immediately marches behind the surface it started on,
+    the very first sample "crosses", and the trace returns the surface's own
+    screen colour — which, for a near-horizontal reflection, is the bright sky
+    horizon band pasted INSIDE the block ("as if you are looking through them").
+    dot(dir, normalV) <= AL_SSR_MIN_DOT is rejected outright.
+  * SELF-INTERSECTION. The march now starts offset ALONG THE NORMAL (scaled with
+    view distance, where a depth texel spans more world), so the first steps
+    cannot re-hit the origin pixel and produce a false, angle-dependent hit —
+    the cause of reflections that only appeared at certain specific angles.
 */
-bool alTraceSSR(vec3 origin, vec3 dir, float dither, out vec2 hitUV) {
-    float stepLen = AL_SSR_MAX_DIST / float(AL_SSR_STEPS);
-    vec3  rayPos  = origin + dir * stepLen * (0.5 + dither);   // dithered start
+bool alTraceSSR(vec3 origin, vec3 normalV, vec3 dir, float dither, out vec2 hitUV) {
     hitUV = vec2(0.0);
+
+    // A reflected ray must leave the surface, never enter it.
+    if (dot(dir, normalV) <= AL_SSR_MIN_DOT) return false;
+
+    float stepLen = AL_SSR_MAX_DIST / float(AL_SSR_STEPS);
+    // Normal bias grows with distance: one depth texel covers more world there.
+    float nBias   = AL_SSR_NORMAL_BIAS + length(origin) * AL_SSR_NORMAL_DISTK;
+    vec3  rayPos  = origin + normalV * nBias + dir * stepLen * (0.5 + dither);
 
     for (int i = 0; i < AL_SSR_STEPS; i++) {
         rayPos += dir * stepLen;
@@ -162,17 +207,18 @@ float alIGN(vec2 p) {
     return fract(52.9829189 * fract(dot(p, vec2(0.06711056, 0.00583715))));
 }
 
-vec3 alGlossyReflSample(vec2 hitUV, float viewDist) {
+vec3 alGlossyReflSample(vec2 hitUV, float viewDist, out vec3 ringMean, out vec3 ringSigma) {
     vec2  texel  = 1.0 / vec2(textureSize(colortex0, 0));
     float radius = AL_SSR_GLOSS_RADIUS + viewDist * AL_SSR_GLOSS_DISTK;
 
     vec3  acc = vec3(0.0);
+    vec3  acc2 = vec3(0.0);          // second moment, for the temporal clip box
     float wsum = 0.0;
     // Centre tap.
     {
         vec3 c = texture(colortex0, hitUV).rgb;
         if (all(greaterThanEqual(c, vec3(0.0))) && all(lessThan(c, vec3(65000.0)))) {
-            acc += c; wsum += 1.0;
+            acc += c; acc2 += c * c; wsum += 1.0;
         }
     }
     for (int i = 0; i < AL_SSR_GLOSS_TAPS; i++) {
@@ -182,24 +228,109 @@ vec3 alGlossyReflSample(vec2 hitUV, float viewDist) {
         if (suv.x < 0.0 || suv.x > 1.0 || suv.y < 0.0 || suv.y > 1.0) continue;
         vec3  c = texture(colortex0, suv).rgb;
         if (!(all(greaterThanEqual(c, vec3(0.0))) && all(lessThan(c, vec3(65000.0))))) continue;
-        acc += c; wsum += 1.0;
+        acc += c; acc2 += c * c; wsum += 1.0;
     }
-    return (wsum > 0.5) ? (acc / wsum) : texture(colortex0, hitUV).rgb;
+    vec3 result = (wsum > 0.5) ? (acc / wsum) : texture(colortex0, hitUV).rgb;
+    // Mean/sigma over the SAME taps: the local reflection distribution this
+    // frame. The temporal pass clips its history into mean +/- gamma*sigma, the
+    // statistical box composite3's TAA uses — it keeps accumulation sharp and
+    // ghost-free instead of degenerating into a temporal blur.
+    ringMean  = result;
+    ringSigma = vec3(0.0);
+    if (wsum > 1.5) {
+        vec3 m1 = acc / wsum;
+        vec3 var = max(acc2 / wsum - m1 * m1, vec3(0.0));
+        ringMean  = m1;
+        ringSigma = sqrt(var);
+    }
+    return result;
 }
+
+#ifdef AL_SSR_TEMPORAL
+/*
+ SSR TEMPORAL ACCUMULATION (colortex10).
+
+ `current` is this frame's resolved reflection for a pixel whose reflective
+ surface sits at view position `viewPos`; `mean`/`sigma` describe the local
+ reflection distribution measured this frame (the glossy ring statistics, or a
+ zero sigma for a purely analytic in-fill, which needs no accumulation).
+
+ Reprojection uses the shared motion vector (lib/space.glsl). History is accepted
+ only when the reprojected pixel is on-screen AND its recorded eye depth agrees
+ with the depth we now predict, so a disocclusion resets instead of smearing.
+ `outHistory` is the value to store back (rgb = accumulated reflection, a = the
+ CURRENT eye depth, which is what the NEXT frame will predict and compare).
+
+ NaN law: every acceptance test is a comparison, so a poisoned history texel
+ (colortex10 has clear=false, and its first-frame contents are undefined) fails
+ every one of them and falls through to `current`.
+*/
+vec3 alAccumulateSSR(vec3 current, vec3 viewPos, vec3 mean, vec3 sigma,
+                     out vec4 outHistory) {
+    float eyeZ = alLinearEyeDepth(viewPos);
+    vec3  result = current;
+    float conf   = AL_SSR_T_CONF_STEP;
+
+    vec2 prevUV, motion; float prevEyeZ;
+    if (alMotionVector(viewPos, texcoord, prevUV, motion, prevEyeZ)) {
+        vec4 hist = texture(colortex10, prevUV);
+        bool ok = all(greaterThanEqual(hist.rgb, vec3(0.0)))
+               && all(lessThan(hist.rgb, vec3(65000.0)))
+               && alHistoryDepthOK(hist.a, prevEyeZ, AL_SSR_T_DEPTH_REJECT);
+        if (ok) {
+            // Statistical clip: only the part of the history that still agrees
+            // with this frame's local reflection distribution survives.
+            vec3 lo = mean - AL_SSR_T_CLIP_GAMMA * sigma;
+            vec3 hi = mean + AL_SSR_T_CLIP_GAMMA * sigma;
+            vec3 clipped = clamp(hist.rgb, min(lo, hi), max(lo, hi));
+            // Confidence ramps with the number of consecutive accepted frames.
+            // It is derived from how far the history had to be clipped: a stable
+            // reflection is barely clipped and converges to the ceiling, a
+            // changing one is clipped hard and stays reactive.
+            float drift = length(clipped - hist.rgb) / (length(mean) + 1.0e-3);
+            float trust = alSaturate(1.0 - drift);
+            float blend = min(AL_SSR_T_MAX_BLEND, AL_SSR_T_MAX_BLEND * trust);
+            result = mix(current, clipped, blend);
+            conf   = blend;
+        }
+    }
+
+    bool good = all(greaterThanEqual(result, vec3(0.0)))
+             && all(lessThan(result, vec3(65000.0)));
+    result = good ? result : current;
+    outHistory = vec4(result, (eyeZ > 0.0 && eyeZ < 65000.0) ? eyeZ : 0.0);
+    return result;
+}
+#endif
 
 #ifdef REFLECTIVE_BLOCKS
 /*
  Material-dependent reflection for a SOLID reflective block (ice / metal / polished)
  or reflective translucent ice. reflAmt (colortex3.b) is the surface reflectivity,
- metal (colortex3.a) selects the model:
-   * DIELECTRIC (ice / polished stone, metal=0): Fresnel-shaped — subtle head-on,
-     reflective at grazing; the reflection is neutral (untinted).
-   * METAL (metal=1): strong at all angles and TINTED by the block's own albedo
-     (iron silver, gold yellow, copper orange) — a proper metallic look.
- Reuses the water SSR raymarch against depthtex0, with a sky-access gate so indoor
- blocks reflect a dark tone instead of the bright sky. NaN-safe: falls back to base.
+ metal (colortex3.a) selects the model. 5.3.0 rewrite — full micro-facet PBR:
+
+   F0        = albedo for a METAL, 0.04 for a DIELECTRIC (lib/pbr.glsl
+               alF0FromAlbedo). A metal's reflection colour IS its F0; the old
+               code used a flat achromatic 0.75 for metals, which is why an iron
+               block read as chrome.
+   ENV BRDF  = the split-sum DFG integral (alEnvBRDFApprox), NOT a bare Fresnel.
+               This is the term that makes reflectivity fall with roughness and
+               rise with grazing angle: rough iron reflects ~0.45 of F0 head-on
+               and more at glancing angles, so it looks like brushed metal that
+               still catches the light, never a mirror.
+   ENERGY    = the specular replaces the fraction of the base it reflects
+               (base * (1 - dfg) + env * dfg), so the block cannot end up
+               brighter than the light it receives.
+
+ The environment itself is the sky LUT blurred toward the zenith ambient by the
+ roughness lobe (the pack has no pre-filtered env mip chain), with the occluded-
+ horizon fade for near-horizontal rays. SSR (sharp, on-screen) is layered in only
+ while the surface is smooth enough for it to be meaningful. NaN-safe: any
+ non-finite result falls back to `base`.
 */
-vec3 alReflectiveBlock(vec3 base, float reflAmt, float metal) {
+vec3 alReflectiveBlock(vec3 base, float reflAmt, float metal, out vec4 histOut) {
+    histOut = vec4(0.0);
+
     float d0 = texture(depthtex0, texcoord).r;
     vec3  P0 = alScreenToView(texcoord, d0);
     float dist0 = length(P0);
@@ -208,15 +339,15 @@ vec3 alReflectiveBlock(vec3 base, float reflAmt, float metal) {
     vec3  Nw = alDecodeNormal(texture(colortex2, texcoord).rg);
     vec3  Nv = normalize(mat3(gbufferModelView) * Nw);
     vec3  I  = normalize(P0);
-    float cosI = alSaturate(dot(-I, Nv));
+    vec3  V  = -I;                                  // surface -> eye
+    float NoV = max(dot(V, Nv), 1.0e-4);
 
-    // Schlick Fresnel with a metal/dielectric F0 (metals reflect more head-on).
-    float f0   = mix(0.04, 0.75, metal);
-    float fres = f0 + (1.0 - f0) * pow(1.0 - cosI, 5.0);
-
-    // Roughness: iron/gold BLOCKS are rough metal, not chrome. Roughness blurs the
-    // environment (toward the soft zenith ambient) and weights DOWN the sharp SSR.
+    // Roughness: iron/gold BLOCKS are rough metal, not chrome.
     float rough = mix(AL_REFL_ROUGH_DIELECTRIC, AL_REFL_ROUGH_METAL, metal);
+    float lobe  = alEnvLobeBlend(rough);            // 0 = mirror, 1 = fully diffuse env
+
+    vec3  albedo = texture(colortex1, texcoord).rgb;
+    vec3  F0     = alF0FromAlbedo(albedo, metal, AL_REFL_F0_DIELECTRIC);
 
     float skyLm   = alSaturate(texture(colortex2, texcoord).a);
     float skyGate = smoothstep(0.0, 0.35, skyLm);
@@ -229,44 +360,61 @@ vec3 alReflectiveBlock(vec3 base, float reflAmt, float metal) {
     float upCut    = smoothstep(0.0, 0.20, Rw.y);
     vec3  skySharp = alSkySample(Rw);
     vec3  ambient  = alSkySample(vec3(0.0, 1.0, 0.0));   // soft zenith env (rough blur)
-    vec3  envRefl  = mix(skySharp, ambient, rough);      // rough -> blurred env
+    vec3  envRefl  = mix(skySharp, ambient, lobe);       // rough -> blurred env
     envRefl = mix(ambient * 0.4, envRefl, upCut);        // occluded horizon -> dim ambient
-    vec3  refl = mix(vec3(0.02, 0.03, 0.04), envRefl, skyGate);
+    envRefl = mix(vec3(0.02, 0.03, 0.04), envRefl, skyGate);
+
+    vec3 ringMean  = envRefl;
+    vec3 ringSigma = vec3(0.0);
 
 #ifdef SSR
     // Sharp SSR only meaningfully contributes for SMOOTH surfaces; a mirror-sharp
-    // reflection on rough iron reads as chrome, so weight it by (1-rough).
-    float ssrW = 1.0 - rough;
+    // reflection on rough iron reads as chrome, so weight it by the lobe and drop
+    // it entirely past AL_REFL_SSR_MAX_ROUGH.
+    float ssrW = (rough < AL_REFL_SSR_MAX_ROUGH) ? (1.0 - lobe) : 0.0;
     if (ssrW > 0.05) {
         float dither = alIGN(gl_FragCoord.xy);
-    #ifdef AL_TAA
+    #if defined(AL_TAA) || defined(AL_SSR_TEMPORAL)
+        // The dither must ADVANCE per frame for the temporal pass to have new
+        // samples to average; with neither TAA nor SSR accumulation it stays
+        // frozen (a static pattern beats a crawling one when nothing resolves it).
         dither = fract(dither + float(frameCounter) * 0.61803398875);
     #endif
         vec2 hitUV;
-        if (alTraceSSR(P0, Rv, dither, hitUV)) {
+        if (alTraceSSR(P0, Nv, Rv, dither, hitUV)) {
             // Glossy pre-filter, widened by roughness so rough metal never chromes
             // and the SSR grain averages out. dist0*(1+rough) grows the kernel.
-            vec3 hitCol = alGlossyReflSample(hitUV, dist0 * (1.0 + rough * 4.0));
+            vec3 mean, sigma;
+            vec3 hitCol = alGlossyReflSample(hitUV, dist0 * (1.0 + rough * 4.0), mean, sigma);
             vec2 e = smoothstep(vec2(0.0), vec2(AL_SSR_EDGE_FADE), hitUV)
                    * (1.0 - smoothstep(vec2(1.0 - AL_SSR_EDGE_FADE), vec2(1.0), hitUV));
             float edgeFade = e.x * e.y * ssrW;
             bool okHit = all(greaterThanEqual(hitCol, vec3(0.0)))
                       && all(lessThan(hitCol, vec3(65000.0)));
-            refl = mix(refl, okHit ? hitCol : refl, edgeFade);
+            if (okHit) {
+                envRefl   = mix(envRefl, hitCol, edgeFade);
+                ringMean  = mix(envRefl, mean, edgeFade);
+                ringSigma = sigma * edgeFade;
+            }
         }
     }
 #endif
 
-    // Metal tints the reflection with its own albedo (F0 colour); dielectric neutral.
-    vec3 albedo    = texture(colortex1, texcoord).rgb;
-    vec3 reflColor = refl * mix(vec3(1.0), albedo, metal);
+#ifdef AL_SSR_TEMPORAL
+    envRefl = alAccumulateSSR(envRefl, P0, ringMean, ringSigma, histOut);
+#endif
 
-    // Strength: dielectric Fresnel-driven (subtle head-on); metal moderate + tinted
-    // and capped by roughness so it reads as brushed metal, never a chrome mirror.
-    float strength = mix(reflAmt * fres, reflAmt * (0.45 + 0.35 * fres), metal);
-    strength = alSaturate(strength * REFLECTIVE_STRENGTH);
+    // --- Micro-facet composition ------------------------------------------
+    // dfg is the split-sum environment BRDF: the fraction (and colour) of the
+    // environment this micro-surface actually reflects toward the eye.
+    vec3 dfg = alEnvBRDFApprox(F0, rough, NoV)
+             * alSaturate(reflAmt * REFLECTIVE_STRENGTH);
 
-    vec3 result = mix(base, reflColor, strength);
+    // Metals have (almost) no diffuse lobe; dielectrics keep theirs in full.
+    vec3 diffuseKeep = base * mix(1.0, AL_REFL_METAL_DIFFUSE, alSaturate(metal));
+    // Energy conservation: what is reflected is not also transmitted/diffused.
+    vec3 result = diffuseKeep * (vec3(1.0) - dfg) + envRefl * dfg;
+
     bool ok = all(greaterThanEqual(result, vec3(0.0)));
     return ok ? min(result, vec3(65000.0)) : base;
 }
@@ -274,6 +422,11 @@ vec3 alReflectiveBlock(vec3 base, float reflAmt, float metal) {
 
 void main() {
     vec3 base = texture(colortex0, texcoord).rgb;
+    // Iris: a buffer listed in RENDERTARGETS but not written by an invocation
+    // receives GARBAGE. Every early-out below therefore leaves a valid history
+    // value; vec4(0.0) is the "no reflection here" reset (depth 0 fails the next
+    // frame's alHistoryDepthOK test, so it can never be blended in).
+    outSSR = vec4(0.0);
 
 #if DEBUG_VIEW != 0
     // Keep the debug probes / raw-channel views exactly as upstream wrote them —
@@ -289,7 +442,10 @@ void main() {
     // Reflective solid blocks (ice / metal / polished) and reflective translucent
     // ice — tagged with reflectivity in colortex3.b (+ metalness in .a). Not water.
     if (mat != AL_MATID_WATER && m3.b > 0.01) {
-        outColor = vec4(alReflectiveBlock(base, m3.b, m3.a), 1.0);
+        vec4 blockHist;
+        vec3 blockCol = alReflectiveBlock(base, m3.b, m3.a, blockHist);
+        outColor = vec4(blockCol, 1.0);
+        outSSR   = blockHist;
         return;
     }
 #endif
@@ -348,32 +504,72 @@ void main() {
     // (Rw.y small); only up-pointing rays show real sky. SSR overrides below with
     // actual on-screen geometry where it hits.
     float upCut = smoothstep(AL_WATER_REFL_HORIZON_LO, AL_WATER_REFL_HORIZON_HI, Rw.y);
-    vec3  skyR  = mix(AL_WATER_REFL_OCCLUDED, alSkySample(Rw), upCut);
-    vec3 refl = mix(vec3(0.015, 0.020, 0.035), skyR, skyGate);  // fallback + cave gate
+
+    // --- SSR IN-FILL (the fix for the griddy dark patches, image_6af8bc.jpg) --
+    // A screen-space ray can only hit what is on screen. Seen from above, the
+    // sharp Gerstner crests scatter reflected rays toward the horizon and below
+    // it, where the march has no data at all — and the old fallback for those
+    // directions was a near-black constant, so the misses printed a dark, uniform
+    // grain GRID over the water. The in-fill gives every direction a plausible,
+    // never-black reflection instead:
+    //   * up-pointing rays        -> the real sky LUT sample,
+    //   * horizon/downward rays   -> the water's OWN body colour (AL_WATER_TINT,
+    //                                the same tint the Beer-Lambert absorption
+    //                                below drives toward), lit by the ambient sky
+    //                                and floored so it can never resolve to black.
+    // Because the fallback is a smooth analytic function of the reflected
+    // direction, neighbouring hit and miss pixels differ by a soft amount rather
+    // than by "scene colour vs black" — the grid cannot form even where the
+    // hit/miss pattern itself is high frequency.
+    vec3  skyAmb   = alSkySample(vec3(0.0, 1.0, 0.0));
+    float ambLum   = max(alLuminance(skyAmb), 0.0);
+    vec3  bodyTone = max(AL_WATER_TINT * max(ambLum * AL_WATER_INFILL_BODY_K,
+                                             AL_WATER_INFILL_FLOOR),
+                         AL_WATER_REFL_OCCLUDED);
+    vec3  skyR  = mix(bodyTone, alSkySample(Rw), upCut);
+    vec3 refl = mix(vec3(0.015, 0.020, 0.035), skyR, skyGate);  // in-fill + cave gate
+    vec3 ringMean  = refl;      // analytic in-fill: noise-free, so sigma stays 0
+    vec3 ringSigma = vec3(0.0);
 
 #ifdef SSR
     // Non-tiling IGN ray-start (was a 256px-tiling noisetex lookup -> grid grain).
-    // Coherent between neighbours so adjacent rays hit/miss together. Frozen under
-    // FXAA (stable, FXAA-smoothable); advanced per frame only under TAA to resolve.
+    // Coherent between neighbours so adjacent rays hit/miss together. Advanced per
+    // frame whenever something downstream resolves it (TAA, or this pass's own
+    // temporal accumulation); frozen otherwise so it cannot crawl.
     float dither = alIGN(gl_FragCoord.xy);
-#ifdef AL_TAA
+#if defined(AL_TAA) || defined(AL_SSR_TEMPORAL)
     dither = fract(dither + float(frameCounter) * 0.61803398875);
 #endif
 
     vec2 hitUV;
-    if (alTraceSSR(P0, Rv, dither, hitUV)) {
+    if (alTraceSSR(P0, Nv, Rv, dither, hitUV)) {
         // Glossy pre-filter: average a small ring around the hit so the SSR
         // "grid grain" (per-pixel ripple/dither divergence) reads as smooth gloss.
-        vec3 hitCol = alGlossyReflSample(hitUV, dist0);
-        // Fade the reflection to the sky sample near the screen edges (the march
-        // has no data past them) so reflections don't clip hard.
+        vec3 mean, sigma;
+        vec3 hitCol = alGlossyReflSample(hitUV, dist0, mean, sigma);
+        // Fade the reflection to the in-fill near the screen edges (the march
+        // has no data past them) so reflections don't clip hard. AL_WATER_INFILL_SOFT
+        // additionally softens EVERY hit into the in-fill, so a hit pixel and its
+        // missing neighbour differ gradually instead of forming a hard cell edge.
         vec2 e = smoothstep(vec2(0.0), vec2(AL_SSR_EDGE_FADE), hitUV)
                * (1.0 - smoothstep(vec2(1.0 - AL_SSR_EDGE_FADE), vec2(1.0), hitUV));
-        float edgeFade = e.x * e.y;
+        float edgeFade = e.x * e.y * (1.0 - AL_WATER_INFILL_SOFT);
         bool okHit = all(greaterThanEqual(hitCol, vec3(0.0)))
                   && all(lessThan(hitCol, vec3(65000.0)));
-        refl = mix(refl, okHit ? hitCol : refl, edgeFade);
+        if (okHit) {
+            refl      = mix(refl, hitCol, edgeFade);
+            ringMean  = mix(refl, mean, edgeFade);
+            ringSigma = sigma * edgeFade;
+        }
     }
+#endif
+
+#ifdef AL_SSR_TEMPORAL
+    // Temporal accumulation of the resolved reflection (see alAccumulateSSR).
+    // This is what removes the residual per-frame graininess that no spatial
+    // filter can: the stochastic ray start + micro-ripple normals average out
+    // over ~12 frames while the statistical clip keeps the result sharp.
+    refl = alAccumulateSSR(refl, P0, ringMean, ringSigma, outSSR);
 #endif
 
     // SUN GLINT: the sun disc is not in the depth buffer, so SSR can never reflect
@@ -432,15 +628,18 @@ void main() {
         transmitted = submerged * mix(vec3(1.0), absorb, 1.0 - fres);
 
 #ifdef WATER_FOAM
-        // CONTACT FOAM: soft shoreline foam where the water column is shallow (the
-        // surface is close to the terrain behind it). Softened (STR) + gated to open
-        // sky so it is not a jarring white band.
+        // CONTACT (EDGE) FOAM: foam where the water column is shallow — i.e.
+        // against shorelines and around any block the water meets. The depth
+        // proximity is only the DRIVE; on its own it is a smooth gradient, which
+        // is exactly the "uniform bright white band" in the field report.
         contactFoam = (1.0 - smoothstep(0.0, AL_WATER_FOAM_CONTACT, waterPath))
                     * skyLm * AL_WATER_FOAM_CONTACT_STR;
-        // WHISPY FRACTAL breakup: modulate by the same domain-warped foam noise so the
-        // shoreline foam is chaotic whiskers, not a uniform white band.
+        // The drive is ERODED through the domain-warped ridged noise field, so the
+        // band is chewed into chaotic whiskers with holes and torn edges that
+        // follow the block boundary rather than tracing it uniformly.
         vec2 foamWP = (alViewToPlayer(P0) + cameraPosition).xz;
-        contactFoam *= 0.15 + 0.85 * alWaterFoamNoise(foamWP, frameTimeCounter);
+        contactFoam = alWaterFoamErode(contactFoam,
+                                       alWaterFoamNoise(foamWP, frameTimeCounter));
 #endif
     }
 
@@ -448,12 +647,22 @@ void main() {
     vec3 result = mix(transmitted, refl, fres);
 
 #ifdef WATER_FOAM
-    // Shoreline foam on top (matte). Darkened at night (day factor) + by sky access
-    // so it reads moonlit-grey after dark instead of glowing white (field report).
+    // Shoreline/edge foam on top (matte). PHYSICALLY LIT, not a painted white:
+    // foam is a bright but ordinary diffuse albedo, so its radiance is the sky
+    // ambient it receives plus a Lambert-weighted share of the direct sun/moon —
+    // the same radiometric quantities the rest of the frame is exposed against.
+    // That is what stops it "glowing" white: at night the ambient collapses and
+    // the foam goes moonlit grey on its own, with no magic night constant needed
+    // beyond a small floor for readability.
     if (contactFoam > 0.001) {
-        float foamDayF = alSmooth(smoothstep(-0.06, 0.16, alSunDirWorld().y));
-        vec3  foamCol  = AL_WATER_FOAM_COLOR * (0.25 + 0.55 * skyLm)
-                       * mix(AL_WATER_FOAM_NIGHT, 1.0, foamDayF);
+        vec3  sunDirW  = alSunDirWorld();
+        // AL_WATER_FOAM_NIGHT is now a FLOOR on the ambient share (so foam under
+        // a covered edge, or at night, stays faintly readable) rather than a
+        // separate brightness fudge: the day/night response comes from the sky
+        // radiance itself.
+        vec3  ambient  = skyAmb * max(0.35 + 0.65 * skyLm, AL_WATER_FOAM_NIGHT);
+        vec3  direct   = alDirectColor(sunDirW) * (max(sunDirW.y, 0.0) * skyLm * 0.35);
+        vec3  foamCol  = AL_WATER_FOAM_COLOR * (ambient + direct);
         result = mix(result, foamCol, contactFoam);
     }
 #endif

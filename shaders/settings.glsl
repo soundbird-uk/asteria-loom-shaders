@@ -327,6 +327,29 @@ const float shadowDistance = 128.0; // [64.0 96.0 128.0 192.0 256.0]
 // the blur never bleeds AO across a crease/corner.
 #define AL_AO_DENOISE_NORMALK 0.86
 
+// --- SHADOW temporal accumulation (5.3.0, colortex11) ---------------------
+// PCSS/PCF filters a stochastic Vogel disc: the penumbra is the AVERAGE of a
+// handful of randomly rotated taps, so a single frame of it is grainy at every
+// soft shadow edge (the "fuzzy noisy texture" in the field report). Increasing
+// SHADOW_SAMPLES is the brute-force fix and costs linearly; accumulating the
+// SAME taps over time is free by comparison and converges to the true penumbra.
+// deferred1 reprojects the previous frame's resolved visibility (colortex11) and
+// blends, while lib/shadow.glsl advances the per-pixel Vogel rotation every frame
+// (AL_SHADOW_ANIMATE) so each frame contributes NEW taps rather than repeating
+// the same ones.
+//   MAX_BLEND    — history ceiling (0.88 => ~8-frame effective average).
+//   CONF_STEP    — disocclusion re-convergence rate.
+//   DEPTH_REJECT — relative eye-depth mismatch that discards history.
+//   CLAMP        — the history is additionally clamped to the current frame's
+//                  value +/- this. It is wider than the tap noise (so the noise
+//                  still averages away) but tight enough that a moving occluder
+//                  cannot drag a stale shadow along behind it (ghosting).
+#define AL_SHADOW_TEMPORAL
+#define AL_SHADOW_T_MAX_BLEND    0.88
+#define AL_SHADOW_T_CONF_STEP    0.16
+#define AL_SHADOW_T_DEPTH_REJECT 0.05
+#define AL_SHADOW_T_CLAMP        0.45
+
 
 /* =========================================================================
    CLOUDS  (volumetric 2-layer raymarch — cumulus 3D + cirrus 2D)
@@ -724,6 +747,21 @@ const float sunPathRotation = -35.0;
 // the sharp SSR contribution, so metal reads as brushed metal, never chrome.
 #define AL_REFL_ROUGH_METAL      0.62
 #define AL_REFL_ROUGH_DIELECTRIC 0.12
+// 5.3.0 full micro-facet (GGX) reflection — see lib/pbr.glsl.
+//   F0_DIELECTRIC — achromatic normal-incidence reflectance for non-metals
+//                   (0.04 is the physical value for most dielectrics). The old
+//                   code used 0.04..0.75 lerped by metalness, which is NOT how
+//                   metals work: a metal's F0 IS its albedo, so iron got a flat
+//                   0.75 grey mirror = the chrome look in the field report.
+//   METAL_DIFFUSE — how much of the forward-lit diffuse a metal keeps. Physically
+//                   a metal has NO diffuse lobe, but killing it outright makes an
+//                   unlit indoor iron block read as a black hole, so a small
+//                   fraction is retained (documented deviation).
+//   SSR_MAX_ROUGH — above this roughness the sharp screen-space reflection is
+//                   dropped entirely; only the (blurred) environment remains.
+#define AL_REFL_F0_DIELECTRIC 0.04
+#define AL_REFL_METAL_DIFFUSE 0.25
+#define AL_REFL_SSR_MAX_ROUGH 0.80
 
 // Portals get water-like SSR reflections too (composite reflective path, gated by
 // REFLECTIVE_BLOCKS). Dielectric (metalness 0) -> Fresnel-shaped, deep reflections.
@@ -836,6 +874,21 @@ const vec3 AL_WATER_FOAM_COLOR = vec3(0.86, 0.92, 0.96);
 // uniform white band. SCALE = world frequency, WARP = domain-warp strength.
 #define AL_WATER_FOAM_SCALE 0.85
 #define AL_WATER_FOAM_WARP  1.30
+// 5.3.0 WHISKER foam: the 3-octave warped field above still read as a soft,
+// uniform gradient band because it was used as a plain MULTIPLIER. The mask is
+// now built from RIDGED octaves (1 - |simplex|), which produce filaments rather
+// than blobs, and is applied as an EROSION THRESHOLD: foam only survives where
+// (drive * noise) clears the threshold, so the band's own edge is chewed into
+// broken whiskers instead of fading out evenly.
+//   OCTAVES   — ridged octaves in the fractal sum.
+//   WARP2     — second-stage domain warp (finer, counter-rotated) = whiskers.
+//   ERODE_LO/HI — the erosion smoothstep window applied to (drive * mask).
+//   FIL       — extra high-frequency filament gain near the erosion edge.
+#define AL_WATER_FOAM_OCTAVES  4
+#define AL_WATER_FOAM_WARP2    0.65
+#define AL_WATER_FOAM_ERODE_LO 0.18
+#define AL_WATER_FOAM_ERODE_HI 0.62
+#define AL_WATER_FOAM_FIL      0.55
 
 // --- Reflection: occluded-horizon fix + sun glint (5.1.2) ------------------
 // Near-horizontal reflected rays are almost always occluded by shore terrain /
@@ -851,6 +904,26 @@ const vec3 AL_WATER_FOAM_COLOR = vec3(0.86, 0.92, 0.96);
 // dim WATER tone so misses/downward rays read as the water reflecting itself, never
 // a black hole; SSR still overrides with real on-screen geometry.
 const vec3 AL_WATER_REFL_OCCLUDED = vec3(0.050, 0.100, 0.140);
+// --- SSR IN-FILL (5.3.0) ---------------------------------------------------
+// A screen-space ray can only ever hit what is ON SCREEN. From an overhead view
+// the sharp Gerstner crests scatter rays toward geometry that is off-screen or
+// behind the camera, so a large fraction of pixels MISS — and every miss used to
+// fall back to a near-black occluded tone, printing the dark, uniform grainy
+// GRID over the water in image_6af8bc.jpg.
+// The in-fill replaces "miss => dark" with "miss => a plausible reflection":
+//   * up-pointing rays          -> the real sky LUT sample,
+//   * horizon / downward rays   -> the water's own depth-tinted body colour
+//                                  (deep = the absorbed ocean tone, shallow =
+//                                  brighter), lifted by the sky lightmap,
+// blended by the horizon ramp above. FLOOR is a hard lower bound on the in-fill
+// luminance scale so no ray direction can ever resolve to black.
+//   BODY_K   — how much of the sky's own brightness the body tone borrows.
+//   FLOOR    — minimum in-fill scale (never 0 => never a black patch).
+//   HIT_SOFT — how softly a partial/edge-faded SSR hit crossfades into the
+//              in-fill, so hit and miss neighbours cannot form a hard grid.
+#define AL_WATER_INFILL_BODY_K 0.55
+#define AL_WATER_INFILL_FLOOR  0.22
+#define AL_WATER_INFILL_SOFT   0.35
 // Analytic SUN GLINT (the sun disc isn't in the depth buffer, so SSR can't reflect
 // it): a tight specular toward the sun so water sparkles with the sun/moon.
 #define AL_WATER_SUN_SPEC     9.0
@@ -895,6 +968,41 @@ const vec3 AL_WATER_TINT = vec3(0.09, 0.19, 0.22);
 #define AL_SSR_GLOSS_TAPS    8       // ring taps averaged (+ the centre)
 #define AL_SSR_GLOSS_RADIUS  1.6     // base kernel radius (texels of colortex0)
 #define AL_SSR_GLOSS_DISTK   0.04    // extra radius per metre of view distance
+
+// --- SSR ray hygiene (5.3.0) ----------------------------------------------
+// NORMAL_BIAS: the march starts this far ALONG THE SURFACE NORMAL (metres,
+// scaled with view distance) so a ray leaving a surface cannot immediately
+// re-intersect the very pixel it came from. Self-intersection is what let a
+// near-horizontal ray "hit" the surface it started on and paste the bright sky
+// horizon band INSIDE the block (field report: "a horizon bar reflected within
+// the block, as if looking through it").
+// MIN_DOT: a reflected ray whose direction points INTO the surface (dot with the
+// normal <= this) is geometrically impossible; reject before marching instead of
+// letting it wander behind the geometry and return an arbitrary depth hit.
+#define AL_SSR_NORMAL_BIAS   0.06
+#define AL_SSR_NORMAL_DISTK  0.015
+#define AL_SSR_MIN_DOT       0.02
+
+// --- SSR TEMPORAL ACCUMULATION (5.3.0, colortex10) -------------------------
+// SSR is a stochastic, per-pixel process (dithered ray start + per-pixel ripple
+// normals), so a SINGLE frame of it is inherently noisy — no purely spatial
+// filter can remove that without destroying the reflection. The fix is temporal:
+// reproject the previous frame's resolved reflection through the motion vector
+// (lib/space.glsl alMotionVector) and accumulate.
+//   MAX_BLEND    — history ceiling (0.92 => ~12-frame effective average).
+//   CONF_STEP    — how fast a freshly disoccluded pixel earns that ceiling.
+//   DEPTH_REJECT — relative eye-depth disagreement that rejects history.
+//   CLIP_GAMMA   — the accumulated history is clipped to mean +/- gamma*sigma of
+//                  the CURRENT frame's glossy ring taps (the same statistical
+//                  clip composite3's TAA uses). This is what keeps the result
+//                  SHARP and ghost-free rather than a temporal blur: history is
+//                  only trusted while it agrees with the local reflection
+//                  distribution measured this frame.
+#define AL_SSR_TEMPORAL
+#define AL_SSR_T_MAX_BLEND    0.92
+#define AL_SSR_T_CONF_STEP    0.14
+#define AL_SSR_T_DEPTH_REJECT 0.05
+#define AL_SSR_T_CLIP_GAMMA   1.35
 // Screen-space REFRACTION: how far (uv) the water normal bends the submerged scene
 // sample. Subtle + distance-faded so the seabed wobbles under the surface without
 // tearing. (5.1.0 water overhaul.)

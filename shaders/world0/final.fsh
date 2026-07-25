@@ -65,6 +65,15 @@
                          tiles (layout in lib/bloom.glsl). Cleared. Format
                          declared here on the BLOOM agent's behalf per contract
                          §2 (TAA agent owns the colortex8/9 format consts).
+   colortex10   RGBA16F  SSR temporal history (5.3.0): rgb = accumulated
+                         reflection radiance, a = the reflective surface's eye
+                         depth when it was written (the reprojection test).
+                         `clear.colortex10 = false`; composite.fsh reads it
+                         ('main') and writes it ('alt') in the same pass, which
+                         Iris allows for composite-style programs.
+   colortex11   RGBA16F  Shadow-visibility temporal history (5.3.0): r = resolved
+                         visibility, g = confidence, b = eye depth.
+                         `clear.colortex11 = false`; written by deferred1.
    shadowcolor0 RGBA8    reserved for Phase 2 (coloured/translucent shadows);
                          Phase 1's shadow pass is depth-only, so nothing is
                          allocated yet — this only reserves the format.
@@ -82,6 +91,8 @@ const int colortex6Format = RGBA16F;
 const int colortex7Format = RGBA16F;
 const int colortex8Format = RGBA16F;
 const int colortex9Format = RGBA16F;
+const int colortex10Format = RGBA16F;
+const int colortex11Format = RGBA16F;
 const int shadowcolor0Format = RGBA8;
 */
 
