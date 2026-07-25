@@ -805,14 +805,13 @@ const float sunPathRotation = -35.0;
 //   SPEED    — dispersion rate (omega = SPEED*sqrt(k); long waves travel faster)
 //   STEEPNESS— crest-pinch: higher sharpens crests / broadens troughs (0..1-ish;
 //              auto-bounded per wave by 1/(k*N) so the surface never self-loops)
-#define AL_WATER_WAVE_K       0.36
+#define AL_WATER_WAVE_K       0.28   // base wavenumber (2pi/lambda); 0.28 ~ 22-block swell
 #define AL_WATER_WAVE_GAIN    1.28
-#define AL_WATER_WAVE_AMP     0.115
-#define AL_WATER_AMP_GAIN     0.82
-#define AL_WATER_WAVE_SPEED   0.55
-#define AL_WATER_STEEPNESS    3.0    // crest-pinch (bounded per-wave; ~0.16 total << 1
-                                     // so geometry never self-loops, but crests
-                                     // sharpen enough for the Jacobian to dip at tops)
+#define AL_WATER_WAVE_AMP     0.148  // base swell amplitude (world metres); 0.148 = ocean feel
+#define AL_WATER_AMP_GAIN     0.80   // gentler amplitude decay per octave so short chop < long swells
+#define AL_WATER_WAVE_SPEED   0.68   // dispersion rate; faster for long open-water swells
+#define AL_WATER_STEEPNESS    3.8    // crest-pinch (bounded per-wave; higher = sharper whitecap tops
+                                     // without self-loop; Jacobian dips more -> more crest foam)
 // SHORELINE SAFETY: Gerstner also pulls vertices HORIZONTALLY, which can drag a
 // water vertex away from the solid block beside it and open a seam/void at the
 // shore. We can't detect neighbours in a vertex shader, so we DAMP the horizontal
@@ -835,10 +834,10 @@ const float sunPathRotation = -35.0;
 //   WARP  — domain-warp strength (breaks any grid so ripples read organic)
 //   FADE  — blocks over which the micro layer fades out (anti-sparkle at range)
 #define AL_WATER_MICRO_SCALE  0.90
-#define AL_WATER_MICRO_AMP    0.08
+#define AL_WATER_MICRO_AMP    0.13   // stronger capillary-ripple tilt for visible fine texture
 #define AL_WATER_MICRO_SPEED  0.80
-#define AL_WATER_MICRO_WARP   0.55
-#define AL_WATER_MICRO_FADE   26.0
+#define AL_WATER_MICRO_WARP   0.70   // stronger warp = more organic, non-grid micro ripples
+#define AL_WATER_MICRO_FADE   32.0   // micro detail visible from noticeably further away (was 26)
 
 // --- Footprint normal anti-aliasing (fixes the "grid grain" on water) -------
 // The ripple normal is high-frequency world-space detail. When a single screen
@@ -863,21 +862,21 @@ const float sunPathRotation = -35.0;
 //   CONTACT   — shoreline foam thickness: water within this many blocks (depth)
 //               of the terrain behind it foams.
 //   COLOR     — foam albedo (linear).
-#define AL_WATER_FOAM_JAC_HI   0.985
-#define AL_WATER_FOAM_JAC_LO   0.900
-#define AL_WATER_FOAM_CONTACT  0.85
-const vec3 AL_WATER_FOAM_COLOR = vec3(0.86, 0.92, 0.96);
+#define AL_WATER_FOAM_JAC_HI   0.975  // foam begins at sharper crests (was 0.985)
+#define AL_WATER_FOAM_JAC_LO   0.870  // foam full at heavily-folded crests (was 0.900)
+#define AL_WATER_FOAM_CONTACT  0.55   // narrower shore band (0.55 blocks); was 0.85 which read as a painted ring
+const vec3 AL_WATER_FOAM_COLOR = vec3(0.90, 0.94, 0.97);  // more white, less blue-tinted foam
 // 5.1.2 foam tone: contact (shoreline) foam was too white/jarring and never
 // darkened at night. STR caps its strength; NIGHT is its brightness floor at night
 // (both crest + contact foam are lit by day factor so they read moonlit-grey after
 // dark instead of glowing white).
-#define AL_WATER_FOAM_CONTACT_STR 0.65
+#define AL_WATER_FOAM_CONTACT_STR 0.82  // stronger but narrower = crisp shoreline foam (was 0.65)
 #define AL_WATER_FOAM_NIGHT       0.14
 // 5.2.0 whispy fractal foam: a multi-octave domain-warped simplex mask breaks both
 // the crest and shoreline foam into chaotic, filamentary whiskers instead of a
 // uniform white band. SCALE = world frequency, WARP = domain-warp strength.
-#define AL_WATER_FOAM_SCALE 0.85
-#define AL_WATER_FOAM_WARP  1.30
+#define AL_WATER_FOAM_SCALE 1.15  // finer noise frequency -> less "tiled texture" look (was 0.85)
+#define AL_WATER_FOAM_WARP  1.55  // stronger coarse domain warp = bigger organic tongues (was 1.30)
 // 5.3.0 WHISKER foam: the 3-octave warped field above still read as a soft,
 // uniform gradient band because it was used as a plain MULTIPLIER. The mask is
 // now built from RIDGED octaves (1 - |simplex|), which produce filaments rather
@@ -888,11 +887,11 @@ const vec3 AL_WATER_FOAM_COLOR = vec3(0.86, 0.92, 0.96);
 //   WARP2     — second-stage domain warp (finer, counter-rotated) = whiskers.
 //   ERODE_LO/HI — the erosion smoothstep window applied to (drive * mask).
 //   FIL       — extra high-frequency filament gain near the erosion edge.
-#define AL_WATER_FOAM_OCTAVES  4
-#define AL_WATER_FOAM_WARP2    0.65
-#define AL_WATER_FOAM_ERODE_LO 0.18
-#define AL_WATER_FOAM_ERODE_HI 0.62
-#define AL_WATER_FOAM_FIL      0.55
+#define AL_WATER_FOAM_OCTAVES  5     // one extra ridged octave for finer filament branching (was 4)
+#define AL_WATER_FOAM_WARP2    0.95  // stronger fine warp = more hair-like whisker tips (was 0.65)
+#define AL_WATER_FOAM_ERODE_LO 0.24  // more aggressive erosion threshold (was 0.18) -> more holes/gaps
+#define AL_WATER_FOAM_ERODE_HI 0.72  // wider erosion window for gradual filament edges (was 0.62)
+#define AL_WATER_FOAM_FIL      0.75  // stronger filament gain at torn edges (was 0.55)
 
 // --- Reflection: occluded-horizon fix + sun glint (5.1.2) ------------------
 // Near-horizontal reflected rays are almost always occluded by shore terrain /
@@ -959,8 +958,8 @@ const vec3 AL_WATER_TINT = vec3(0.09, 0.19, 0.22);
 // below 1 so water never becomes a hard chrome mirror (dreamy identity).
 #define AL_WATER_F0          0.02
 #define AL_WATER_REFLECT_MAX 0.90
-#define AL_SSR_MAX_DIST      48.0   // total view-space march length (metres)
-#define AL_SSR_THICKNESS     1.10   // max surface thickness accepted as a hit (m)
+#define AL_SSR_MAX_DIST      64.0   // longer SSR reach for more complete reflections (was 48)
+#define AL_SSR_THICKNESS     0.90   // tighter hit tolerance = fewer false positives (was 1.10)
 #define AL_SSR_REFINE        5      // binary-search refinement iterations
 #define AL_SSR_EDGE_FADE     0.12   // screen-edge reflection fade width (uv)
 // GLOSSY reflection pre-filter (deterministic grain fix). The SSR hit colour is
@@ -969,7 +968,7 @@ const vec3 AL_WATER_TINT = vec3(0.09, 0.19, 0.22);
 // "grid grain" on water viewed from above) is smoothed into a soft gloss. The
 // radius grows with view distance because far water sub-tends fewer pixels, so
 // the same world-space ripples alias into a tighter, harsher grid there.
-#define AL_SSR_GLOSS_TAPS    8       // ring taps averaged (+ the centre)
+#define AL_SSR_GLOSS_TAPS    10      // more ring taps for smoother glossy average (was 8)
 #define AL_SSR_GLOSS_RADIUS  1.6     // base kernel radius (texels of colortex0)
 #define AL_SSR_GLOSS_DISTK   0.04    // extra radius per metre of view distance
 
@@ -1014,7 +1013,7 @@ const vec3 AL_WATER_TINT = vec3(0.09, 0.19, 0.22);
 // Screen-space REFRACTION: how far (uv) the water normal bends the submerged scene
 // sample. Subtle + distance-faded so the seabed wobbles under the surface without
 // tearing. (5.1.0 water overhaul.)
-#define AL_WATER_REFRACT     0.028
+#define AL_WATER_REFRACT     0.022  // moderately reduced UV offset (was 0.028); less "rubber-glass" warp
 
 // --- Absorption (internal, not GUI) ----------------------------------------
 // Beer-Lambert tint of the SUBMERGED scene by the water path length between the

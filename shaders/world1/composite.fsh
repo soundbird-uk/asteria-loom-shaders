@@ -568,9 +568,18 @@ void main() {
     // hit/miss pattern itself is high frequency.
     vec3  skyAmb   = alSkySample(vec3(0.0, 1.0, 0.0));
     float ambLum   = max(alLuminance(skyAmb), 0.0);
+    // NIGHT-AWARE IN-FILL: the occluded-ray body tone and the fixed floor must
+    // scale with ambient light, otherwise at night the water holds an unrealistic
+    // persistent bright-blue glow from AL_WATER_REFL_OCCLUDED and the fixed
+    // AL_WATER_INFILL_FLOOR regardless of actual sky brightness. nightK goes
+    // from 0 at deep night to 1 at full day; a small floor keeps a hint of tone
+    // visible even under the moon so the surface never reads as pure black.
+    float nightK   = alSaturate(ambLum * 7.0);
+    float inFillFloor = AL_WATER_INFILL_FLOOR * max(nightK, 0.04);
+    vec3  occluded = AL_WATER_REFL_OCCLUDED   * max(nightK, 0.12);
     vec3  bodyTone = max(AL_WATER_TINT * max(ambLum * AL_WATER_INFILL_BODY_K,
-                                             AL_WATER_INFILL_FLOOR),
-                         AL_WATER_REFL_OCCLUDED);
+                                             inFillFloor),
+                         occluded);
     vec3  skyR  = mix(bodyTone, alSkySample(Rw), upCut);
     vec3 refl = mix(vec3(0.015, 0.020, 0.035), skyR, skyGate);  // in-fill + cave gate
     vec3 ringMean  = refl;      // analytic in-fill: noise-free, so sigma stays 0
@@ -649,11 +658,19 @@ void main() {
         // (view xy), subtle + distance-faded, and FADE THE OFFSET TO ZERO near the
         // screen edges (plus a hard clamp) so a distorted UV can never sample off-
         // screen and smear/black-edge when the camera moves fast.
-        float refrFade = 1.0 / (1.0 + dist0 * 0.08);
+        // DEPTH FIX ("block duplicates"): also fade the offset to zero when the water
+        // column is very shallow. When a block sits on or right next to the water
+        // surface waterPath ≈ 0, so the refracted UV would shift onto the block's own
+        // screen pixels and create a visible duplicate. Scaling by alSaturate(waterPath
+        // / 0.45) suppresses refraction to zero at zero depth and restores it over the
+        // first ~0.45 m of water column so the effect only appears where there is
+        // actually water to distort through.
+        float refrFade  = 1.0 / (1.0 + dist0 * 0.08);
+        float refrDepth = alSaturate(waterPath / 0.45);
         float edgeK    = min(min(texcoord.x, 1.0 - texcoord.x),
                              min(texcoord.y, 1.0 - texcoord.y));
         float edgeFade = smoothstep(0.0, 0.06, edgeK);   // 0 at the very edge
-        vec2  refrUV = clamp(texcoord + Nv.xy * (AL_WATER_REFRACT * refrFade * edgeFade),
+        vec2  refrUV = clamp(texcoord + Nv.xy * (AL_WATER_REFRACT * refrFade * edgeFade * refrDepth),
                              vec2(0.002), vec2(0.998));
         vec3  submerged = texture(colortex0, refrUV).rgb;
 
