@@ -1133,10 +1133,11 @@ const vec3 AL_UW_SNOW_TINT  = vec3(0.82, 0.86, 0.94);
 #define AL_AGX_WARM 0.006
 
 // --- Auto-exposure (internal, not GUI) ------------------------------------
-// Mac-path auto-exposure: composite5 meters the deep-mip average scene
-// luminance and adapts colortex5.a. Deliberately GENTLE and asymmetric so it
-// never undoes the field-approved dark nights (see composite5.fsh for the loop
-// design + the composite1 alpha-clobber limitation).
+// Mac-path auto-exposure: composite14 meters the deep-mip average scene
+// luminance and adapts colortex5.a (a true persistent slot — composite1 now
+// preserves that alpha instead of clobbering it, so the loop reads last frame's
+// value). Deliberately GENTLE and asymmetric so it never undoes the field-
+// approved dark nights (see composite14.fsh for the loop design).
 //   KEY       target average luminance (drives KEY/avgLum metering)
 //   MIN/MAX   clamp on the metered multiplier. Combined with STRENGTH below the
 //             FINAL exposure multiplier is bounded to mix(1,MIN,STRENGTH) ..
@@ -1145,8 +1146,9 @@ const vec3 AL_UW_SNOW_TINT  = vec3(0.82, 0.86, 0.94);
 //             the field-approved noon/night levels always carry over (contract
 //             §0). It is a gentle correction, not a full metering.
 //   STRENGTH  how far toward the metered target vs a neutral 1.0 (subtle)
-//   TAU       adaptation time constant (seconds) for the temporal smoothing
-//   ADAPT_MIN floor on the per-frame blend rate (keeps metering effective)
+//   TAU       adaptation time constant (seconds) of the exponential integrator:
+//             the exposure converges toward the metered target over ~TAU seconds
+//             (rate = 1 - exp(-frameTime/TAU)), frame-rate independent.
 // 0.4.4 ("dark areas too light"): tightened the auto-exposure so it can't lift
 // caves/night toward daylight (MAX 1.16 -> 1.04, STRENGTH 0.5 -> 0.30).
 #define AL_EXPOSURE_KEY 0.26
@@ -1154,7 +1156,6 @@ const vec3 AL_UW_SNOW_TINT  = vec3(0.82, 0.86, 0.94);
 #define AL_EXPOSURE_MAX 1.04
 #define AL_EXPOSURE_STRENGTH 0.30
 #define AL_EXPOSURE_TAU 1.0
-#define AL_EXPOSURE_ADAPT_MIN 0.35
 
 // Anti-Aliasing MODE. 0 = Off, 1 = FXAA, 2 = TAA.
 //   FXAA — fast spatial edge smoothing done on the final tonemapped image (where

@@ -46,8 +46,9 @@ current composite(clouds)→composite1, current composite1(fog)→composite2
 | colortex9 | RGBA16F | Bloom tile atlas (mip chain packed as tiles, documented layout in lib/bloom.glsl) | yes |
 
 colortex5.a (spare channel of AO history) additionally carries the ADAPTED EXPOSURE
-value at texel (0,0), written by final's predecessor chain — see §6. (Document in
-final.fsh; writes must preserve the AO history rgb semantics exactly.)
+value at texel (0,0), written by composite14 and PRESERVED by composite1 (its only
+other writer) so it persists across the frame — see §6. (Writes must preserve the
+AO history rgb semantics exactly.)
 
 ## 3. Water (WATER agent — HIGH effort)
 
@@ -143,13 +144,19 @@ final.fsh; writes must preserve the AO history rgb semantics exactly.)
   330 math (matrix + polynomial fit, no LUT textures). Calibrate default exposure
   so noon/night match current field-approved levels within ~10%.
 - **Auto exposure (Mac path)**: `const bool colortex0MipmapEnabled = true;` on
-  final; sample a deep mip (≈average scene luminance) → target EV; temporal
+  composite14; sample a deep mip (≈average scene luminance) → target EV; temporal
   adaptation: read previous adapted value from colortex5.a texel (0,0) (composite14
   writes it back alongside its colour output — composite14 has RENDERTARGETS 0,5
   writing colortex5 with rgb passthrough of AO history and a=exposure ONLY at
-  texel (0,0), preserving AO history semantics everywhere else — implement
-  carefully and document; NaN-law with sane clamps [0.25, 4.0] EV range, smooth
-  adaptation ~1s up/down). `EXPOSURE` option becomes a bias multiplier.
+  texel (0,0), preserving AO history semantics everywhere else). `composite1`
+  (the only other colortex5 writer, running earlier) PRESERVES that alpha instead
+  of clobbering it to 1.0, giving the exposure a single-writer persistent slot; the
+  loop is therefore a genuine exponential integrator (rate = 1 - exp(-frameTime/TAU),
+  ~AL_EXPOSURE_TAU ≈ 1s convergence, frame-rate independent). No feedback runaway:
+  the metered average comes from colortex0 BEFORE exposure is applied (final is the
+  only consumer that multiplies it in). NaN-law with sane clamps; the asymmetric
+  MIN/MAX + STRENGTH target clamp bounds the multiplier to ~[0.90,1.08] so nights
+  are never brightened. `EXPOSURE` option becomes a bias multiplier.
 - **Biome-adaptive grading**: subtle per-biome-category grade nudges (desert
   warmer/golden, swamp green-mossy, snow cool-crisp, jungle lush) via
   temperature/rainfall/category uniforms — small (≤10%) shifts, smooth.

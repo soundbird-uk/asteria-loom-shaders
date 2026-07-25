@@ -38,15 +38,20 @@
      texelFetch this pixel's exact stored value and re-emit rgb (and .a everywhere
      but (0,0)) UNCHANGED, writing the exposure ONLY at (0,0).
 
-     KNOWN LIMITATION (documented, unchanged from the former composite5): the true
-     previous exposure cannot be recovered here. composite1 (clouds, out of this
-     agent's ownership) rewrites colortex5.a = 1.0 fullscreen every frame BEFORE
-     this pass runs, so `texelFetch(colortex5,(0,0)).a` reads composite1's 1.0,
-     not last frame's exposure. The loop is therefore a STABLE partial correction:
-     the metered target is a low-frequency full-screen average (it changes slowly
-     as the camera moves), so blending toward it from the neutral read each frame
-     is flicker-free without a real integrator. A proper multi-frame integrator
-     would need a persistent single-writer exposure slot — out of scope this phase.
+     MULTI-FRAME INTEGRATOR: the exposure at colortex5.a(0,0) is a genuine
+     persistent accumulator. composite1 (the only other colortex5 writer, which
+     runs BEFORE this pass) now PASSES THE STORED .a THROUGH instead of clobbering
+     it to 1.0, so `texelFetch(colortex5,(0,0)).a` here reads LAST FRAME's adapted
+     exposure. The loop is a true exponential integrator toward the metered
+     target with time constant AL_EXPOSURE_TAU:
+         expo = mix(prevExp, target, 1 - exp(-frameTime / AL_EXPOSURE_TAU))
+     i.e. it converges over ~AL_EXPOSURE_TAU seconds regardless of frame rate,
+     not the old single-step "partial correction". No feedback runaway: the
+     metered average is read from colortex0 BEFORE any exposure is applied (final
+     is the ONLY consumer that multiplies the exposure in), so the value the
+     integrator meters never contains its own output. Stability comes from the
+     slow tau and the asymmetric target clamp (AL_EXPOSURE_MIN/MAX + STRENGTH),
+     which bound the multiplier to ~[0.90,1.08] so nights are never brightened.
 
  Combine gated by `#ifdef BLOOM`; the pass itself always runs (auto-exposure is
  needed even with bloom off). Sampler count: 3 (colortex0, colortex9, colortex5).
@@ -113,16 +118,20 @@ void main() {
                           AL_EXPOSURE_MIN, AL_EXPOSURE_MAX);
     float target  = mix(1.0, metered, AL_EXPOSURE_STRENGTH);
 
-    // Previous exposure (see KNOWN LIMITATION). Range-validate [0.2,5.0] (NaN
-    // fails the comparisons) else reset to 1.0.
+    // Previous adapted exposure — now the TRUE last-frame value (composite1
+    // preserves colortex5.a; see header). Range-validate [0.2,5.0] (NaN fails the
+    // comparisons, so first-frame garbage self-heals) else reset to 1.0.
     float prevExp = texelFetch(colortex5, ivec2(0, 0), 0).a;
     prevExp = (prevExp >= 0.2 && prevExp <= 5.0) ? prevExp : 1.0;
 
-    // Smooth toward target. Frame-time based (tau ~ AL_EXPOSURE_TAU seconds),
-    // floored so a stalled frameTime can't freeze adaptation; the moderate rate
-    // keeps metering effective under the composite1 alpha clobber (see above).
+    // Exponential adaptation toward target with time constant AL_EXPOSURE_TAU:
+    // a real multi-frame integrator (rate = 1 - exp(-dt/tau)) that converges over
+    // ~tau seconds independent of frame rate. frameTime is floored/capped to a
+    // sane range so a stalled or bogus frameTime can neither freeze nor overshoot
+    // adaptation. The asymmetric target clamp above (never > AL_EXPOSURE_MAX)
+    // keeps nights from being brightened; the slow tau kills flicker.
     float ft   = (frameTime > 0.0 && frameTime < 1.0) ? frameTime : 0.016;
-    float rate = clamp(1.0 - exp(-ft / AL_EXPOSURE_TAU), AL_EXPOSURE_ADAPT_MIN, 1.0);
+    float rate = clamp(1.0 - exp(-ft / max(AL_EXPOSURE_TAU, 1.0e-3)), 0.0, 1.0);
     float expo = mix(prevExp, target, rate);
     expo = (expo >= 0.2 && expo <= 5.0) ? expo : 1.0;
 

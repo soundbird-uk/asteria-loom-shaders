@@ -40,8 +40,10 @@ prepare → shadow → gbuffers(opaque) → deferred → deferred1 → gbuffers(
   colortex10 history, with an analytic in-fill so a failed ray never resolves to black) +
   Beer-Lambert absorption tint of the submerged scene + projected caustics + the GGX
   micro-facet reflection for reflective/metal blocks (`lib/pbr.glsl`). Writes colortex0 and 10.
-- **composite1** — volumetric clouds raymarch + temporal blend; keeps the AO-history and
-  cloud-history copies (writes colortex0, 5, 7).
+- **composite1** — volumetric clouds raymarch + temporal blend; also spatially denoises the
+  AO into the colortex5 history and cloud history (writes colortex0, 5, 7). Preserves
+  colortex5's alpha (the persistent auto-exposure slot) byte-exact so composite14's
+  integrator reads last frame's exposure.
 - **composite2** — aerial-perspective fog, plus the underwater-medium branch when the eye is
   submerged. Gated on `AERIAL_FOG`.
 - **composite3** — TAA resolve: reproject + neighbourhood clamp; writes colortex0 and the
@@ -54,11 +56,13 @@ prepare → shadow → gbuffers(opaque) → deferred → deferred1 → gbuffers(
   coarse level is 3×3-tent-upsampled and added onto the next finer level in place
   (U5…U2), walking the pyramid back up. Gated on `BLOOM`.
 - **composite14** — bloom **combine** (final level U1 = L1 + tent(U2), added into
-  the scene) plus auto-exposure metering; writes the adapted-exposure value back
-  into colortex5's spare alpha at texel (0,0). Always runs (auto-exposure);
-  bloom-combine is `#ifdef BLOOM`. Each atlas pass writes every colortex9 texel
-  (pass-through copy) to stay coherent under Iris' double-buffer flip — see
-  `lib/bloom.glsl`.
+  the scene) plus auto-exposure metering; runs a true exponential exposure
+  integrator (converges over `AL_EXPOSURE_TAU` seconds) and writes the adapted
+  value into colortex5's spare alpha at texel (0,0). `composite1` preserves that
+  alpha (it no longer clobbers it), so the integrator reads last frame's exposure.
+  Always runs (auto-exposure); bloom-combine is `#ifdef BLOOM`. Each atlas pass
+  writes every colortex9 texel (pass-through copy) to stay coherent under Iris'
+  double-buffer flip — see `lib/bloom.glsl`.
 - **final** — mip-average auto-exposure → AgX tonemap → biome/weather grade → linear-to-sRGB
   → optional debug view. Holds the canonical buffer-format `const` block.
 

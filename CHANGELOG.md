@@ -41,6 +41,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   byte-for-byte across `world0` / `world1` / `world-1`.
 
 
+### Fixed — auto-exposure is now a real multi-frame integrator
+
+- **Auto-exposure genuinely converges over time instead of a single-step partial
+  correction.** The documented KNOWN LIMITATION was that `composite1` rewrote
+  `colortex5.a = 1.0` fullscreen every frame *before* the exposure pass, so
+  `texelFetch(colortex5,(0,0)).a` in `composite14` read `1.0` rather than last
+  frame's exposure — the loop could never integrate. `composite1` (the only other
+  `colortex5` writer, and the one that runs first) now **preserves** that alpha:
+  it `texelFetch`es the stored `.a` and re-emits it (range-guarded to keep the
+  persistent buffer finite) rather than writing the constant `1.0`. The `.a`
+  channel is not part of the AO history (deferred uses `r`/`g`/`b` only), so this
+  costs one extra read-while-write sampler and leaves the AO denoise/history
+  semantics byte-exact. With a single authoritative exposure writer, `composite14`
+  now runs a true exponential integrator toward the metered target
+  (`rate = 1 - exp(-frameTime / AL_EXPOSURE_TAU)`, ~1 s convergence, frame-rate
+  independent) reading the real previous value. No feedback runaway (the metered
+  average is read from `colortex0` before exposure is applied in `final`); the
+  asymmetric `MIN`/`MAX` + `STRENGTH` target clamp still bounds the multiplier to
+  ~[0.90,1.08] so field-approved dark nights are never brightened. The now-unused
+  `AL_EXPOSURE_ADAPT_MIN` (the old per-frame-rate floor that papered over the
+  clobber) was removed; `settings.glsl`, `composite1`/`composite14` headers,
+  `docs/architecture.md` and `docs/architecture/phase4-contract.md` updated.
+  Mirrored byte-for-byte across `world0` / `world1` / `world-1`.
+
 ### Fixed — aerial fog sky-gate on translucent surfaces
 
 - **Aerial fog no longer mis-gates translucent overlays by the geometry behind

@@ -25,7 +25,16 @@
       accumulator integrates a spatially clean signal — spatial and temporal
       filtering cooperate instead of the accumulator forever chasing raw
       per-pixel GTAO grain. (When AO or AL_AO_DENOISE is off this degrades to the
-      original verbatim raw copy — see the copy block in main().)
+      original verbatim raw copy — see the copy block in main().) The AO term
+      occupies rgb; colortex5.a is PRESERVED byte-exact (see below).
+
+   4. PRESERVE colortex5.a — the persistent auto-exposure slot. composite14 stores
+      the frame's adapted exposure in colortex5.a at texel (0,0); this pass runs
+      BEFORE it, so it must pass the stored .a through unchanged instead of the old
+      constant 1.0, otherwise the exposure integrator can never read last frame's
+      value. .a is not part of the AO history (deferred uses r/g/b only), so this
+      is free: we texelFetch this pixel's stored .a and re-emit it (range-guarded
+      to keep the persistent buffer finite — see main()).
 
  ---- TRACK-5 BILATERAL AO DENOISE (job 3) --------------------------------
  GTAO writes a stochastically JITTERED estimate (deferred rotates each pixel's
@@ -66,11 +75,17 @@
  plane-prediction and residual intermediate are qualified `highp` so Apple's GL
  4.1 driver cannot demote the view-space maths to fp16 and shear the plane test.
 
- IRIS BUFFER CONTRACT: this pass READS colortex4 (never written here) and WRITES
- colortex5 (never read here), so the AO denoise needs no buffer flip. colortex0
- and colortex7 ARE read-and-written; Iris' automatic ping-pong (flip.<program>.
- <buffer>) supplies the previous contents on read — the documented read-while-
- write rule. depthtex0/depthtex1/colortex2 are read-only.
+ IRIS BUFFER CONTRACT: this pass WRITES colortex5 (AO history) AND now READS it
+ back to PRESERVE its alpha channel. colortex5.a at texel (0,0) is the persistent
+ auto-exposure slot: composite14 writes last frame's adapted exposure there, and
+ this pass must NOT clobber it — it is the single value the exposure integrator
+ reprojects from (see composite14's header). We therefore texelFetch this pixel's
+ stored .a and re-emit it UNCHANGED; the AO term (rgb) is rebuilt from colortex4
+ as before. Reading-and-writing colortex5 is the documented read-while-write rule:
+ Iris' automatic ping-pong supplies last frame's contents on read (the same rule
+ colortex0/colortex7 rely on). We still write EVERY texel (fullscreen, no skips),
+ so the flipped buffer is never left with stale content. depthtex0/depthtex1/
+ colortex2 are read-only.
 
  CLOUD RAY DOMAIN: only where the layers are actually visible. depthtex1 (NO
  translucents) gives the opaque terrain distance; the cumulus/cirrus march far
@@ -91,9 +106,10 @@
  A noisetex + golden-ratio march-start dither makes the accumulation converge.
 
  Sampler count (worst case, clouds ON):
-   base: colortex0, colortex2, colortex3, colortex4, depthtex0, depthtex1 = 6
+   base: colortex0, colortex2, colortex3, colortex4, colortex5, depthtex0,
+         depthtex1 = 7
    clouds: + colortex7 + noisetex + colortex6 (sky LUT, via the
-           lib/atmosphere.glsl include) = 9   (<= 16 Mac hard limit / validator).
+           lib/atmosphere.glsl include) = 10   (<= 16 Mac hard limit / validator).
    colortex2 + depthtex0 are only SAMPLED inside the AO-denoise #if; when it is
    compiled out they are two harmless unused uniforms (Iris still supplies them).
 */
@@ -102,6 +118,7 @@ uniform sampler2D colortex0;   // scene HDR
 uniform sampler2D colortex2;   // octahedral G-buffer normal .rg (AO denoise edge-stop)
 uniform sampler2D colortex3;   // G-buffer matID .r (player/hand cloud occlusion)
 uniform sampler2D colortex4;   // this frame's AO (r), confidence (g)
+uniform sampler2D colortex5;   // AO history (rgb) + persistent exposure in .a (preserved)
 uniform sampler2D depthtex0;   // ALL-geometry depth (the basis GTAO was built on)
 uniform sampler2D depthtex1;   // opaque-only depth (stored history depth + cloud far bound)
 
@@ -399,5 +416,15 @@ void main() {
     float linZ  = (depth >= 1.0) ? 0.0
                                  : alLinearEyeDepth(alScreenToView(texcoord, depth));
     linZ = (linZ >= 0.0 && linZ < 65000.0) ? linZ : 0.0;
-    outHistory = vec4(aoR, aoG, linZ, 1.0);
+
+    // PRESERVE the persistent auto-exposure slot: colortex5.a at texel (0,0) is
+    // last frame's adapted exposure (written by composite14, which runs after this
+    // pass). Passing the stored .a through unchanged keeps a SINGLE authoritative
+    // writer of the exposure value, so composite14's integrator reads the TRUE
+    // previous exposure. Range-guarded [0.2,5.0] -> 1.0 so the persistent buffer
+    // stays finite (clear=false: the undefined first frame self-heals to 1.0);
+    // this only touches .a and never the AO history rgb.
+    float prevExp = texelFetch(colortex5, ivec2(gl_FragCoord.xy), 0).a;
+    prevExp = (prevExp >= 0.2 && prevExp <= 5.0) ? prevExp : 1.0;
+    outHistory = vec4(aoR, aoG, linZ, prevExp);
 }
