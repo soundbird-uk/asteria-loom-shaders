@@ -7,6 +7,74 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (5.3.0) — grain, chrome metal, griddy water and painted foam
+
+- **The fuzzy, noisy grain across reflections, AO and shadow edges is gone.** SSR
+  and PCSS are both *stochastic*: they estimate a value from a handful of randomly
+  offset samples, so a single frame of either is a noisy estimate — that noise is
+  what read as a constantly-crawling fuzzy texture over every reflective surface
+  and every soft shadow edge. Both are now **temporally accumulated**: motion
+  vectors are derived from the previous-frame matrices (`lib/space.glsl`
+  `alMotionVector`, following the Iris uniform docs), the previous result is
+  reprojected, depth-validated and blended in.
+  - SSR history lives in the new **colortex10** (`clear=false`) and is clipped to
+    mean ± γ·σ of the current frame's glossy ring taps — the same statistical clip
+    the TAA resolve uses, so accumulation stays **sharp** instead of smearing.
+  - Shadow history lives in the new **colortex11**. `lib/shadow.glsl` now advances
+    the per-pixel Vogel rotation **every frame** in the accumulating pass
+    (`AL_SHADOW_ANIMATE`), so each frame contributes new taps rather than repeating
+    the same ones; history is clamped to the current estimate ± a tolerance so a
+    moving occluder cannot drag a stale shadow behind it.
+  - The contact-shadow dither moved from a 256 px **tiling** `noisetex` lookup to
+    non-tiling Interleaved Gradient Noise — the tiling lookup was printing a
+    repeating grid into the contact shadows.
+  - GTAO already accumulated temporally and now shares the same helpers.
+
+- **Iron and other metal blocks no longer look like chrome.** Reflectivity was a
+  hand-rolled Fresnel with a flat `F0 = 0.75` for metals — physically wrong, and
+  the reason metal read as a mirror. Reflections now use a real micro-facet model
+  (new `shaders/lib/pbr.glsl`: GGX distribution, height-correlated Smith
+  visibility, Schlick Fresnel) and, for environment light, the **split-sum
+  environment BRDF** (Karis/Lazarov analytic fit) rather than a bare Fresnel:
+  - a metal's **F0 is its own albedo** (iron grey, gold yellow, copper orange);
+  - roughness now genuinely suppresses reflectivity — rough iron reflects ~45 % of
+    F0 head-on and more at grazing, i.e. brushed metal that still catches light;
+  - the composition is **energy conserving** (`base·(1−dfg) + env·dfg`), so a block
+    can never end up brighter than the light it receives;
+  - with no sky access the environment falls back to the block's own lit colour, so
+    an indoor metal block reflects the room it is in instead of turning black.
+
+- **The "horizon bar reflected inside the block" is fixed.** Two SSR ray-hygiene
+  rules were missing: a reflected ray pointing **into** the surface is now rejected
+  outright (`AL_SSR_MIN_DOT`), and the march starts **offset along the normal**
+  (`AL_SSR_NORMAL_BIAS`, scaled with view distance) so a ray can no longer
+  immediately re-intersect the pixel it came from and paste the sky horizon band
+  inside the block. This also fixes reflections that only appeared at certain
+  angles.
+
+- **The griddy dark patches on water seen from above are gone** (`image_6af8bc.jpg`).
+  A screen-space ray can only hit what is on screen; from an overhead view the sharp
+  Gerstner crests scatter rays toward off-screen geometry, so a large fraction of
+  pixels **miss** — and every miss fell back to a near-black tone, printing a dark
+  uniform grain grid over the water. Misses now take an **in-fill**: the real sky
+  sample for up-pointing rays, the water's own depth-tinted body colour (the same
+  tint the Beer-Lambert absorption drives toward) for horizon/downward rays, with a
+  hard luminance floor so **no direction can resolve to black**. Hits additionally
+  crossfade softly into the in-fill, so hit and miss neighbours can never form a
+  hard cell edge. Absorption, caustics and the Gerstner wave normals are unchanged.
+
+- **Foam is whispy and fractal instead of a painted white band.** The foam field is
+  now built from **ridged** octaves (`1 − |simplex|`, which concentrates energy into
+  thin filaments) under a **two-stage domain warp** (coarse tongues, then a fine
+  counter-offset shear into whiskers), and — the important part — it is applied as
+  an **erosion threshold** on the product of the physical drive (crest Jacobian, or
+  shoreline depth proximity) and the noise, not as a plain multiplier. The band
+  therefore develops holes and torn edges rather than fading out evenly, with an
+  extra filament gain along the torn boundary. Edge/shoreline foam is also lit
+  radiometrically now (sky ambient + a Lambert share of the direct sun) rather than
+  by a fixed brightness curve, so it stops glowing plain white and darkens naturally
+  at night.
+
 ### Fixed (5.2.5) — cave openings now fog with distance like the terrain around them
 
 - **The unfogged dark hole at a cave mouth is gone.** Aerial fog is sky-gated

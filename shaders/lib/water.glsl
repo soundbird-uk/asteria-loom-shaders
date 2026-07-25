@@ -360,7 +360,9 @@ float alWaterFoamErode(float drive, float mask) {
     // appear along the torn boundary rather than in the solid interior.
     float edge = eroded * (1.0 - eroded) * 4.0;
     float fil  = 1.0 + AL_WATER_FOAM_FIL * edge * (mask * 2.0 - 1.0);
-    return alSaturate(eroded * fil) * alSaturate(drive);
+    // NOTE: `drive` is NOT applied again here — it is already baked into `v`, so
+    // re-multiplying would square it and leave the foam far too sparse to see.
+    return alSaturate(eroded * fil);
 }
 
 #endif // AL_LIB_WATER

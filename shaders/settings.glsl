@@ -760,7 +760,11 @@ const float sunPathRotation = -35.0;
 //   SSR_MAX_ROUGH — above this roughness the sharp screen-space reflection is
 //                   dropped entirely; only the (blurred) environment remains.
 #define AL_REFL_F0_DIELECTRIC 0.04
-#define AL_REFL_METAL_DIFFUSE 0.25
+#define AL_REFL_METAL_DIFFUSE 0.45
+// Environment a reflective block sees with NO sky access (caves, interiors):
+// this fraction of its own forward-lit colour. See composite.fsh for why a metal
+// cannot simply be given a black environment there.
+#define AL_REFL_INDOOR_ENV    0.80
 #define AL_REFL_SSR_MAX_ROUGH 0.80
 
 // Portals get water-like SSR reflections too (composite reflective path, gated by

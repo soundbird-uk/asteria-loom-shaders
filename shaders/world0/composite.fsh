@@ -362,7 +362,13 @@ vec3 alReflectiveBlock(vec3 base, float reflAmt, float metal, out vec4 histOut) 
     vec3  ambient  = alSkySample(vec3(0.0, 1.0, 0.0));   // soft zenith env (rough blur)
     vec3  envRefl  = mix(skySharp, ambient, lobe);       // rough -> blurred env
     envRefl = mix(ambient * 0.4, envRefl, upCut);        // occluded horizon -> dim ambient
-    envRefl = mix(vec3(0.02, 0.03, 0.04), envRefl, skyGate);
+    // NO-SKY (indoor) FALLBACK. A metal has (almost) no diffuse lobe, so if its
+    // environment collapsed to a near-black constant indoors the block would read
+    // as a black hole — physically "correct" and visually broken. Instead the
+    // environment falls back to the block's OWN forward-lit colour, which is a
+    // cheap but energy-sane stand-in for the room's radiance: an indoor iron block
+    // then reflects the light it is actually standing in.
+    envRefl = mix(base * AL_REFL_INDOOR_ENV, envRefl, skyGate);
 
     vec3 ringMean  = envRefl;
     vec3 ringSigma = vec3(0.0);
