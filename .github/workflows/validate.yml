@@ -26,10 +26,23 @@ jobs:
         #   advanced — MC_OS_WINDOWS, GL 4.6, all four IRIS_FEATURE_* on
         # Sources stay `#version 330 compatibility`, so this validates branch
         # selection across the real platform combinations, not GL 4.6 syntax.
+        #
+        # NOTE: this invocation is the macOS gate and must stay as-is — no
+        # --overlay, no --allow-compute. A `.csh` anywhere under shaders/ is a
+        # HARD failure here, because Iris compiles every compute program a pack
+        # ships and macOS GL 4.1 cannot compile them, which breaks loading of
+        # the whole pack. Do not "fix" a failure here by relaxing this step.
         run: python3 tools/validate.py --target all
 
-      - name: Package installable zip
-        run: python3 tools/package.py --version ci
+      - name: Validate advanced overlay build (Windows/Linux pack)
+        # shaders/ + shaders-advanced/ merged into a temp tree, then validated.
+        # --overlay implies --allow-compute, so .csh programs are discovered and
+        # compiled with -S comp. This covers what the Advanced zip ships; it
+        # does NOT weaken the gate above.
+        run: python3 tools/validate.py --target advanced --overlay shaders-advanced
+
+      - name: Package installable zips (default + advanced)
+        run: python3 tools/package.py --version ci --variant all
 
       - name: Upload pack artifact
         uses: actions/upload-artifact@v4

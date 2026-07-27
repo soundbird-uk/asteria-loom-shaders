@@ -10,7 +10,9 @@
  G-buffer recap (formats declared once, in final.fsh):
    colortex1 RGBA8  : albedo.rgb, a = vanilla AO / spare (1.0 default)
    colortex2 RGBA16 : normal.rg (octahedral), lightmap.ba (block, sky)
-   colortex3 RGBA8  : r = matID/255, g = flag bits/255, ba spare
+   colortex3 RGBA8  : r = matID/255, g = flag bits/255 OR emitter light level
+                      (see the EMITTER LIGHT LEVEL note below), ba spare
+                      (terrain overloads .b/.a as reflectivity/metalness)
 */
 
 #include "/lib/common.glsl"
@@ -51,6 +53,26 @@ int   alDecodeMatID(float v)  { return int(v * 255.0 + 0.5); }
 
 float alEncodeFlags(int bits)  { return float(bits) / 255.0; }
 int   alDecodeFlags(float v)   { return int(v * 255.0 + 0.5); }
+
+/* ---- EMITTER LIGHT LEVEL (colortex3.g) ----------------------------------
+   COLOURED BLOCK LIGHT (5.4.0) needs to know, per pixel, "is this surface a
+   light SOURCE, and how strong is it" so the deferred2 gather can weight each
+   emitter by its real emission rather than treating a sculk vein like a
+   glowstone block. There is no free buffer left in the opaque G-buffer, but
+   colortex3.g is: it has only ever been written as alEncodeFlags(AL_FLAG_NONE)
+   (== 0.0) and is read by NOTHING in the pack (verified across every program).
+   So the channel is reused, WITHOUT breaking the flag convention: AL_FLAG_NONE
+   is 0 and every non-emitter still writes exactly 0, so "flags == none" and
+   "emission == 0" are the same bit pattern. If real flag bits are ever needed
+   they must move to a different channel — this note is the record of that.
+
+   The stored value is the block's light level normalised to [0,1] (level/15),
+   which survives the RGBA8 quantisation with ~4 levels of headroom per step.
+   Because RGBA8 is UNORM the hardware clamps it, so this channel can never
+   carry a NaN into the gather (the pack's NaN law is satisfied structurally).
+   Only AL_MATID_EMISSIVE pixels ever write a non-zero value. */
+float alEncodeEmission(float level01) { return alSaturate(level01); }
+float alDecodeEmission(float v)       { return alSaturate(v); }
 
 /* ---- Octahedral normal encode/decode ------------------------------------
    Maps a unit vector to vec2 in [0,1] (fits colortex2.rg at 16-bit UNORM).

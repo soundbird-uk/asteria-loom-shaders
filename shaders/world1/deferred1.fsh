@@ -35,14 +35,26 @@
  cleared (0,0) buffer whose .r would BLACKEN the ambient terms — hence the
  compile-time gate with a 1.0 fallback, never a runtime read of cleared data.
 
+ COLOURED BLOCK LIGHT (5.4.0): colortex13.rgb carries the screen-space gather of
+ nearby emitters' colour (written by deferred2). It is read here and handed to
+ lib/lighting.glsl, which turns it into the block-light HUE only — the intensity
+ still comes from lm.x, so nothing can leak through geometry. The read is behind
+ `#ifdef COLORED_BLOCKLIGHT` so the sampler does not exist when the feature is
+ off (the deferred2 pass is skipped entirely then, via program.deferred2.enabled).
+ deferred2 runs AFTER this pass, so this necessarily samples LAST frame's buffer;
+ colortex13 is therefore clear=false and the read is NaN-proof range-validated
+ inside alBlockLightTint(). See deferred2.fsh for the full rationale.
+
  Sampler count (max over branches):
    colortex0,1,2,3 + depthtex0                                   = 5
    + colortex4 (AO)                                              = 1  (AO on)
+   + colortex11 (AL_SHADOW_TEMPORAL, on by default)              = 1
+   + colortex13 (COLORED_BLOCKLIGHT)                             = 1
    + shadow samplers via lib/shadow.glsl (SHADOWS):
        default software path : shadowtex1 (raw) + noisetex       = 2  -> 8 total
        experimental AL_SHADOW_HW : shadowtex0 + shadowtex1HW + noisetex = 3 -> 9 total
    contact shadows (CONTACT_SHADOWS) reuse depthtex0/noisetex (no new sampler).
- Well within the 16-sampler Mac limit and the contract's <=14 budget.
+ Worst case (everything on) = 13. Within the 16-sampler Mac limit.
 */
 
 uniform sampler2D colortex0;   // sky / scene HDR
@@ -60,6 +72,12 @@ uniform sampler2D depthtex0;
 // the 'alt' one, so reading it here while also listing it in RENDERTARGETS is
 // legal and returns the previous frame's content (nothing else writes it).
 uniform sampler2D colortex11;
+#endif
+#ifdef COLORED_BLOCKLIGHT
+// Coloured block-light gather (HALF resolution, clear=false): rgb = the summed
+// colour of the visible emitters around this pixel. Written by deferred2, which
+// runs AFTER this pass — so this is last frame's content, by design.
+uniform sampler2D colortex13;
 #endif
 
 uniform vec3 sunPosition;          // view space
@@ -309,10 +327,21 @@ void main() {
     ao = pow(aoRaw, AO_STRENGTH);
 #endif
 
+    // Coloured block light: the HUE of the block light reaching this pixel, from
+    // the deferred2 screen-space gather. vec3(0.0) is the documented "nothing
+    // gathered" input, so with the feature off (or on a pixel with no visible
+    // emitter nearby) lib/lighting.glsl returns the unchanged warm ramp. The
+    // buffer is half-res; sampling it with the full-res texcoord gives a free
+    // bilinear reconstruction of the gather's tap noise.
+    vec3 blGather = vec3(0.0);
+#ifdef COLORED_BLOCKLIGHT
+    blGather = texture(colortex13, texcoord).rgb;
+#endif
+
     // worldPos (feet + camera) drives the cloud-shadow factor inside the lib.
     vec3 worldPos = playerPos + cameraPosition;
     vec3 color = alLightPhase1(albedoLin, N, lm, shadowVis, wLightDir, wSunDir,
-                               worldPos, dayFactor, ao);
+                               worldPos, dayFactor, ao, blGather);
 
     // Emissive light sources self-illuminate from their OWN texture colour, so a
     // redstone torch glows red, a torch orange, glowstone yellow, lava orange.

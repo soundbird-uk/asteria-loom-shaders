@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — coloured block light (screen-space)
+
+- **Light sources now tint what they illuminate with their OWN colour.** A redstone
+  torch washes a wall red, soul fire and soul lanterns cool blue, froglights their
+  own hue, lava and torches warm orange — instead of every block light in the world
+  being the same global amber constant.
+- **Only the HUE is screen-space; the INTENSITY is untouched.** Block-light strength
+  still comes exclusively from the vanilla `lm.x` lightmap, whose falloff is the
+  game's own flood fill and is therefore already occlusion-correct. That is what makes
+  the approximation sound: a pixel behind a wall has `lm.x == 0`, so its block-light
+  term is zero no matter what colour the gather found — light can never leak through
+  geometry, and no propagation is reinvented.
+- New `deferred2` pass: a blue-noise-rotated 16-tap disc gather of (emissive albedo ×
+  emission level × distance weight) over the visible emitters near each pixel, at half
+  resolution into **colortex13** (`R11F_G11F_B10F`), temporally accumulated through the
+  new **colortex14** history (blend 0.90, reprojected via the shared
+  `alMotionVector`). Both are `clear = false`.
+- Emitter strength comes from Iris' `at_midBlock.w` (the block's real light level 0-15,
+  via the optional `BLOCK_EMISSION_ATTRIBUTE` feature flag), stored in the previously
+  unused `colortex3.g`. Older Iris / OptiFine fall back to deriving it from albedo
+  luminance on `AL_MATID_EMISSIVE` pixels, so the pack still loads and still works.
+- Emitters that are off-screen or hidden are simply not gathered, and the confidence
+  term falls to 0 there, so the tint **degrades gracefully back to the existing warm
+  candle→ember ramp** rather than going grey. With `COLORED_BLOCKLIGHT` off the pass is
+  skipped entirely (`program.deferred2.enabled`) and the tint is byte-for-byte the old
+  constant.
+- New options: `COLORED_BLOCKLIGHT` toggle and `COLORED_BLOCKLIGHT_STRENGTH` slider on
+  the Lighting screen, set explicitly in all five profiles (off on Potato/Low).
+
 ### Fixed — water normals were built in the wrong component order (root cause of the "grainy grid" and "just blue" water)
 
 - **`alBlendNormals` emitted `(x, z, y)` into a Y-up frame.** The reoriented-normal

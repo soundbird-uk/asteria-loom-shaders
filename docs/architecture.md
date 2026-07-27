@@ -18,7 +18,8 @@ has a binding contract; read the relevant one plus the brief:
 Iris runs a fixed sequence of passes each frame. The current chain:
 
 ```
-prepare → shadow → gbuffers(opaque) → deferred → deferred1 → gbuffers(translucent)
+prepare → shadow → gbuffers(opaque) → deferred → deferred1 → deferred2
+  → gbuffers(translucent)
   → composite → composite1 → composite2 → composite3 → composite4 … composite14 → final
 ```
 
@@ -33,6 +34,13 @@ prepare → shadow → gbuffers(opaque) → deferred → deferred1 → gbuffers(
   + warm blocklight, consuming the G-buffer, shadow textures, sky LUT and AO. Writes colortex0
   and the shadow-visibility history colortex11 (the PCSS taps are rotated per frame and
   temporally accumulated, so soft shadow edges converge instead of speckling).
+- **deferred2** — coloured block light: a blue-noise-rotated disc gather of (emissive
+  albedo × emission level × distance weight) over the visible emitters near each pixel,
+  at **half resolution** into colortex13, temporally accumulated through the colortex14
+  history. `deferred1` consumes it as a block-light **hue** only (the intensity stays with
+  the vanilla `lm.x` lightmap, so light can never leak through geometry) — which means it
+  reads the *previous* frame's colortex13, hence `colortex13Clear = false`. Gated on
+  `COLORED_BLOCKLIGHT` (`program.deferred2.enabled`), so it costs nothing when off.
 - **gbuffers (translucent)** — water, hand_water, weather, translucent entities, forward-lit
   and blended onto colortex0. `gbuffers_water` **also** re-writes surface normal/lightmap
   (colortex2) and material ID (colortex3) so the water composite can find it.
@@ -72,7 +80,8 @@ flowchart LR
   S --> G[gbuffers opaque<br/>write G-buffer]
   G --> D0[deferred<br/>GTAO]
   D0 --> D1[deferred1<br/>lighting]
-  D1 --> T[gbuffers translucent<br/>water writes 0,2,3]
+  D1 --> D2[deferred2<br/>coloured block light]
+  D2 --> T[gbuffers translucent<br/>water writes 0,2,3]
   T --> C0[composite<br/>water SSR + absorption]
   C0 --> C1[composite1<br/>clouds]
   C1 --> C2[composite2<br/>aerial fog + underwater]
@@ -94,7 +103,7 @@ histories. Formats come from the Phase 1–4 contracts.
 | colortex0 | RGBA16F | HDR scene colour (sky → lit scene → translucents → water/clouds/fog/TAA/bloom) | yes (0,0,0,0) |
 | colortex1 | RGBA8 | G-buffer: `albedo.rgb`, `a` = vanilla AO / spare | yes |
 | colortex2 | RGBA16 | G-buffer: octahedral normal in `.rg`, lightmap (block, sky) in `.ba`; water surface re-writes this | yes |
-| colortex3 | RGBA8 | G-buffer: `r` = material ID / 255, `g` = flag bits (see `encoding.glsl`), `ba` spare; water re-writes matID | yes |
+| colortex3 | RGBA8 | G-buffer: `r` = material ID / 255, `g` = emitter light level 0..1 (0 == flag bits NONE — see `encoding.glsl`), `ba` spare (terrain overloads them as reflectivity/metalness); water re-writes matID | yes |
 | colortex4 | RG16F | Current-frame GTAO: `r` = AO term, `g` = temporal confidence | yes |
 | colortex5 | RGBA16F | AO history (`r` AO, `g` confidence, `b` linear depth); `a` at texel (0,0) = adapted exposure | **no** |
 | colortex6 | RGBA16F | Sky-view LUT tile (top-left 256×128 = lat-long sky radiance; read via `alSkySample(dir)`) | **no** |
@@ -104,6 +113,8 @@ histories. Formats come from the Phase 1–4 contracts.
 | colortex10 | RGBA16F | SSR history: `rgb` = accumulated reflection radiance, `a` = the reflective surface's eye depth | **no** |
 | colortex11 | RGBA16F | Shadow history: `r` = resolved visibility, `g` = confidence, `b` = eye depth | **no** |
 | colortex12 | R8 | SSR confidence: `r` = the history ceiling the pixel has earned (one `AL_SSR_T_CONF_STEP` per consecutively accepted frame) | **no** |
+| colortex13 | R11F_G11F_B10F | Coloured block light: `rgb` = the screen-space gather of nearby emitters' colour, consumed by `deferred1` as a hue. **Half resolution** (`size.buffer`) | **no** |
+| colortex14 | RGBA16F | Coloured block-light history: `rgb` = accumulated gather, `a` = eye depth when written. Half resolution, same scale as colortex13 | **no** |
 
 Depth: depthtex0/1 as usual. Shadow: shadowtex0/1 (plain depth textures — the software
 compare path). The persistent (`clear=false`) buffers 5–8, 10 and 11 rely on **NaN-proof
@@ -145,6 +156,7 @@ shaders/
 ├── gbuffers_*.vsh/.fsh     # full opaque + translucent set (incl. entities_translucent)
 ├── deferred.vsh/.fsh       # GTAO
 ├── deferred1.vsh/.fsh      # lighting
+├── deferred2.vsh/.fsh      # coloured block-light gather (half-res, colortex13/14)
 ├── composite.vsh/.fsh      # water FX
 ├── composite1..14.vsh/.fsh # clouds, fog, TAA, bloom pyramid (down/up/combine)
 └── final.vsh/.fsh          # AgX + grade + debug

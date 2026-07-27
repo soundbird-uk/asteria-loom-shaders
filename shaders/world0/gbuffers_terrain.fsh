@@ -1,10 +1,19 @@
 #version 330 compatibility
 #include "/settings.glsl"
+#include "/lib/color.glsl"
 #include "/lib/encoding.glsl"
 
 /*
  gbuffers_terrain (fragment) — writes the opaque G-buffer.
  Sampler count: 1 (gtexture)
+
+ 5.4.0: also stores the EMITTER LIGHT LEVEL in colortex3.g for light-emitting
+ blocks, which is what the deferred2 coloured-block-light gather weights each
+ emitter by (see lib/encoding.glsl for why that channel is free). Terrain is the
+ only writer: every vanilla light source that matters — torches, lava, fire,
+ froglights, glowstone, lanterns, campfires, sea lanterns, shroomlights — is
+ terrain geometry. Block entities / entities / particles keep writing 0 there,
+ which the gather reads as "not an emitter" and skips.
 */
 
 uniform sampler2D gtexture;
@@ -15,6 +24,7 @@ in vec2 lmcoord;
 in vec4 glcolor;
 in vec3 wnormal;
 flat in float emissive;   // 1.0 for light-emitting blocks (block.properties 10040)
+flat in float emitLevel;  // emitter light level 0..1 from at_midBlock.w (0 = derive here)
 flat in float endFrame;   // 1.0 for end_portal_frame (10041) — eye-only glow
 flat in float reflAmt;    // reflectivity 0..1 (block.properties 10050/10051)
 flat in float metalness;  // 1.0 = metal (albedo-tinted reflection)
@@ -47,9 +57,31 @@ void main() {
         }
     }
 
+    // Emitter light level -> colortex3.g (0 on everything that is not a light
+    // source, which is also alEncodeFlags(AL_FLAG_NONE) — see encoding.glsl).
+    float emit = 0.0;
+#ifdef COLORED_BLOCKLIGHT
+    // Compile-time gated: with the feature off nothing reads this channel, so it
+    // stays 0.0 (== alEncodeFlags(AL_FLAG_NONE), the pre-5.4.0 value) and the
+    // luminance fallback below is not even compiled in.
+    if (matID == AL_MATID_EMISSIVE) {
+        // Prefer the real light level from at_midBlock.w (vertex stage). When
+        // that attribute is unavailable it arrives as 0 and we derive a stand-in
+        // from albedo luminance — deliberately the SAME smoothstep deferred1
+        // uses for self-illumination, so a lantern's dark metal frame reads as
+        // "not emitting" here exactly as it does there and the gather picks up
+        // the glass colour rather than the housing.
+        emit = emitLevel;
+        if (emit <= 0.0) {
+            emit = smoothstep(0.22, 0.55, alLuminance(alSrgbToLinear(albedo.rgb)));
+        }
+    }
+#endif
+
     outAlbedo   = vec4(albedo.rgb, 1.0);                       // a = AO spare
     outNormalLm = vec4(alEncodeNormal(wnormal), lmcoord);      // rg normal, ba lightmap
-    // colortex3: r matID, g flags, b reflectivity, a metalness (composite SSR).
+    // colortex3: r matID, g emitter level (== flags NONE when 0), b reflectivity,
+    // a metalness (composite SSR).
     outMaterial = vec4(alEncodeMatID(matID),
-                       alEncodeFlags(AL_FLAG_NONE), reflAmt, metalness);
+                       alEncodeEmission(emit), reflAmt, metalness);
 }

@@ -72,6 +72,81 @@
 // Off = a single flat warm torch tint.
 #define BLOCKLIGHT_TINT // [BLOCKLIGHT_TINT]
 
+/* -------------------------------------------------------------------------
+   COLOURED BLOCK LIGHT  (screen-space — deferred2 + colortex13/14)
+   -------------------------------------------------------------------------
+   Every block light in the pack has so far been the SAME warm constant, so a
+   redstone torch, a soul lantern and a pearlescent froglight all washed their
+   surroundings the identical amber. This replaces the HUE with a per-pixel
+   sampled one: the `deferred2` pass gathers, in a blue-noise-rotated disc
+   around each pixel, the (emissive albedo x emission level) of every VISIBLE
+   emitter, temporally accumulates it (colortex14) and hands it to
+   lib/lighting.glsl as colortex13.
+
+   THE ONE INVARIANT — read before touching any of this: only the HUE comes
+   from the gather. The INTENSITY of block light still comes exclusively from
+   the vanilla `lm.x` lightmap, whose falloff is computed by the game's own
+   flood fill and is therefore already occlusion-correct. That is why light can
+   never leak through a wall: a pixel on the far side of a wall from a torch has
+   lm.x == 0, so `block = blTint * (blAmt * ...)` is zero no matter what colour
+   the screen-space gather thinks it found. Do NOT be tempted to add the
+   gathered magnitude as light — that is exactly the propagation problem this
+   design deliberately refuses to reinvent (real voxel-propagated colour needs
+   the compute/GL4.3 advanced tier the macOS GL4.1 path cannot run).
+
+   Off-screen / unseen emitters simply are not found, and the confidence term
+   falls to 0 there, so the tint degrades GRACEFULLY back to the warm constant
+   ramp below rather than going grey. That fallback is the whole reason the
+   ramp constants are kept.
+   ------------------------------------------------------------------------- */
+
+// Master toggle. Also gates the PASS itself via
+// `program.deferred2.enabled = COLORED_BLOCKLIGHT` in shaders.properties, so
+// turning it off costs literally nothing (the gather never runs and deferred1
+// never declares the colortex13 sampler).
+#define COLORED_BLOCKLIGHT // [COLORED_BLOCKLIGHT]
+
+// How far the sampled hue is allowed to pull the block-light tint away from the
+// warm constant ramp. 0.00 = never (identical to the toggle being off, but the
+// pass still runs), 1.00 = the tuned default (a confident emitter fully owns the
+// hue), >1 over-drives the confidence ramp so weaker/more distant emitters also
+// colour their surroundings.
+// NOTE: the default MUST be spelled exactly as one of the list entries below —
+// "1.0" against a list containing "1.00" makes Iris render a phantom duplicate
+// "Default" entry in the GUI (this pack shipped that bug once already).
+#define COLORED_BLOCKLIGHT_STRENGTH 1.00 // [0.00 0.25 0.50 0.75 1.00 1.25 1.50]
+
+// --- Coloured block-light shaping (internal, not GUI) ---------------------
+// Disc gather (deferred2.fsh). The buffer is HALF resolution and the hue field
+// is inherently low-frequency, so a modest tap count plus the bilinear upsample
+// is plenty; raising TAPS costs linearly for very little.
+#define AL_CBL_TAPS          16     // taps per pixel on the spiral disc
+#define AL_CBL_TURNS         7.0    // spiral turns across the disc (tap spread)
+// World-space reach of the gather (blocks). Beyond this an emitter is rejected
+// outright: vanilla block light dies at 15 blocks, so a source further away is
+// not lighting this pixel and must not colour it.
+#define AL_CBL_WORLD_RADIUS  14.0
+// Ceiling on the PROJECTED search radius (UV) so a pixel right in front of the
+// camera doesn't march a quarter of the screen per tap (same guard as GTAO).
+#define AL_CBL_MAX_RADIUS_UV 0.22
+// Distance falloff of a found emitter: w = level^2 / (1 + d^2 * FALLOFF).
+// Inverse-square flavoured, softened so a torch a few blocks away still counts.
+#define AL_CBL_FALLOFF       0.25
+// Overall gain on the accumulated gather. Only affects CONFIDENCE (the hue is
+// normalised to unit chroma), i.e. how readily a weak/distant emitter wins.
+#define AL_CBL_GAIN          8.0
+// Confidence ramp on the gather's peak channel: below EPS nothing was found
+// (fall back to the constant ramp), at FULL the emitter owns the hue outright.
+// EPS is deliberately above the R11F_G11F_B10F denormal floor.
+#define AL_CBL_EPS           0.004
+#define AL_CBL_FULL          0.050
+// Range-validation ceiling for the persistent-buffer reads (NaN law).
+#define AL_CBL_MAX           65000.0
+// Temporal accumulation (colortex14). The hue field is smooth and slow, so a
+// high blend is safe and kills the disc's per-frame tap noise outright.
+#define AL_CBL_T_BLEND         0.90
+#define AL_CBL_T_DEPTH_REJECT  0.05
+
 // --- Blocklight shaping (internal, not GUI) -------------------------------
 // These scalars tune the falloff so a campfire warms a ~6-block radius at night
 // while its peak stays at ~0.1.1's adjacent-torch brightness (the 0.2.0 field
@@ -1204,6 +1279,14 @@ const vec3 AL_UW_SNOW_TINT  = vec3(0.82, 0.86, 0.94);
 //                   have not shown the crawl that shadows did. If reflection crawl
 //                   IS reported, gate this to `#ifdef AL_TAA` like the others —
 //                   composite.fsh has two sites.
+//   * Coloured   -> disc rotation IS animated unconditionally, for the same
+//     block light    reasons as SSR plus two of its own: the buffer is HALF
+//                   resolution and bilinearly upsampled (a 2x2 box filter for
+//                   free), and only the NORMALISED hue is consumed, so tap-count
+//                   magnitude noise cancels out of the result entirely. It owns
+//                   a validated reprojected accumulator (colortex14, blend 0.90).
+//                   If coloured-light crawl is ever reported, gate the frame
+//                   advance in deferred2.fsh to `#ifdef AL_TAA` like the others.
 //
 // The composite3 temporal RESOLVE runs in both AA modes as an anti-flicker pass.
 

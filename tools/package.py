@@ -3,9 +3,30 @@
 """
 Asteria Loom — release packager.
 
-Builds dist/AsteriaLoom-<version>.zip. Iris expects the zip root to CONTAIN a
-`shaders/` folder (drop the zip on Iris, or unzip into shaderpacks/), so the
-archive members are `shaders/...`.
+Builds one or both distributable zips:
+
+  * dist/AsteriaLoom-<version>.zip           — the DEFAULT pack. Mac-safe:
+    built from `shaders/` alone, and asserted to contain ZERO `.csh`.
+  * dist/AsteriaLoom-Advanced-<version>.zip  — Windows/Linux ONLY. Built from
+    `shaders/` with the `shaders-advanced/` OVERLAY copied on top.
+
+Iris expects the zip root to CONTAIN a `shaders/` folder (drop the zip on Iris,
+or unzip into shaderpacks/), so the archive members are `shaders/...` for BOTH
+variants — the advanced overlay lives in `shaders-advanced/` in the repo but is
+packed into the same `shaders/` prefix.
+
+WHY TWO ZIPS (field-confirmed 2026-07): Iris compiles EVERY `.csh` a pack ships,
+unconditionally — `ProgramSet.readComputeArray` is not feature-gated — and macOS
+(OpenGL 4.1) cannot compile compute shaders. So a single `.csh` anywhere in the
+pack makes the WHOLE pack fail to load on macOS; `#ifdef` gating does not help,
+the file's mere presence is fatal. The compute-using "advanced tier" therefore
+has to ship as a separate archive. The mac-variant `.csh` assertion below is the
+guard that keeps a stray overlay file from ever reaching the default zip.
+
+OVERLAY CONTRACT: `shaders-advanced/` mirrors `shaders/` path-for-path and holds
+ONLY files that differ from, or are new relative to, the canonical tree. Files
+are keyed by their in-zip arcname, so an overlay entry REPLACES the base entry
+of the same path. The tree is never duplicated.
 
 Version resolution order:
   1. --version argument
@@ -21,10 +42,28 @@ import re
 import sys
 import zipfile
 
+# Repo-relative source roots. BASE is canonical and Mac-safe; OVERLAY is the
+# thin delta applied on top of it for the advanced build.
+BASE_ROOT_NAME = "shaders"
+OVERLAY_ROOT_NAME = "shaders-advanced"
+
+# The in-zip prefix Iris expects, for every variant.
+ARC_PREFIX = "shaders"
+
 # Files/dirs we never want in a distributed pack.
 EXCLUDE_NAMES = {".DS_Store", "Thumbs.db", "desktop.ini", ".gitkeep"}
 EXCLUDE_DIR_NAMES = {"__pycache__", ".git"}
 EXCLUDE_SUFFIXES = (".swp", ".swo", ".orig", ".rej", "~", ".pyc")
+# Root-level paths (relative to a source root) that are repo documentation, not
+# shader assets — e.g. shaders-advanced/README.md, which documents the overlay
+# contract and must not be shipped inside the pack.
+EXCLUDE_REL_PATHS = {"README.md"}
+
+# Which source roots each variant is built from, in overlay order.
+VARIANT_ROOTS = {
+    "mac": [BASE_ROOT_NAME],
+    "advanced": [BASE_ROOT_NAME, OVERLAY_ROOT_NAME],
+}
 
 CHANGELOG_VERSION_RE = re.compile(r"^\s*##\s*\[?(\d+\.\d+\.\d+[^\]\s]*)\]?", re.M)
 
@@ -50,19 +89,79 @@ def should_exclude(name):
     return False
 
 
-def collect_files(shaders_root):
-    """Yield (abs_path, arcname) for every packable file under shaders/.
-    arcname is prefixed with 'shaders/' so the zip root contains the folder."""
-    for root, dirs, files in os.walk(shaders_root):
-        # prune excluded directories in place
-        dirs[:] = sorted(d for d in dirs if d not in EXCLUDE_DIR_NAMES)
-        for fn in sorted(files):
-            if should_exclude(fn):
-                continue
-            abs_path = os.path.join(root, fn)
-            rel = os.path.relpath(abs_path, shaders_root)
-            arcname = os.path.join("shaders", rel).replace(os.sep, "/")
-            yield abs_path, arcname
+def collect_files(roots):
+    """Collect the packable files from `roots` (a list of absolute source dirs,
+    in overlay order).
+
+    Returns an ordered dict arcname -> abs_path. Keying by arcname is what makes
+    the overlay work: a later root's file REPLACES an earlier root's file at the
+    same in-zip path, and new overlay paths simply add entries. arcnames are
+    prefixed with 'shaders/' so the zip root contains the folder Iris wants.
+    """
+    collected = {}
+    for src_root in roots:
+        if not os.path.isdir(src_root):
+            continue
+        for root, dirs, files in os.walk(src_root):
+            # prune excluded directories in place
+            dirs[:] = sorted(d for d in dirs if d not in EXCLUDE_DIR_NAMES)
+            for fn in sorted(files):
+                if should_exclude(fn):
+                    continue
+                abs_path = os.path.join(root, fn)
+                rel = os.path.relpath(abs_path, src_root).replace(os.sep, "/")
+                if rel in EXCLUDE_REL_PATHS:
+                    continue
+                arcname = ARC_PREFIX + "/" + rel
+                collected[arcname] = abs_path
+    return collected
+
+
+def zip_name(variant, version):
+    if variant == "advanced":
+        return "AsteriaLoom-Advanced-%s.zip" % version
+    return "AsteriaLoom-%s.zip" % version
+
+
+def build_variant(variant, repo_root, out_dir, version):
+    """Build one variant's zip. Returns (rc, zip_path_or_None)."""
+    roots = [os.path.join(repo_root, name) for name in VARIANT_ROOTS[variant]]
+    if not os.path.isdir(roots[0]):
+        sys.stderr.write("error: %s/ not found at %s\n" % (BASE_ROOT_NAME, roots[0]))
+        return 2, None
+
+    collected = collect_files(roots)
+    if not collected:
+        sys.stderr.write("error: no files collected for variant '%s'\n" % variant)
+        return 2, None
+
+    # ---- HARD SAFETY ASSERT (the reason the split exists) -------------------
+    # The mac/default zip must contain ZERO compute programs. Iris compiles
+    # every .csh it finds, and macOS GL 4.1 cannot compile compute shaders, so
+    # one stray file breaks pack loading entirely. Refuse to write the archive.
+    if variant == "mac":
+        stray = sorted(a for a in collected if a.endswith(".csh"))
+        if stray:
+            sys.stderr.write(
+                "error: refusing to write the macOS-safe pack — %d compute program(s) "
+                "(.csh) would be included:\n" % len(stray))
+            for a in stray:
+                sys.stderr.write("  - %s  (from %s)\n" % (a, collected[a]))
+            sys.stderr.write(
+                "Iris compiles every .csh a pack ships and macOS (OpenGL 4.1) cannot "
+                "compile compute shaders, so the whole pack would fail to load. Compute "
+                "programs belong in %s/ and ship only in the Advanced zip.\n"
+                % OVERLAY_ROOT_NAME)
+            return 3, None
+
+    os.makedirs(out_dir, exist_ok=True)
+    zip_path = os.path.join(out_dir, zip_name(variant, version))
+    with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        for arcname in sorted(collected):
+            zf.write(collected[arcname], arcname)
+
+    print("Packaged %d file(s) [variant=%s] -> %s" % (len(collected), variant, zip_path))
+    return 0, zip_path
 
 
 def default_repo_root():
@@ -71,38 +170,28 @@ def default_repo_root():
 
 
 def main(argv=None):
-    ap = argparse.ArgumentParser(description="Package Asteria Loom into an Iris-installable zip.")
+    ap = argparse.ArgumentParser(description="Package Asteria Loom into Iris-installable zip(s).")
     ap.add_argument("--version", default=None,
                     help="version string (default: from CHANGELOG.md, else 'dev')")
     ap.add_argument("--repo-root", default=None,
                     help="repo root (default: parent of this script's dir)")
     ap.add_argument("--out-dir", default=None,
-                    help="output dir for the zip (default: <repo>/dist)")
+                    help="output dir for the zip(s) (default: <repo>/dist)")
+    ap.add_argument("--variant", choices=["mac", "advanced", "all"], default="mac",
+                    help="which pack to build: mac (default, macOS-safe, zero .csh), "
+                         "advanced (shaders/ + shaders-advanced/ overlay; Windows/Linux "
+                         "only), or all (both)")
     args = ap.parse_args(argv)
 
     repo_root = os.path.realpath(args.repo_root or default_repo_root())
-    shaders_root = os.path.join(repo_root, "shaders")
-    if not os.path.isdir(shaders_root):
-        sys.stderr.write("error: shaders/ not found at %s\n" % shaders_root)
-        return 2
-
     version = resolve_version(repo_root, args.version)
     out_dir = args.out_dir or os.path.join(repo_root, "dist")
-    os.makedirs(out_dir, exist_ok=True)
-    zip_path = os.path.join(out_dir, "AsteriaLoom-%s.zip" % version)
 
-    count = 0
-    with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-        for abs_path, arcname in collect_files(shaders_root):
-            zf.write(abs_path, arcname)
-            count += 1
-
-    if count == 0:
-        sys.stderr.write("error: no files packaged from %s\n" % shaders_root)
-        os.remove(zip_path)
-        return 2
-
-    print("Packaged %d file(s) -> %s" % (count, zip_path))
+    variants = ["mac", "advanced"] if args.variant == "all" else [args.variant]
+    for variant in variants:
+        rc, _path = build_variant(variant, repo_root, out_dir, version)
+        if rc != 0:
+            return rc
     return 0
 
 

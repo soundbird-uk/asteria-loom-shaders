@@ -16,7 +16,35 @@ uniform mat4 gbufferModelViewInverse;
 #ifdef AL_WAVING_FOLIAGE
 uniform vec3  cameraPosition;    // world-space camera (wind phase in world XZ)
 uniform float frameTimeCounter;  // animation time
+#endif
+
+/* ---- at_midBlock, and why its type is conditional -------------------------
+ Iris' `at_midBlock` is normally a vec3 (the offset from this vertex to the
+ block's centre, in 1/64-block units) — that is what the foliage wind uses to
+ anchor plant bases. When the pack opts into the BLOCK_EMISSION_ATTRIBUTE
+ feature flag (`iris.features.optional` in shaders.properties) Iris widens the
+ SAME attribute to a vec4 whose `.w` carries the block's emission, i.e. its
+ light level 0..15. That is exactly the signal COLORED_BLOCKLIGHT wants: the
+ emitter's own strength, straight from the game, with no guessing from texture
+ brightness.
+
+ The two forms are mutually exclusive — declaring both is a redeclaration error
+ — so the type is chosen once here and every consumer reads `.xyz` / `.y`, which
+ is valid for either. Iris defines IRIS_FEATURE_BLOCK_EMISSION_ATTRIBUTE only
+ when the running version actually supports it; older Iris (and OptiFine) fall
+ through to the vec3 form and the fragment stage derives emission from albedo
+ luminance instead (see gbuffers_terrain.fsh). `optional` (not `required`) means
+ an Iris build that has never heard of the flag still loads the pack.
+--------------------------------------------------------------------------- */
+#if defined COLORED_BLOCKLIGHT && defined IRIS_FEATURE_BLOCK_EMISSION_ATTRIBUTE
+    #define AL_MIDBLOCK_EMISSION
+#endif
+#if defined AL_WAVING_FOLIAGE || defined AL_MIDBLOCK_EMISSION
+  #ifdef AL_MIDBLOCK_EMISSION
+in vec4 at_midBlock;             // .xyz block-centre offset, .w light level 0..15
+  #else
 in vec3 at_midBlock;             // Iris: block-centre offset (1/64 block units)
+  #endif
 #endif
 
 in vec4 mc_Entity;   // (blockId, renderType, ...) — foliage IDs from block.properties
@@ -26,6 +54,7 @@ out vec2 lmcoord;
 out vec4 glcolor;
 out vec3 wnormal;
 flat out float emissive;   // 1.0 for light-emitting blocks (block.properties 10040)
+flat out float emitLevel;  // emitter light level 0..1 (0 = derive in the fsh)
 flat out float endFrame;   // 1.0 for end_portal_frame (10041) — eye-only glow
 flat out float reflAmt;    // reflectivity 0..1 (block.properties 10050/10051)
 flat out float metalness;  // 1.0 = metal (albedo-tinted reflection)
@@ -38,6 +67,16 @@ void main() {
     // the glow from the block's own texture colour.
     emissive = (mc_Entity.x == 10040.0) ? 1.0 : 0.0;
     endFrame = (mc_Entity.x == 10041.0) ? 1.0 : 0.0;   // eye-only glow (fsh masks)
+
+    // Emitter STRENGTH for the coloured-block-light gather (colortex3.g). Only
+    // meaningful on emissive blocks; everything else stores 0 so the gather can
+    // reject it with a single compare. Left at 0 when the attribute is
+    // unavailable — the fragment stage then derives it from albedo luminance,
+    // which is the same mask deferred1 already uses for self-illumination.
+    emitLevel = 0.0;
+#ifdef AL_MIDBLOCK_EMISSION
+    if (emissive > 0.5) emitLevel = clamp(at_midBlock.w * (1.0 / 15.0), 0.0, 1.0);
+#endif
 
     // Reflective-material classification (block.properties 10050 glassy, 10051
     // metal). The fragment stage stores reflAmt in colortex3.b and metalness in .a

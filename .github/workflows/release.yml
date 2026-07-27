@@ -1,10 +1,14 @@
 name: release
 
-# Publishes an installable pack zip to the repo's Releases page.
+# Publishes the installable pack zips to the repo's Releases page.
 #
 #   git tag v0.5.0 && git push origin v0.5.0
 #
-# ...builds AsteriaLoom-0.5.0.zip and attaches it to release "v0.5.0".
+# ...builds BOTH archives and attaches them to release "v0.5.0":
+#   * AsteriaLoom-0.5.0.zip          — the default download, macOS-safe
+#   * AsteriaLoom-Advanced-0.5.0.zip — Windows/Linux only (ships compute
+#     programs; Iris compiles every .csh, and macOS GL 4.1 cannot, so this one
+#     will NOT load on macOS)
 # `workflow_dispatch` does the same for a manually supplied version, which is
 # useful for re-cutting a release whose upload failed.
 
@@ -70,10 +74,14 @@ jobs:
           echo "tag=v${version}" >> "$GITHUB_OUTPUT"
 
       - name: Validate shaders (all profiles x all programs, all targets)
+        # The macOS gate: `.csh` anywhere under shaders/ is a hard failure here.
         run: python3 tools/validate.py --target all
 
-      - name: Package installable zip
-        run: python3 tools/package.py --version "${{ steps.version.outputs.version }}"
+      - name: Validate advanced overlay build
+        run: python3 tools/validate.py --target advanced --overlay shaders-advanced
+
+      - name: Package installable zips (default + advanced)
+        run: python3 tools/package.py --version "${{ steps.version.outputs.version }}" --variant all
 
       - name: Publish release
         env:
@@ -84,16 +92,31 @@ jobs:
         run: |
           set -euo pipefail
           asset="dist/AsteriaLoom-${VERSION}.zip"
+          advanced_asset="dist/AsteriaLoom-Advanced-${VERSION}.zip"
           test -f "${asset}"
+          test -f "${advanced_asset}"
 
-          args=(--title "Asteria Loom ${TAG}" --notes "Install: download \`AsteriaLoom-${VERSION}.zip\` and drop it into \`.minecraft/shaderpacks/\`. See [CHANGELOG.md](https://github.com/${GITHUB_REPOSITORY}/blob/${TAG}/CHANGELOG.md) for what changed.")
+          notes=$(printf '%s\n' \
+            "## Which download?" \
+            "" \
+            "### \`AsteriaLoom-${VERSION}.zip\` — **download this one**" \
+            "" \
+            "The default pack. Works everywhere, **macOS included**. Drop it into \`.minecraft/shaderpacks/\`." \
+            "" \
+            "### \`AsteriaLoom-Advanced-${VERSION}.zip\` — **Windows/Linux only — will NOT load on macOS**" \
+            "" \
+            "The same pack plus the compute-shader Advanced tier. Iris compiles every compute program a pack ships, and macOS (OpenGL 4.1) cannot compile compute shaders at all, so this archive fails to load on a Mac with \`Shader compilation failed for compute ...\`. Take it only if you are on Windows or Linux and want the advanced tier." \
+            "" \
+            "See [CHANGELOG.md](https://github.com/${GITHUB_REPOSITORY}/blob/${TAG}/CHANGELOG.md) for what changed.")
+
+          args=(--title "Asteria Loom ${TAG}" --notes "${notes}")
           case "${TAG}" in
             *-*) args+=(--prerelease) ;;
             *) [ "${PRERELEASE:-false}" = "true" ] && args+=(--prerelease) || true ;;
           esac
 
           if gh release view "${TAG}" >/dev/null 2>&1; then
-            gh release upload "${TAG}" "${asset}" --clobber
+            gh release upload "${TAG}" "${asset}" "${advanced_asset}" --clobber
           else
-            gh release create "${TAG}" "${asset}" "${args[@]}"
+            gh release create "${TAG}" "${asset}" "${advanced_asset}" "${args[@]}"
           fi

@@ -29,6 +29,18 @@
  pass and blow their budget. The atmosphere colours here are pure math from the
  sun direction; no LUT is read.
 
+ 5.4.0 — COLOURED BLOCK LIGHT: the same rule is why the coloured-blocklight
+ buffer (colortex13) is NOT sampled here even though this is where the tint is
+ decided. Adding `uniform sampler2D colortex13;` to this file would push it into
+ gbuffers_water / hand_water / particles / entities_translucent, which sit at 6
+ samplers and have no headroom to spare for a hue they cannot even use (they are
+ drawn AFTER deferred2 but their surfaces are not in the gather's G-buffer).
+ Instead the CALLER does the one texture fetch and hands the raw gather in as a
+ plain vec3; all of the maths — validation, unit-chroma normalisation, the
+ confidence ramp and the mix against the constant ramp — lives here in
+ alBlockLightTint() so there is still exactly ONE place that decides the tint.
+ Callers that have no gather pass vec3(0.0) and get today's warm ramp verbatim.
+
  All maths is LINEAR; the caller decodes albedo sRGB->linear and outputs
  linear HDR to colortex0.
 */
@@ -45,6 +57,66 @@ float alDayFactor(vec3 worldSunDir) {
 }
 
 /*
+ BLOCK-LIGHT TINT — the ONE place the colour (never the strength) of block
+ light is decided.
+
+   bl        : the vanilla block lightmap at this pixel (lm.x, 0..1)
+   blGather  : the raw screen-space coloured-light gather for this pixel
+               (colortex13.rgb, written by deferred2 = sum of emissive albedo x
+               emission x distance weight). vec3(0.0) means "no gather
+               available / nothing found" and is the documented neutral input.
+
+ With COLORED_BLOCKLIGHT off — or with nothing found — this returns exactly the
+ pre-5.4.0 constant: the candle->ember distance ramp (BLOCKLIGHT_TINT on) or the
+ single flat AL_TORCH_TINT. That is deliberate: an emitter that is behind the
+ camera, behind the player's head, or simply off the edge of the screen cannot be
+ gathered, and the pack must degrade to its established warm look there rather
+ than to grey. The confidence ramp below is what makes that transition smooth
+ instead of a pop as a torch slides off screen.
+
+ The gather is normalised to UNIT CHROMA (divided by its peak channel) before
+ use. Both fallback constants also peak at 1.0, so the mix is brightness-neutral
+ by construction: swapping hue can never brighten or darken the block-light term,
+ which is precisely the property that keeps the vanilla lightmap in sole charge
+ of intensity.
+*/
+vec3 alBlockLightTint(float bl, vec3 blGather) {
+#ifdef BLOCKLIGHT_TINT
+    // Colour-temperature ramp: candle-amber in the bright core of a source,
+    // deep ember-orange out at the dim edge of its reach.
+    vec3 base = mix(AL_TORCH_EMBER, AL_TORCH_CANDLE, bl);
+#else
+    vec3 base = AL_TORCH_TINT;
+#endif
+
+#ifdef COLORED_BLOCKLIGHT
+    // NaN LAW. colortex13 is a clear=false persistent buffer that deferred1
+    // reads BEFORE deferred2 has written it this frame (see deferred2.fsh), so
+    // on the very first frame it holds undefined driver garbage. Every test here
+    // is a positive comparison, which NaN fails, so poison falls straight
+    // through to `base` — the warm constant — and the buffer self-heals as soon
+    // as deferred2 writes a real value.
+    bool ok = (blGather.r >= 0.0) && (blGather.r < AL_CBL_MAX)
+           && (blGather.g >= 0.0) && (blGather.g < AL_CBL_MAX)
+           && (blGather.b >= 0.0) && (blGather.b < AL_CBL_MAX);
+    float peak = ok ? max(blGather.r, max(blGather.g, blGather.b)) : 0.0;
+    if (peak > AL_CBL_EPS) {
+        // Unit chroma: throw the magnitude away and keep only the hue. The
+        // magnitude is a screen-space artefact (how many taps happened to land
+        // on the emitter) and has no business modulating brightness.
+        vec3 hue = blGather / peak;
+        // Confidence: how convincingly an emitter was found. Ramps from 0 at
+        // EPS (indistinguishable from nothing) to 1 at FULL (a source right
+        // there), so a torch drifting off-screen fades its colour out instead
+        // of popping back to amber.
+        float conf = alSaturate((peak - AL_CBL_EPS) / max(AL_CBL_FULL - AL_CBL_EPS, 1e-4));
+        base = mix(base, hue, alSaturate(conf * COLORED_BLOCKLIGHT_STRENGTH));
+    }
+#endif
+    return base;
+}
+
+/*
  Core shade. Returns linear HDR radiance.
 
    albedoLin   : albedo already decoded to linear
@@ -56,10 +128,12 @@ float alDayFactor(vec3 worldSunDir) {
    worldPos    : world-space position (feet + cameraPosition) for cloud shadow
    dayFactor   : 0 night .. 1 day (from alDayFactor)
    ao          : ambient-occlusion term (1 = unoccluded)
+   blGather    : raw coloured-block-light gather (colortex13.rgb); vec3(0.0)
+                 for callers that have no such buffer — see alBlockLightTint.
 */
 vec3 alLightPhase1(vec3 albedoLin, vec3 worldN, vec2 lm,
                    float shadowVis, vec3 worldLDir, vec3 worldSunDir,
-                   vec3 worldPos, float dayFactor, float ao) {
+                   vec3 worldPos, float dayFactor, float ao, vec3 blGather) {
 
     // --- Direct sun / moon ------------------------------------------------
     // Colour is atmosphere-driven (warm amber bias baked into alDirectColor).
@@ -140,11 +214,11 @@ vec3 alLightPhase1(vec3 albedoLin, vec3 worldN, vec2 lm,
     float blTail = bl * bl;                               // gentler, longer reach
     float blAmt  = mix(blCore, blTail, AL_BLOCKLIGHT_TAIL);
 
-#ifdef BLOCKLIGHT_TINT
-    vec3 blTint = mix(AL_TORCH_EMBER, AL_TORCH_CANDLE, bl);
-#else
-    vec3 blTint = AL_TORCH_TINT;
-#endif
+    // HUE only — see alBlockLightTint(). blAmt (and therefore the whole
+    // intensity of this term) still comes from the vanilla lightmap above, so a
+    // wall between the pixel and the emitter keeps this at zero regardless of
+    // what the screen-space gather found.
+    vec3  blTint = alBlockLightTint(bl, blGather);
     vec3  block = blTint * (blAmt * AL_BLOCKLIGHT_BASE * BLOCKLIGHT_INTENSITY);
 
     // --- Fake indirect bounce floor --------------------------------------
@@ -159,14 +233,26 @@ vec3 alLightPhase1(vec3 albedoLin, vec3 worldN, vec2 lm,
     return albedoLin * lightSum;
 }
 
+// Backwards-compatible overload (AO, no coloured-blocklight gather). Used by any
+// pass that can afford the colortex4 AO read but not the colortex13 one.
+// vec3(0.0) is the documented "nothing gathered" input -> the warm constant ramp.
+vec3 alLightPhase1(vec3 albedoLin, vec3 worldN, vec2 lm,
+                   float shadowVis, vec3 worldLDir, vec3 worldSunDir,
+                   vec3 worldPos, float dayFactor, float ao) {
+    return alLightPhase1(albedoLin, worldN, lm, shadowVis, worldLDir,
+                         worldSunDir, worldPos, dayFactor, ao, vec3(0.0));
+}
+
 // Backwards-compatible overload (no AO) for the forward translucent passes
 // (water, hand_water, particles, entities_translucent). They have no
-// screen-space AO buffer to sample, so they light with full ambient (ao = 1).
+// screen-space AO buffer to sample, so they light with full ambient (ao = 1),
+// and no sampler headroom for the coloured-blocklight gather either — see the
+// CRITICAL SAMPLER RULE in the header for why that read cannot live in this lib.
 vec3 alLightPhase1(vec3 albedoLin, vec3 worldN, vec2 lm,
                    float shadowVis, vec3 worldLDir, vec3 worldSunDir,
                    vec3 worldPos, float dayFactor) {
     return alLightPhase1(albedoLin, worldN, lm, shadowVis, worldLDir,
-                         worldSunDir, worldPos, dayFactor, 1.0);
+                         worldSunDir, worldPos, dayFactor, 1.0, vec3(0.0));
 }
 
 #endif // AL_LIB_LIGHTING

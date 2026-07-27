@@ -80,6 +80,29 @@
                          [0,1] scalar the hardware clamps, so this clear=false
                          buffer can never hold a NaN. Read+written by composite
                          alongside colortex10.
+   colortex13   R11F_G11F_B10F
+                         COLOURED BLOCK LIGHT (5.4.0): rgb = the screen-space
+                         gather of nearby emitters' colour (emissive albedo x
+                         light level x distance weight), written by deferred2 and
+                         consumed by deferred1 via lib/lighting.glsl as a HUE
+                         only. HALF RESOLUTION (`size.buffer.colortex13 = 0.5 0.5`
+                         in shaders.properties). The packed 11/11/10 float format
+                         is chosen deliberately: this is a positive-only, purely
+                         chromatic signal at half res, so 32 bits per texel is
+                         ample and it halves the bandwidth of an RGBA16F. It has
+                         NO alpha, which is why the confidence term is derived
+                         from the gather's peak channel rather than stored.
+                         `const bool colortex13Clear = false;` — deferred1 runs
+                         BEFORE deferred2, so it reads the PREVIOUS frame's
+                         gather; a cleared buffer would hand it black every frame
+                         and the feature would silently do nothing.
+   colortex14   RGBA16F  Coloured block-light HISTORY (5.4.0): rgb = accumulated
+                         gather, a = the eye depth when it was written (the
+                         reprojection test). RGBA16F rather than 11/11/10 exactly
+                         because it needs that alpha. Same half-res scaling as
+                         colortex13 (an MRT pass requires all its targets to
+                         share a size). `const bool colortex14Clear = false;`
+                         -> reads are NaN-proof range-validated in deferred2.fsh.
    shadowcolor0 RGBA8    reserved for Phase 2 (coloured/translucent shadows);
                          Phase 1's shadow pass is depth-only, so nothing is
                          allocated yet — this only reserves the format.
@@ -100,6 +123,8 @@ const int colortex9Format = RGBA16F;
 const int colortex10Format = RGBA16F;
 const int colortex11Format = RGBA16F;
 const int colortex12Format = R8;
+const int colortex13Format = R11F_G11F_B10F;
+const int colortex14Format = RGBA16F;
 const int shadowcolor0Format = RGBA8;
 */
 
@@ -131,6 +156,8 @@ const bool colortex8Clear  = false;   // TAA history
 const bool colortex10Clear = false;   // SSR history
 const bool colortex11Clear = false;   // shadow-visibility history
 const bool colortex12Clear = false;   // SSR temporal confidence
+const bool colortex13Clear = false;   // coloured block light (read a frame late)
+const bool colortex14Clear = false;   // coloured block-light history
 
 // Shadow-map sizing (shadowMapResolution / shadowDistance) is declared in
 // settings.glsl as literal-valued const GUI options — Iris' ConstDirectiveParser

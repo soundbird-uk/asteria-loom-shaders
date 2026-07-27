@@ -23,8 +23,8 @@ What it does, for every (profile x program-stage) combination:
      immediately after the #version line, alongside the small set of macros /
      uniforms that Iris injects at runtime (see IRIS_MACRO_STUBS /
      IRIS_SYMBOL_STUBS below).
-  5. Runs glslangValidator on the patched source (-S vert / -S frag), once per
-     compile *target* (see below).
+  5. Runs glslangValidator on the patched source (-S vert / -S frag / -S comp),
+     once per compile *target* (see below).
   6. Runs a set of static lint checks (unresolved includes, RENDERTARGETS
      count/index integrity, sampler budget, unknown render-stage macros,
      live-vs-commented buffer-format declarations + single-source-of-truth,
@@ -55,6 +55,21 @@ programs load ONLY from world folders — discovery reflects that and validates
 every world x profile x variant (the report groups rows by world). Flat-root
 packs stay supported. Includes always resolve absolute `/lib/...` from the
 shaders/ root and relative includes from the including file's world folder.
+
+Two-zip split (`--overlay`): the pack ships a Mac-safe default built from
+`shaders/` alone and a Windows/Linux-only "Advanced" pack built from `shaders/`
+with the `shaders-advanced/` OVERLAY copied on top. The reason is structural:
+Iris compiles EVERY `.csh` a pack ships (ProgramSet.readComputeArray is not
+feature-gated) and macOS GL 4.1 cannot compile compute shaders, so one `.csh`
+anywhere breaks pack loading on macOS — `#ifdef` gating does not help. Hence:
+  * default run (no `--overlay`) — lint_no_compute_programs HARD-FAILS on any
+    `.csh`. This is the gate that protects the Mac; CI keeps running it.
+  * `--overlay shaders-advanced` — materialises the merged tree into a temp dir
+    and validates THAT, with `--allow-compute` implied so `.csh` programs are
+    discovered and compiled (`-S comp`). Compute programs are exempt from the
+    fragment-only lints (RENDERTARGETS, sampler budget). A dedicated lint also
+    forbids any program in `shaders/` from including the overlay's
+    `lib/advanced/**` (that would poison the Mac build).
 
 Distant Horizons: `dh_*` programs compile with DISTANT_HORIZONS defined plus DH
 uniform/attribute/constant stubs; every non-dh program also gets ONE extra
@@ -120,6 +135,14 @@ IRIS_MACRO_STUBS_MAC_HW = {
     "MC_OS_MAC": "1",
     "IS_IRIS": "1",
     "IRIS_FEATURE_SEPARATE_HARDWARE_SAMPLERS": "1",
+    # BLOCK_EMISSION_ATTRIBUTE is NOT a GL-version feature — it just widens the
+    # at_midBlock vertex attribute to vec4 — so any modern Iris reports it on the
+    # M4 too. It is set HERE (and in `advanced`) but deliberately NOT in the plain
+    # `mac` target, so the matrix covers BOTH branches of the conditional
+    # at_midBlock declaration in gbuffers_terrain.vsh: `mac` compiles the vec3 +
+    # albedo-luminance fallback, `mac-hw`/`advanced` compile the vec4 + real
+    # light-level path. Neither can silently rot.
+    "IRIS_FEATURE_BLOCK_EMISSION_ATTRIBUTE": "1",
 }
 
 IRIS_MACRO_STUBS_ADVANCED = {
@@ -134,6 +157,9 @@ IRIS_MACRO_STUBS_ADVANCED = {
     "IRIS_FEATURE_SSBO": "1",
     "IRIS_FEATURE_CUSTOM_IMAGES": "1",
     "IRIS_FEATURE_SEPARATE_HARDWARE_SAMPLERS": "1",
+    # Coloured block light's emitter signal — see the mac-hw table above for why
+    # this one is set on two of the three targets rather than all three.
+    "IRIS_FEATURE_BLOCK_EMISSION_ATTRIBUTE": "1",
 }
 
 TARGET_MACROS = {
@@ -196,6 +222,17 @@ MAX_FRAGMENT_SAMPLERS = 16
 # Files exempt from the RENDERTARGETS-comment lint (by stem). shadow / dh_shadow
 # are depth-only; final writes to the screen.
 RENDERTARGETS_EXEMPT_STEMS = {"shadow", "final", "dh_shadow"}
+
+# Stages that are NOT fragment programs and are therefore exempt from the
+# fragment-only lints (RENDERTARGETS comment/consistency, sampler budget).
+# `comp` = a `.csh` compute program: it writes through images/SSBOs rather than
+# render targets, and the 16-sampler fragment limit does not apply to it.
+NON_FRAGMENT_STAGES = {"vert", "comp"}
+
+# Shadow-pass fragment programs (`shadow*`, `shadowcomp*`) address
+# shadowcolor0..7 in their RENDERTARGETS list, not colortex0..15.
+MAX_COLORTEX_INDEX = 15
+MAX_SHADOWCOLOR_INDEX = 7
 
 # ---------------------------------------------------------------------------
 # Distant Horizons (DISTANT_HORIZONS) stubs.
@@ -788,7 +825,10 @@ def discover_programs(shaders_root):
     progs = []
     seen = set()
     for world, base in roots:
-        for ext, stage in (("*.vsh", "vert"), ("*.fsh", "frag")):
+        # `.csh` compute programs only ever exist in the ADVANCED overlay build
+        # (--overlay / --allow-compute); in the canonical macOS-safe tree
+        # lint_no_compute_programs hard-fails before we get here.
+        for ext, stage in (("*.vsh", "vert"), ("*.fsh", "frag"), ("*.csh", "comp")):
             for path in sorted(glob.glob(os.path.join(base, ext))):
                 if os.sep + "lib" + os.sep in path:
                     continue
@@ -991,17 +1031,96 @@ def lint_no_compute_programs(shaders_root):
     return errs
 
 
+def _collect_overlay_advanced_libs(overlay_root):
+    """Every file under <overlay>/lib/advanced/, as '/'-joined rel paths."""
+    base = os.path.join(overlay_root, "lib", "advanced")
+    rels = set()
+    for root, _dirs, files in os.walk(base):
+        for fn in files:
+            rel = os.path.relpath(os.path.join(root, fn), overlay_root)
+            rels.add(rel.replace(os.sep, "/"))
+    return rels
+
+
+def lint_advanced_isolation(base_root, overlay_root):
+    """Nothing in the canonical `shaders/` tree may reach into the overlay's
+    advanced-only library (`shaders-advanced/lib/advanced/**`).
+
+    The default (macOS) zip ships `shaders/` alone. If a base program — directly
+    or through any include in the base tree — `#include`s a file that only
+    exists in the overlay's lib/advanced/, then either the Mac build has a dead
+    include (Iris hard-fails the pack) or, worse, the advanced code silently
+    becomes part of the Mac build. The overlay's advanced library is reachable
+    ONLY from programs the overlay itself supplies.
+
+    Walks the include graph of every base program, following files that exist in
+    the base tree, and reports any include target that resolves into the
+    overlay's lib/advanced/ set.
+    """
+    advanced_rels = _collect_overlay_advanced_libs(overlay_root)
+    if not advanced_rels:
+        return []
+
+    errs = []
+    seen_edges = set()
+
+    def walk(path, stack, origin):
+        real = os.path.realpath(path)
+        if real in stack or not os.path.isfile(path):
+            return
+        stack = stack + [real]
+        for i, line in enumerate(read_text(path).splitlines()):
+            m = INCLUDE_RE.match(line)
+            if not m:
+                continue
+            inc = m.group(1)
+            if inc.startswith("/"):
+                target = os.path.join(base_root, inc.lstrip("/"))
+            else:
+                target = os.path.join(os.path.dirname(path), inc)
+            tgt_rel = os.path.relpath(target, base_root).replace(os.sep, "/")
+            if tgt_rel in advanced_rels:
+                here = os.path.relpath(path, base_root)
+                key = (here, i + 1)
+                if key not in seen_edges:
+                    seen_edges.add(key)
+                    errs.append(
+                        '%s: %s:%d includes "%s", which lives only in the ADVANCED '
+                        'overlay (shaders-advanced/lib/advanced/). The default macOS '
+                        'zip ships shaders/ alone, so this include would break (or '
+                        'smuggle compute-tier code into) the Mac build. Advanced '
+                        'library files may only be included from overlay programs.'
+                        % (origin, here, i + 1, inc))
+                continue
+            walk(target, stack, origin)
+
+    for rel, path, _stage, _world in discover_programs(base_root):
+        walk(path, [], rel)
+    return errs
+
+
 def lint_rendertargets(programs, shaders_root):
     """Every .fsh except shadow/final must carry a RENDERTARGETS comment, and
     its index list must be internally consistent with the fragment's outputs
-    (F4): same count as `out` declarations, every index in 0..15, no dupes."""
+    (F4): same count as `out` declarations, indices in range, no dupes.
+
+    Index range depends on WHICH buffer set the indices address: an ordinary
+    program's list addresses colortex0..15, but a shadow-pass program
+    (`shadow*` / `shadowcomp*`) addresses shadowcolor0..7 — Iris only ever
+    creates 8 shadow color buffers, so `RENDERTARGETS: 8` there is out of range
+    even though it is fine in a composite. Compute (.csh) and vertex stages have
+    no render targets at all and are skipped."""
     errs = []
     for rel, path, stage, _world in programs:
-        if stage != "frag":
+        if stage in NON_FRAGMENT_STAGES or stage != "frag":
             continue
         stem = os.path.splitext(os.path.basename(rel))[0]
         if stem in RENDERTARGETS_EXEMPT_STEMS:
             continue
+        # shadow / shadowcomp fragment outputs go to shadowcolor0..7.
+        is_shadow_pass = stem.startswith("shadow") or stem.startswith("dh_shadow")
+        max_index = MAX_SHADOWCOLOR_INDEX if is_shadow_pass else MAX_COLORTEX_INDEX
+        buffer_kind = "shadowcolor" if is_shadow_pass else "colortex"
         raw = read_text(path)
         m = RENDERTARGETS_LIST_RE.search(raw)
         if not m:
@@ -1017,8 +1136,9 @@ def lint_rendertargets(programs, shaders_root):
             errs.append("%s: empty RENDERTARGETS list" % rel)
             continue
         for ix in idxs:
-            if ix < 0 or ix > 15:
-                errs.append("%s: RENDERTARGETS index %d out of range 0..15" % (rel, ix))
+            if ix < 0 or ix > max_index:
+                errs.append("%s: RENDERTARGETS index %d out of range 0..%d (%s buffers)"
+                            % (rel, ix, max_index, buffer_kind))
         if len(set(idxs)) != len(idxs):
             errs.append("%s: RENDERTARGETS has duplicate index(es): %s"
                         % (rel, ", ".join(str(i) for i in idxs)))
@@ -1043,10 +1163,11 @@ def lint_rendertargets(programs, shaders_root):
 
 def lint_sampler_budget(programs, shaders_root):
     """No fragment program may declare > MAX_FRAGMENT_SAMPLERS samplers
-    (post-include). Counts declarators, not statements (F1)."""
+    (post-include). Counts declarators, not statements (F1). Vertex and compute
+    (.csh) stages are exempt — the budget is a fragment-stage limit."""
     errs = []
     for rel, path, stage, _world in programs:
-        if stage != "frag":
+        if stage in NON_FRAGMENT_STAGES or stage != "frag":
             continue
         code = strip_comments(resolve_includes(path, shaders_root))
         n = count_samplers(code)
@@ -1174,6 +1295,12 @@ LEGACY_RENDER_TARGETS = {
 # colortex0 .. colortex15 (Iris exposes up to 16 on the Mac path).
 COLORTEX_BUFFER_RE = re.compile(r"^colortex([0-9]|1[0-5])$")
 
+# shadowcolor0 .. shadowcolor7 — the shadow-pass render targets. These are just
+# as valid a `blend.<program>.<buffer>` token as colortexN (a shadow program's
+# blending is configured against them), so rejecting them here would flag
+# correct directives.
+SHADOWCOLOR_BUFFER_RE = re.compile(r"^shadowcolor[0-7]$")
+
 # GL blend factor names OptiFine/Iris accept in a `blend.<program> = a b c d`.
 BLEND_FACTORS = {
     "ZERO", "ONE",
@@ -1205,7 +1332,9 @@ def lint_program_directives(entries, program_stems):
 
 
 def _valid_blend_buffer(tok):
-    return tok in LEGACY_RENDER_TARGETS or COLORTEX_BUFFER_RE.match(tok) is not None
+    return (tok in LEGACY_RENDER_TARGETS
+            or COLORTEX_BUFFER_RE.match(tok) is not None
+            or SHADOWCOLOR_BUFFER_RE.match(tok) is not None)
 
 
 def lint_blend_directives(entries, program_stems):
@@ -1241,8 +1370,8 @@ def lint_blend_directives(entries, program_stems):
             errs.append("shaders.properties: `%s` — buffer token '%s' is not a valid "
                         "render target. Iris throws \"Failed to parse buffer blend! "
                         "index = -1\" and refuses to load the pack. Use colortex0-15 "
-                        "or a legacy name (gcolor gdepth gnormal composite gaux1-4)."
-                        % (key, buffer_tok))
+                        "or shadowcolor0-7, or a legacy name (gcolor gdepth gnormal "
+                        "composite gaux1-4)." % (key, buffer_tok))
 
         # (c) value must be `off` or exactly four valid blend factors
         v = val.strip()
@@ -1328,8 +1457,19 @@ class ValidationResult:
 
 
 def run_validation(shaders_root, out_dir, profile_filter=None, program_glob=None,
-                   keep=False, require_glslang=True, verbose=True, targets=None):
-    """Core pipeline. Returns a ValidationResult."""
+                   keep=False, require_glslang=True, verbose=True, targets=None,
+                   allow_compute=False, base_root=None, overlay_root=None):
+    """Core pipeline. Returns a ValidationResult.
+
+    allow_compute: when False (the default, and what CI's macOS gate uses), the
+        presence of ANY `.csh` is a hard lint failure — that is the invariant
+        protecting the macOS build. Set True ONLY when validating the merged
+        ADVANCED overlay tree (Windows/Linux-only pack), where compute programs
+        are legitimate and are compiled with `-S comp`.
+    base_root / overlay_root: the ORIGINAL (unmerged) `shaders/` and
+        `shaders-advanced/` dirs, supplied alongside a merged `shaders_root` so
+        the advanced-isolation lint can check the base tree in isolation.
+    """
     result = ValidationResult()
     if targets is None:
         targets = ["mac"]
@@ -1366,7 +1506,10 @@ def run_validation(shaders_root, out_dir, profile_filter=None, program_glob=None
     all_programs = discover_programs(shaders_root)
     result.programs = [rel for rel, _p, _s, _w in all_programs]
 
-    result.lint_fails += lint_no_compute_programs(shaders_root)
+    if not allow_compute:
+        result.lint_fails += lint_no_compute_programs(shaders_root)
+    if base_root and overlay_root:
+        result.lint_fails += lint_advanced_isolation(base_root, overlay_root)
     result.lint_fails += lint_buffer_clear_directives(shaders_root)
     result.lint_fails += lint_includes(all_programs, shaders_root)
     result.lint_fails += lint_rendertargets(all_programs, shaders_root)
@@ -1953,6 +2096,16 @@ def self_test():
         check(not any("blend.deferred" in e for e in rB5.lint_fails),
               "blend: a valid 4-factor blend list passes")
 
+        # shadowcolor0-7 are real render targets and must be accepted as buffer
+        # tokens (rejecting them flagged correct directives).
+        rB6 = _run_with_props("\nblend.deferred.shadowcolor1 = off\n")
+        check(not any("blend.deferred.shadowcolor1" in e for e in rB6.lint_fails),
+              "blend: shadowcolor1 is a valid buffer token")
+        rB7 = _run_with_props("\nblend.deferred.shadowcolor8 = off\n")
+        check(any("blend.deferred.shadowcolor8" in e and "buffer token" in e
+                  for e in rB7.lint_fails),
+              "blend: shadowcolor8 (only 0..7 exist) is still caught")
+
         _write(os.path.join(sh, "shaders.properties"), SELFTEST_PROPERTIES)
 
         # --- Phase 5: flat-root vs world-folder layouts + DH coverage ---
@@ -2060,7 +2213,47 @@ def self_test():
                                 require_glslang=False, verbose=False, targets=["mac"])
             check(any("composite.csh" in e and "compute" in e for e in wc.lint_fails),
                   "compute: a .csh in the pack is a hard lint failure (macOS can't run it)")
+
+            # ...but the ADVANCED build (allow_compute=True, what --overlay
+            # implies) must ACCEPT the same .csh, discover it as a `comp`
+            # program and compile it with -S comp. The gate above is the macOS
+            # invariant; this is the Windows/Linux overlay path.
+            wa = run_validation(wsh, os.path.join(wtmp, "outa"), keep=False,
+                                require_glslang=False, verbose=False,
+                                targets=["advanced"], allow_compute=True)
+            check(not any("composite.csh" in e and "compute program" in e
+                          for e in wa.lint_fails),
+                  "compute: allow_compute=True skips the no-.csh lint (advanced build)")
+            check("world0/composite.csh" in wa.programs,
+                  "compute: .csh discovered as a program in the advanced build")
+            if have_glslang:
+                check(wa.compile_results[("advanced", "HIGH", "world0/composite.csh")][0],
+                      "compute: .csh compiles under -S comp")
             os.remove(os.path.join(wsh, "world0", "composite.csh"))
+
+            # --- shadow-pass RENDERTARGETS address shadowcolor0..7 ----------
+            # 1 is in range for a shadowcomp; 8 is not (only 8 shadow color
+            # buffers exist), while 8 stays perfectly valid in a composite.
+            _write(os.path.join(wsh, "world0", "shadowcomp.fsh"),
+                   "#version 330 compatibility\n/* RENDERTARGETS: 8 */\n"
+                   "out vec4 c;\nvoid main(){ c = vec4(1.0); }\n")
+            _write(os.path.join(wsh, "world0", "shadowcomp.vsh"),
+                   "#version 330 compatibility\nvoid main(){ gl_Position = ftransform(); }\n")
+            wsc = run_validation(wsh, os.path.join(wtmp, "outs"), keep=False,
+                                 require_glslang=False, verbose=False, targets=["mac"])
+            check(any("shadowcomp.fsh" in e and "out of range 0..7" in e
+                      for e in wsc.lint_fails),
+                  "shadow: RENDERTARGETS index 8 in a shadowcomp is out of range (shadowcolor0..7)")
+            _write(os.path.join(wsh, "world0", "shadowcomp.fsh"),
+                   "#version 330 compatibility\n/* RENDERTARGETS: 1 */\n"
+                   "out vec4 c;\nvoid main(){ c = vec4(1.0); }\n")
+            wsc2 = run_validation(wsh, os.path.join(wtmp, "outs2"), keep=False,
+                                  require_glslang=False, verbose=False, targets=["mac"])
+            check(not any("shadowcomp.fsh" in e and "out of range" in e
+                          for e in wsc2.lint_fails),
+                  "shadow: RENDERTARGETS index 1 in a shadowcomp is accepted")
+            os.remove(os.path.join(wsh, "world0", "shadowcomp.fsh"))
+            os.remove(os.path.join(wsh, "world0", "shadowcomp.vsh"))
         finally:
             shutil.rmtree(wtmp, ignore_errors=True)
 
@@ -2083,6 +2276,26 @@ def default_shaders_root():
     return os.path.join(os.path.dirname(here), "shaders")
 
 
+def materialize_overlay(base_root, overlay_root, dest):
+    """Copy `base_root` to `dest`, then copy `overlay_root` on top of it.
+
+    This is exactly what tools/package.py does when building the Advanced zip
+    (base tree, overlay files replacing/adding by path), so validating the
+    merged tree validates what actually ships. The whole pipeline then runs
+    against `dest` unchanged. Caller owns cleanup of `dest`.
+    """
+    shutil.copytree(base_root, dest)
+    for root, _dirs, files in os.walk(overlay_root):
+        rel = os.path.relpath(root, overlay_root)
+        out = dest if rel == "." else os.path.join(dest, rel)
+        os.makedirs(out, exist_ok=True)
+        for fn in files:
+            if fn == ".gitkeep" or (rel == "." and fn == "README.md"):
+                continue  # overlay bookkeeping/docs — package.py excludes these too
+            shutil.copy2(os.path.join(root, fn), os.path.join(out, fn))
+    return dest
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(
         description="Asteria Loom shader compile gate (glslang over every profile x program).")
@@ -2100,6 +2313,15 @@ def main(argv=None):
                          "mac-hw (M4 + hardware shadow sampling), "
                          "advanced (Windows/AL_ADVANCED_TIER path), "
                          "both (mac+advanced, back-compat), or all (mac+mac-hw+advanced)")
+    ap.add_argument("--overlay", default=None,
+                    help="validate the ADVANCED build: merge this overlay dir "
+                         "(e.g. shaders-advanced) on top of the shaders/ tree into a "
+                         "temp dir and validate the merged result. Implies "
+                         "--allow-compute.")
+    ap.add_argument("--allow-compute", action="store_true",
+                    help="permit .csh compute programs (and compile them with -S comp). "
+                         "NEVER use for the macOS pack: a single .csh makes Iris fail the "
+                         "whole pack to load on macOS GL 4.1.")
     ap.add_argument("--keep", action="store_true",
                     help="keep the patched output under --out instead of deleting it")
     ap.add_argument("--self-test", action="store_true",
@@ -2120,14 +2342,39 @@ def main(argv=None):
     }
     targets = target_sets.get(args.target, [args.target])
 
-    result = run_validation(
-        shaders_root, out_dir,
-        profile_filter=set(args.profile) if args.profile else None,
-        program_glob=args.program,
-        keep=args.keep,
-        require_glslang=True,
-        targets=targets,
-    )
+    base_root = shaders_root
+    overlay_root = None
+    allow_compute = args.allow_compute
+    merged_tmp = None
+
+    if args.overlay:
+        overlay_root = os.path.realpath(args.overlay)
+        if not os.path.isdir(overlay_root):
+            sys.stderr.write("error: overlay dir not found: %s\n" % overlay_root)
+            return 2
+        allow_compute = True          # --overlay implies --allow-compute
+        merged_tmp = tempfile.mkdtemp(prefix="al-overlay-")
+        shaders_root = materialize_overlay(base_root, overlay_root,
+                                           os.path.join(merged_tmp, "shaders"))
+        print("Validating ADVANCED build: %s + %s (merged)"
+              % (os.path.relpath(base_root, repo_root),
+                 os.path.relpath(overlay_root, repo_root)))
+
+    try:
+        result = run_validation(
+            shaders_root, out_dir,
+            profile_filter=set(args.profile) if args.profile else None,
+            program_glob=args.program,
+            keep=args.keep,
+            require_glslang=True,
+            targets=targets,
+            allow_compute=allow_compute,
+            base_root=base_root if overlay_root else None,
+            overlay_root=overlay_root,
+        )
+    finally:
+        if merged_tmp:
+            shutil.rmtree(merged_tmp, ignore_errors=True)
     print_report(result)
 
     if result.setup_errors:

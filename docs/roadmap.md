@@ -77,20 +77,36 @@ removal (bilateral AO, glossy SSR, IGN dithers), and material-aware reflective b
 - [x] `worldN` folder migration via include shims (world0 / world-1 / world1)
 - [ ] Distant Horizons programs (`dh_terrain`, `dh_water`, `dh_shadow`, depth compositing)
 
-## Phase 6 — Advanced tier (Windows/Linux) — ON HOLD
+## Phase 6 — Advanced tier (Windows/Linux) — infrastructure landed, features pending
 
+- [x] Two-zip build split (default macOS-safe pack + `-Advanced` Windows/Linux pack)
+- [x] `shaders-advanced/` overlay tree + overlay contract (`shaders-advanced/README.md`)
+- [x] Packager `--variant {mac,advanced,all}` with a hard refusal to write the
+      default zip if any `.csh` would land in it
+- [x] Validator `--overlay` / `--allow-compute`, `.csh` compiled with `-S comp`,
+      advanced-library include isolation lint
+- [x] CI runs both the macOS gate (`--target all`, `.csh` still a hard fail) and
+      the advanced build (`--target advanced --overlay shaders-advanced`)
 - [ ] Flood-fill colored voxel light (LPV-style, 3D image ping-pong)
 - [ ] Voxel ray-traced shadows / GI
 - [ ] Compute histogram auto-exposure (Mac fallback: mipmap-average)
 - [ ] 3D-image-cached volumetric upgrades
 
-**Blocked by a hard platform constraint (field-confirmed 2026-07):** Iris compiles
-every `.csh` a pack ships, and macOS (OpenGL 4.1 — this pack's primary target)
-cannot compile compute shaders, so ANY compute program makes the whole pack fail
-to load on macOS — gating with `AL_ADVANCED_TIER` does not help. The validator now
-**hard-fails** if any `.csh` is present. A real advanced tier therefore has to ship
-as a SEPARATE Windows/Linux-only pack, not be gated inside the macOS pack. Deferred
-until that split is warranted.
+**Why the tier ships as a separate zip (field-confirmed 2026-07):** Iris compiles
+every `.csh` a pack ships — `ProgramSet.readComputeArray` is not feature-gated —
+and macOS (OpenGL 4.1 — this pack's primary target) cannot compile compute
+shaders. So ANY compute program makes the whole pack fail to load on macOS, and
+`#ifdef` gating (`AL_ADVANCED_TIER`, `IRIS_FEATURE_COMPUTE_SHADERS`) does not
+help: the file's mere presence is fatal. The tier therefore cannot be gated
+inside the macOS pack — it has to be a SEPARATE Windows/Linux-only archive.
+
+That split is now built, as an **overlay, not a fork**: `shaders/` stays the one
+canonical, macOS-safe tree (zero `.csh`, ever) and `shaders-advanced/` holds only
+the files that differ or are new. The Advanced zip is `shaders/` with the overlay
+copied on top; nothing is duplicated. The `.csh` hard-fail in `tools/validate.py`
+stays exactly as it was for the canonical tree — it is the gate that protects the
+Mac — and `tools/package.py` refuses to write the default zip at all if a stray
+`.csh` would end up inside it. What remains is the shader work itself.
 
 ## Phase 7 — Tuning & release
 
