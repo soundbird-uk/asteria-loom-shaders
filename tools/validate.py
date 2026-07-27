@@ -69,7 +69,10 @@ anywhere breaks pack loading on macOS — `#ifdef` gating does not help. Hence:
     discovered and compiled (`-S comp`). Compute programs are exempt from the
     fragment-only lints (RENDERTARGETS, sampler budget). A dedicated lint also
     forbids any program in `shaders/` from including the overlay's
-    `lib/advanced/**` (that would poison the Mac build).
+    `lib/advanced/**` (that would poison the Mac build). `shaders.properties` is
+    APPENDED rather than replaced (overlay fragment `shaders.properties.append`,
+    merged by tools/overlay_props.py — the same module package.py uses); an
+    overlay that ships a full-replacement `shaders.properties` is an ERROR.
 
 Distant Horizons: `dh_*` programs compile with DISTANT_HORIZONS defined plus DH
 uniform/attribute/constant stubs; every non-dh program also gets ONE extra
@@ -91,6 +94,12 @@ import shutil
 import subprocess
 import sys
 import tempfile
+
+# Shared with tools/package.py — the single definition of how the ADVANCED
+# overlay's shaders.properties fragment is merged onto the canonical file, so
+# the gate and the packager can never disagree about what ships.
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+import overlay_props  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Iris-injected stubs.
@@ -227,7 +236,7 @@ RENDERTARGETS_EXEMPT_STEMS = {"shadow", "final", "dh_shadow"}
 # fragment-only lints (RENDERTARGETS comment/consistency, sampler budget).
 # `comp` = a `.csh` compute program: it writes through images/SSBOs rather than
 # render targets, and the 16-sampler fragment limit does not apply to it.
-NON_FRAGMENT_STAGES = {"vert", "comp"}
+NON_FRAGMENT_STAGES = {"vert", "geom", "comp"}
 
 # Shadow-pass fragment programs (`shadow*`, `shadowcomp*`) address
 # shadowcolor0..7 in their RENDERTARGETS list, not colortex0..15.
@@ -828,7 +837,12 @@ def discover_programs(shaders_root):
         # `.csh` compute programs only ever exist in the ADVANCED overlay build
         # (--overlay / --allow-compute); in the canonical macOS-safe tree
         # lint_no_compute_programs hard-fails before we get here.
-        for ext, stage in (("*.vsh", "vert"), ("*.fsh", "frag"), ("*.csh", "comp")):
+        # .gsh is compiled too: the pack ships geometry shaders (the voxel-light
+        # splat in shadow.gsh), and Iris compiles every stage file whether or not
+        # the feature is toggled on. An uncompiled .gsh is therefore a way to ship
+        # a pack that fails to load, invisible to this gate.
+        for ext, stage in (("*.vsh", "vert"), ("*.fsh", "frag"),
+                           ("*.gsh", "geom"), ("*.csh", "comp")):
             for path in sorted(glob.glob(os.path.join(base, ext))):
                 if os.sep + "lib" + os.sep in path:
                     continue
@@ -2283,7 +2297,19 @@ def materialize_overlay(base_root, overlay_root, dest):
     (base tree, overlay files replacing/adding by path), so validating the
     merged tree validates what actually ships. The whole pipeline then runs
     against `dest` unchanged. Caller owns cleanup of `dest`.
+
+    shaders.properties is the ONE file the overlay may not replace: a full copy
+    would restate every profile/screen/slider of the canonical file and then go
+    SILENTLY stale on the next edit to it (the Mac zip would get the change, the
+    Advanced zip would not, and nothing would error). The overlay instead ships
+    a fragment, `shaders.properties.append`, and the effective file is
+    base + separator + fragment. That merge is defined once in
+    tools/overlay_props.py and used by BOTH this function and package.py, so the
+    properties this gate compiles against are byte-identical to the packed ones.
+    A full-replacement shaders.properties in the overlay raises OverlayPropsError.
     """
+    overlay_props.check_overlay(base_root, overlay_root)   # raises on violation
+
     shutil.copytree(base_root, dest)
     for root, _dirs, files in os.walk(overlay_root):
         rel = os.path.relpath(root, overlay_root)
@@ -2292,7 +2318,15 @@ def materialize_overlay(base_root, overlay_root, dest):
         for fn in files:
             if fn == ".gitkeep" or (rel == "." and fn == "README.md"):
                 continue  # overlay bookkeeping/docs — package.py excludes these too
+            if rel == "." and fn == overlay_props.APPEND_NAME:
+                continue  # a build INPUT, merged below; never a file in the tree
             shutil.copy2(os.path.join(root, fn), os.path.join(out, fn))
+
+    merged = overlay_props.merged_properties(base_root, overlay_root)
+    if merged is not None:
+        with open(os.path.join(dest, overlay_props.PROPS_NAME), "w",
+                  encoding="utf-8") as fh:
+            fh.write(merged)
     return dest
 
 
@@ -2354,8 +2388,13 @@ def main(argv=None):
             return 2
         allow_compute = True          # --overlay implies --allow-compute
         merged_tmp = tempfile.mkdtemp(prefix="al-overlay-")
-        shaders_root = materialize_overlay(base_root, overlay_root,
-                                           os.path.join(merged_tmp, "shaders"))
+        try:
+            shaders_root = materialize_overlay(base_root, overlay_root,
+                                               os.path.join(merged_tmp, "shaders"))
+        except overlay_props.OverlayPropsError as e:
+            shutil.rmtree(merged_tmp, ignore_errors=True)
+            sys.stderr.write("error: %s\n" % e)
+            return 2
         print("Validating ADVANCED build: %s + %s (merged)"
               % (os.path.relpath(base_root, repo_root),
                  os.path.relpath(overlay_root, repo_root)))

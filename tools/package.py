@@ -28,6 +28,15 @@ ONLY files that differ from, or are new relative to, the canonical tree. Files
 are keyed by their in-zip arcname, so an overlay entry REPLACES the base entry
 of the same path. The tree is never duplicated.
 
+ONE EXCEPTION — `shaders.properties` is APPENDED, not replaced. Replacing it
+would force the overlay to restate every profile/screen/slider/directive of the
+canonical file just to add two advanced lines, and that copy would go silently
+stale on the next edit to the base. So the overlay supplies a FRAGMENT
+(`shaders.properties.append`) and the packed file is base + separator +
+fragment, built by tools/overlay_props.py — the same module tools/validate.py
+uses, so what is validated is byte-identical to what ships. A full-replacement
+`shaders.properties` in the overlay is a hard ERROR here.
+
 Version resolution order:
   1. --version argument
   2. first `## [x.y.z]` heading in CHANGELOG.md
@@ -42,6 +51,12 @@ import re
 import sys
 import zipfile
 
+# Shared with tools/validate.py — the single definition of how the overlay's
+# shaders.properties fragment is merged onto the canonical file. Same directory
+# as this script, so a plain import resolves when running `python3 tools/...`.
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+import overlay_props  # noqa: E402
+
 # Repo-relative source roots. BASE is canonical and Mac-safe; OVERLAY is the
 # thin delta applied on top of it for the advanced build.
 BASE_ROOT_NAME = "shaders"
@@ -54,10 +69,13 @@ ARC_PREFIX = "shaders"
 EXCLUDE_NAMES = {".DS_Store", "Thumbs.db", "desktop.ini", ".gitkeep"}
 EXCLUDE_DIR_NAMES = {"__pycache__", ".git"}
 EXCLUDE_SUFFIXES = (".swp", ".swo", ".orig", ".rej", "~", ".pyc")
-# Root-level paths (relative to a source root) that are repo documentation, not
-# shader assets — e.g. shaders-advanced/README.md, which documents the overlay
-# contract and must not be shipped inside the pack.
-EXCLUDE_REL_PATHS = {"README.md"}
+# Root-level paths (relative to a source root) that are repo documentation or
+# build inputs, not shader assets:
+#   * README.md                    — documents the overlay contract.
+#   * shaders.properties.append    — the overlay's properties FRAGMENT. It is a
+#     build input, not a file Iris understands; it is merged into
+#     shaders.properties below and must never appear in the zip on its own.
+EXCLUDE_REL_PATHS = {"README.md", overlay_props.APPEND_NAME}
 
 # Which source roots each variant is built from, in overlay order.
 VARIANT_ROOTS = {
@@ -135,6 +153,21 @@ def build_variant(variant, repo_root, out_dir, version):
         sys.stderr.write("error: no files collected for variant '%s'\n" % variant)
         return 2, None
 
+    # ---- GENERATED members (content not read from a single source file) ------
+    # arcname -> text. Currently just the merged shaders.properties for the
+    # advanced variant; the base one stays a plain file copy.
+    generated = {}
+    if variant == "advanced":
+        base_root = os.path.join(repo_root, BASE_ROOT_NAME)
+        overlay_root = os.path.join(repo_root, OVERLAY_ROOT_NAME)
+        try:
+            merged = overlay_props.merged_properties(base_root, overlay_root)
+        except overlay_props.OverlayPropsError as e:
+            sys.stderr.write("error: %s\n" % e)
+            return 3, None
+        if merged is not None:
+            generated[ARC_PREFIX + "/" + overlay_props.PROPS_NAME] = merged
+
     # ---- HARD SAFETY ASSERT (the reason the split exists) -------------------
     # The mac/default zip must contain ZERO compute programs. Iris compiles
     # every .csh it finds, and macOS GL 4.1 cannot compile compute shaders, so
@@ -158,7 +191,16 @@ def build_variant(variant, repo_root, out_dir, version):
     zip_path = os.path.join(out_dir, zip_name(variant, version))
     with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
         for arcname in sorted(collected):
-            zf.write(collected[arcname], arcname)
+            # A generated member replaces the file that would otherwise be
+            # copied at this path (the merged properties supersedes the base
+            # file copy) — written from text so the zip carries exactly the
+            # bytes tools/validate.py compiled against.
+            if arcname in generated:
+                zf.writestr(arcname, generated.pop(arcname))
+            else:
+                zf.write(collected[arcname], arcname)
+        for arcname in sorted(generated):     # generated-only paths, if any
+            zf.writestr(arcname, generated[arcname])
 
     print("Packaged %d file(s) [variant=%s] -> %s" % (len(collected), variant, zip_path))
     return 0, zip_path

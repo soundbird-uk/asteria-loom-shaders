@@ -147,6 +147,109 @@
 #define AL_CBL_T_BLEND         0.90
 #define AL_CBL_T_DEPTH_REJECT  0.05
 
+/* -------------------------------------------------------------------------
+   FLOOD-FILL COLOURED VOXEL BLOCK LIGHT  (shadow.gsh + shadowcomp/shadowcomp1)
+   -------------------------------------------------------------------------
+   The screen-space gather above can only find emitters that are ON SCREEN, so
+   a torch behind you or round a corner contributes nothing. This replaces it
+   (and falls back to it) with a real 3D light field:
+
+     1. shadow.gsh voxelises every shadow-casting block into a 128x64x128 grid
+        centred on the camera, splatting albedo + light level into shadowcolor0.
+        It rides the SHADOW pass, so it sees everything within shadowDistance —
+        off screen, behind you, round the corner, all of it.
+     2. shadowcomp + shadowcomp1 flood-fill that grid: a 6/18/26-neighbour
+        gather over the persistent field (shadowcolor1 <-> shadowcolor2), where
+        SOLID voxels hold no light and therefore block it. Two steps per frame
+        on a field that persists, so it converges in a fraction of a second and
+        then tracks the world.
+     3. deferred1 samples the field at the shaded point and feeds it into the
+        SAME alBlockLightTint() slot the screen-space gather used.
+
+   THE INVARIANT IS UNCHANGED — and it is not negotiable: the field supplies
+   HUE and a bounded confidence boost ONLY. The INTENSITY of block light still
+   comes exclusively from vanilla's `lm.x` lightmap, which is occlusion-correct
+   by construction (the game's own flood fill computed it). This 1-metre
+   diffusion approximation would leak through thin walls if it were used as
+   radiance; as a hue behind lm.x it physically cannot, because lm.x is 0 on the
+   far side of the wall and zero times any colour is zero.
+
+   COST / COMPATIBILITY NOTES, read before enabling on a low preset:
+     * It reserves a 2048x512 strip of the shadow buffer for the voxel atlas
+       (see lib/voxel.glsl), which SHRINKS the shadow map to
+       (shadowMapResolution - 512)^2. At 2048 that is 1536^2, at 3072 2560^2.
+       Below shadowMapResolution 2048 the atlas no longer fits and the field is
+       only partially populated (it degrades to the screen-space fallback, it
+       does not break) — which is why POTATO/LOW ship with this OFF.
+     * The shadow pass gains a geometry shader. shadow.gsh is present in the
+       pack whether or not this option is on (Iris compiles every stage file it
+       finds); with the option off it is a pure pass-through that emits the
+       input triangle unchanged.
+   ------------------------------------------------------------------------- */
+
+// Master toggle. Also gates the propagation PASSES via
+// `program.shadowcomp.enabled` / `program.shadowcomp1.enabled` in
+// shaders.properties, and compiles the voxelisation splat out of shadow.gsh,
+// so with it off the only residue is a pass-through geometry stage.
+// (Default ON because settings.glsl defaults are contractually the MEDIUM
+// profile's values and MEDIUM enables it. If field testing shows the geometry
+// stage is a problem on some driver, flipping this to `//#define` is the
+// one-character kill switch for anyone who has not picked a preset.)
+#define VOXEL_LIGHT // [VOXEL_LIGHT]
+
+// How readily the voxel field's hue wins over the warm constant ramp. This is a
+// gain on the field's MAGNITUDE, which is what drives the confidence ramp in
+// lib/lighting.glsl — it does not (and must not) brighten anything, because the
+// hue is normalised to unit chroma before use. 0.00 = the field never wins
+// (identical to the toggle being off, but the passes still run).
+// NOTE: the default MUST be spelled exactly as one of the list entries — "1.0"
+// against a list containing "1.00" makes Iris render a phantom duplicate
+// "Default" entry in the GUI (this pack shipped that bug once already).
+#define VOXEL_LIGHT_STRENGTH 1.00 // [0.00 0.25 0.50 0.75 1.00 1.25 1.50 2.00]
+
+// Propagation kernel per flood-fill step:
+//   1 = 6 face neighbours            (cheapest; propagation is a little boxy)
+//   2 = 6 faces + 12 edge diagonals  (rounder spread)
+//   3 = all 26 neighbours            (roundest; ~4x the taps of tier 1)
+// Diagonal taps are weighted 1/sqrt(2) and 1/sqrt(3) so the kernel approximates
+// an isotropic diffusion rather than over-weighting the corners.
+#define VOXEL_LIGHT_QUALITY 1 // [1 2 3]
+
+// --- Voxel-light shaping (internal, not GUI) ------------------------------
+// Per-step retention of the diffusion. 1.0 is the discrete harmonic solution
+// (light falls off ~1/r from a source, the physically sensible answer); slightly
+// under 1.0 adds an exponential cutoff so a bright source cannot fill the whole
+// 128-block grid with its hue. Two steps run per frame, so the field converges
+// over roughly (reach / 2) frames and then simply tracks the world.
+#define AL_VOXEL_SPREAD 0.965
+// Radiance a level-15 emitter injects into its own voxel. Arbitrary units — only
+// the RATIO between emitters and the AL_VOXEL_GATHER_GAIN below matter, because
+// the consumer normalises to unit chroma.
+#define AL_VOXEL_EMIT 1.0
+// Emission response curve. Vanilla light level is linear in "blocks of reach",
+// so a level-7 source is far more than half as visually present as a level-15
+// one; squaring would make dim sources vanish. Kept mildly super-linear so
+// glowstone still beats a sculk vein when both are in range.
+#define AL_VOXEL_EMIT_POW 1.4
+// Maps the field into the SAME units the screen-space gather uses, so the single
+// confidence ramp in lib/lighting.glsl (AL_CBL_EPS .. AL_CBL_FULL) serves both
+// paths and the two never disagree about how confident "confident" is.
+// Calibration: a diffusion at steady state around a unit source falls off close
+// to 0.16/r, so the field reads ~0.16 one block from a torch, ~0.04 at four
+// blocks and ~0.016 at ten. The confidence ramp saturates at AL_CBL_FULL (0.05),
+// so a gain of 2.5 puts FULL confidence out to roughly five blocks and keeps
+// partial confidence to the edge of a light's vanilla 15-block reach — beyond
+// which lm.x has faded to nothing anyway and the hue is moot. Over-gaining here
+// is safe by construction (confidence is clamped and the hue is unit-chroma
+// normalised, so it can never brighten anything); under-gaining is not, because
+// it silently reverts the whole feature to the warm ramp a metre from a torch.
+#define AL_VOXEL_GATHER_GAIN 2.5
+// How far along the surface normal the consumer steps before sampling. A lit
+// surface's OWN voxel is solid and by construction holds no light, so the sample
+// must be taken in the air voxel in front of it. 0.6 clears the boundary by a
+// comfortable margin without skipping the adjacent voxel entirely.
+#define AL_VOXEL_NORMAL_STEP 0.6
+
 // --- Blocklight shaping (internal, not GUI) -------------------------------
 // These scalars tune the falloff so a campfire warms a ~6-block radius at night
 // while its peak stays at ~0.1.1's adjacent-torch brightness (the 0.2.0 field

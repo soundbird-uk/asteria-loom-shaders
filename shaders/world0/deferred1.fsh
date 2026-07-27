@@ -49,11 +49,19 @@
    + colortex4 (AO)                                              = 1  (AO on)
    + colortex11 (AL_SHADOW_TEMPORAL, on by default)              = 1
    + colortex13 (COLORED_BLOCKLIGHT)                             = 1
+   + shadowcolor1 (VOXEL_LIGHT — the flood-filled voxel field)   = 1
    + shadow samplers via lib/shadow.glsl (SHADOWS):
        default software path : shadowtex1 (raw) + noisetex       = 2  -> 8 total
        experimental AL_SHADOW_HW : shadowtex0 + shadowtex1HW + noisetex = 3 -> 9 total
    contact shadows (CONTACT_SHADOWS) reuse depthtex0/noisetex (no new sampler).
- Worst case (everything on) = 13. Within the 16-sampler Mac limit.
+ Worst case (everything on) = 14. Within the 16-sampler Mac limit.
+
+ VOXEL LIGHT (5.5.0): with VOXEL_LIGHT on, the block-light HUE comes from the
+ flood-filled voxel field (shadowcolor1) instead of the screen-space gather, and
+ the gather stays as the fallback for surfaces outside the grid. The invariant is
+ unchanged and unchangeable: HUE only — the INTENSITY is still lm.x, which is the
+ game's own occlusion-correct flood fill, so nothing can leak through a wall.
+ See lib/voxel.glsl.
 */
 
 uniform sampler2D colortex0;   // sky / scene HDR
@@ -77,6 +85,13 @@ uniform sampler2D colortex11;
 // colour of the visible emitters around this pixel. Written by deferred2, which
 // runs AFTER this pass — so this is last frame's content, by design.
 uniform sampler2D colortex13;
+#endif
+#ifdef VOXEL_LIGHT
+// The flood-filled voxel light field (5.5.0), living in the reserved atlas strip
+// of the shadow buffer. Persistent (`shadowcolor1Clear = false`) and written by
+// shadowcomp1, which runs in the shadow phase — i.e. BEFORE this pass, in the
+// same frame. Unlike colortex13 there is no one-frame lag here.
+uniform sampler2D shadowcolor1;
 #endif
 
 uniform vec3 sunPosition;          // view space
@@ -335,6 +350,23 @@ void main() {
     vec3 blGather = vec3(0.0);
 #ifdef COLORED_BLOCKLIGHT
     blGather = texture(colortex13, texcoord).rgb;
+#endif
+#ifdef VOXEL_LIGHT
+    // FLOOD-FILLED VOXEL FIELD (5.5.0) — the better answer to the same question,
+    // and it SUPERSEDES the screen-space gather wherever it has an answer at all.
+    // The screen-space gather stays as the fallback for the two cases the grid
+    // cannot serve: a surface further than 64 blocks away horizontally / 32
+    // vertically (outside the grid), and the frames right after a buffer reset.
+    //
+    // Sample in the AIR voxel in FRONT of the surface: the surface's own voxel is
+    // solid and by construction holds no light, so sampling it would return black
+    // on every lit wall in the world.
+    vec3 vxGrid  = alVoxelGridPos(playerPos + N * AL_VOXEL_NORMAL_STEP, cameraPosition);
+    vec3 vxLight = alVoxelSampleField(shadowcolor1, vxGrid) * AL_VOXEL_GATHER_GAIN
+                 * VOXEL_LIGHT_STRENGTH;
+    // Positive comparison (NaN law): a poisoned read fails it and leaves the
+    // screen-space value — or vec3(0), i.e. the warm ramp — in place.
+    if (max(vxLight.r, max(vxLight.g, vxLight.b)) > AL_CBL_EPS) blGather = vxLight;
 #endif
 
     // worldPos (feet + camera) drives the cloud-shadow factor inside the lib.

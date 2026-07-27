@@ -18,13 +18,28 @@ has a binding contract; read the relevant one plus the brief:
 Iris runs a fixed sequence of passes each frame. The current chain:
 
 ```
-prepare → shadow → gbuffers(opaque) → deferred → deferred1 → deferred2
+prepare → shadow → shadowcomp → shadowcomp1
+  → gbuffers(opaque) → deferred → deferred1 → deferred2
   → gbuffers(translucent)
   → composite → composite1 → composite2 → composite3 → composite4 … composite14 → final
 ```
 
 - **prepare** — bakes the sky-view LUT tile (atmosphere) into colortex6, once per frame.
-- **shadow** — depth-only render into the (distortion-warped) shadow map, cutout alpha only.
+- **shadow** — the (distortion-warped) shadow map, cutout alpha only — **plus**, when
+  `VOXEL_LIGHT` is on, voxelisation. `shadow.gsh` dual-emits: the real shadow triangle,
+  and a one-texel splat at the block's flattened voxel address, writing albedo + light
+  level into shadowcolor0. Because a splat necessarily writes the shared depth
+  attachment, the shadow map is squeezed into the square sub-region
+  `(shadowMapResolution − 512)²` and the 2048×512 voxel atlas takes the top strip; the
+  remap is applied at exactly the two `texture()` call sites in `lib/shadow.glsl` and is
+  the identity when `VOXEL_LIGHT` is off. Full derivation in `lib/voxel.glsl`.
+- **shadowcomp → shadowcomp1** — the flood fill: two 6/18/26-neighbour diffusion steps per
+  frame over a 128×64×128 grid centred on `floor(cameraPosition)`, ping-ponging
+  shadowcolor1 → shadowcolor2 → shadowcolor1 (no program reads and writes the same
+  buffer, so the result does not depend on Iris' shadowcolor flip semantics). Emitter
+  voxels hold their emission, solid voxels hold nothing — which *is* the occlusion model —
+  and air voxels average their neighbours. shadowcomp reprojects the persistent field by
+  the integer camera-block delta. Gated via `program.shadowcomp*.enabled = VOXEL_LIGHT`.
 - **gbuffers (opaque)** — terrain, entities, block, hand, basic, textured, textured_lit,
   particles. These do **no lighting**; they write the G-buffer. Sky programs (skybasic,
   skytextured, clouds) instead write scene colour directly to colortex0.
@@ -116,6 +131,10 @@ histories. Formats come from the Phase 1–4 contracts.
 | colortex13 | R11F_G11F_B10F | Coloured block light: `rgb` = the screen-space gather of nearby emitters' colour, consumed by `deferred1` as a hue. **Half resolution** (`size.buffer`) | **no** |
 | colortex14 | RGBA16F | Coloured block-light history: `rgb` = accumulated gather, `a` = eye depth when written. Half resolution, same scale as colortex13 | **no** |
 
+| shadowcolor0 | RGBA8 | Voxel emitter/occupancy map: `rgb` = block albedo (sRGB), `a` = `(1+level)/32` (a band both plausible clear values fall outside). Written by the `shadow.gsh` splats | yes (must be) |
+| shadowcolor1 | R11F_G11F_B10F | **The** voxel light field: one texel per voxel of the 128×64×128 grid, atlas'd 16×4 tiles of 128×128 in the shadow buffer's top strip. Written by shadowcomp1, read by deferred1 | **no** |
+| shadowcolor2 | R11F_G11F_B10F | Voxel field ping-pong intermediate (shadowcomp → shadowcomp1) | **no** |
+
 Depth: depthtex0/1 as usual. Shadow: shadowtex0/1 (plain depth textures — the software
 compare path). The persistent (`clear=false`) buffers 5–8, 10 and 11 rely on **NaN-proof
 range-validated reads** so an undefined first frame self-heals; this is a standing law of the
@@ -139,6 +158,8 @@ shaders/
 │   ├── space.glsl          # screen<->view<->world transforms, reprojection helpers
 │   ├── lighting.glsl       # lighting model (deferred1 + translucent forward share it)
 │   ├── shadow.glsl         # shadow-space distortion transforms, PCSS/contact sampling
+│   ├── voxel.glsl          # voxel light: grid address space, shadow-buffer split,
+│   │                       #   propagation step, field encode/decode (Phase 6)
 │   ├── contact.glsl        # screen-space contact-shadow raymarch
 │   ├── atmosphere.glsl     # sky-view LUT baking + alSkyMapUV/alSkySample helpers
 │   ├── atmosphere_common.glsl
@@ -152,7 +173,9 @@ shaders/
 │   ├── tonemap.glsl        # AgX fit (Phase 4)
 │   └── grade.glsl          # biome-adaptive grading + weather storytelling (Phase 4)
 ├── prepare.vsh/.fsh        # sky-view LUT
-├── shadow.vsh/.fsh
+├── shadow.vsh/.gsh/.fsh    # shadow map + voxelisation splats (.gsh dual-emit)
+├── shadowcomp.vsh/.fsh     # voxel flood-fill step 1 (reprojects the field)
+├── shadowcomp1.vsh/.fsh    # voxel flood-fill step 2 (writes shadowcolor1)
 ├── gbuffers_*.vsh/.fsh     # full opaque + translucent set (incl. entities_translucent)
 ├── deferred.vsh/.fsh       # GTAO
 ├── deferred1.vsh/.fsh      # lighting

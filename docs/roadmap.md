@@ -89,7 +89,16 @@ removal (bilateral AO, glossy SSR, IGN dithers), and material-aware reflective b
       the advanced build (`--target advanced --overlay shaders-advanced`)
 - [ ] Flood-fill colored voxel light (LPV-style, 3D image ping-pong)
 - [ ] Voxel ray-traced shadows / GI
-- [ ] Compute histogram auto-exposure (Mac fallback: mipmap-average)
+- [x] Compute histogram auto-exposure (`world*/final.csh`, the `final` pass's compute stage; Mac fallback:
+      composite14's mipmap-average metering, unchanged and still shipped). The
+      compute pass replaces the METERING only — trimmed mean of a 128-bin
+      log-luminance histogram instead of a frame mean — and keeps the adaptation
+      contract byte-identical (same asymmetric `AL_EXPOSURE_MIN/MAX/STRENGTH`
+      clamp, same `AL_EXPOSURE_TAU` integrator, same `colortex5.a(0,0)` slot).
+- [x] Overlay `shaders.properties` APPEND mechanism (`shaders.properties.append`
+      merged onto the canonical file by `tools/overlay_props.py`, shared by the
+      packager and the validator) — a full-replacement copy in the overlay is now
+      a build ERROR, so the Advanced zip can never ship stale properties.
 - [ ] 3D-image-cached volumetric upgrades
 
 **Why the tier ships as a separate zip (field-confirmed 2026-07):** Iris compiles

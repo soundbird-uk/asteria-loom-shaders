@@ -1,0 +1,59 @@
+# ============================================================================
+# ASTERIA LOOM — ADVANCED overlay: shaders.properties FRAGMENT
+# ----------------------------------------------------------------------------
+# This file is NOT a properties file Iris ever loads on its own. It is appended
+# to shaders/shaders.properties (verbatim, always current) by
+# tools/overlay_props.py, which both tools/package.py and tools/validate.py call,
+# so the Advanced zip and the compile gate see byte-identical text.
+#
+# WHY AN APPEND AND NOT A REPLACEMENT: shaders.properties describes the WHOLE
+# pack — five profiles, nine screens, the slider list, every blend/size/program
+# directive. An overlay COPY of it would have to restate all of that to add the
+# two lines below, and would then go stale the moment anyone edits the canonical
+# file: the default zip would ship the new profile/screen, the Advanced zip
+# would keep serving a months-old one, and NOTHING would error. Only the delta
+# lives here; the canonical file stays the single source of truth.
+#
+# Duplicate-key rule: .properties keeps the LAST assignment, and this fragment
+# is last, so a key repeated here overrides the base. Prefer adding keys.
+# ============================================================================
+
+# ---- Capability gate: this build REQUIRES compute -------------------------
+# The Advanced zip ships a compute stage for the `final` pass in every world
+# folder (final.csh — the histogram auto-exposure metering). Unlike every other
+# feature in this pack, that is not a graceful-fallback situation: Iris compiles
+# every .csh a pack ships, unconditionally, so a machine that cannot run compute
+# cannot load this zip at all. Declaring the flag REQUIRED (rather than optional, as the canonical file
+# does for the whole four-flag set) makes Iris refuse the pack up front with a
+# clear capability message instead of failing deep inside shader compilation —
+# and it is the machine-readable statement of "this archive is Windows/Linux
+# only; macOS users want AsteriaLoom-<version>.zip".
+#
+# Token name: the Iris feature-flag identifier is COMPUTE_SHADERS (Iris then
+# defines IRIS_FEATURE_COMPUTE_SHADERS in every program — the same spelling
+# tools/validate.py injects for its `advanced` compile target). COMPUTE_SHADERS
+# is also listed in the base file's `iris.features.optional`; naming it in both
+# lists is harmless (they are separate sets — required is enforced, optional is
+# only reported), and re-stating the optional list here just to remove one entry
+# is exactly the stale-copy trap this fragment exists to avoid.
+iris.features.required = COMPUTE_SHADERS
+
+# ---- Auto-exposure metering ownership (no directive needed) ---------------
+# NOTE, deliberately NOT a directive: composite14's fragment metering is NOT
+# disabled here, and it must not be. There is no properties key that removes one
+# MRT write from a pass — `program.composite14.enabled` would also kill the
+# bloom-combine that pass exists for, and no GUI option gates the metering
+# block (AL_EXPOSURE_* are internal defines a profile cannot touch). Instead the
+# compute pass is made the sole *authority* structurally:
+#   * final.csh is the `final` pass's COMPUTE stage, which Iris runs before
+#     that pass's fragment and therefore after every composite; it overwrites
+#     colortex5.a(0,0), the texel final.fsh reads a moment later, so the
+#     fragment path's metered value is never displayed;
+#   * the compute integrator keeps its OWN previous-exposure state in
+#     colortex5.a(1,0), which composite14/composite1 pass through byte-exact —
+#     so the fragment path's output is never fed back in either.
+# The exposure that reaches the screen is therefore integrated exactly once, by
+# the histogram pass. See each world's final.csh for the full argument (and for
+# why leaving the fragment path alive is a feature: if a driver ever declines
+# the compute dispatch, the pack degrades to the mip-average metering instead of
+# to a frozen exposure).

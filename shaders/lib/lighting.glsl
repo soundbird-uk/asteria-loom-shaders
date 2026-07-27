@@ -41,6 +41,15 @@
  alBlockLightTint() so there is still exactly ONE place that decides the tint.
  Callers that have no gather pass vec3(0.0) and get today's warm ramp verbatim.
 
+ 5.5.0 — VOXEL LIGHT: the `blGather` argument now carries EITHER the 5.4.0
+ screen-space gather OR the flood-filled voxel field (lib/voxel.glsl), whichever
+ deferred1 decided has an answer at that pixel, pre-scaled into the same units.
+ Nothing in this file needed to change for that beyond widening the #ifdef, which
+ is exactly why the argument was a plain vec3 in the first place: the producer is
+ the caller's business, the tint decision is this file's, and neither has to know
+ how the other works. The INVARIANT survives the swap untouched — hue only, never
+ intensity, because lm.x is the only occlusion-correct signal in the building.
+
  All maths is LINEAR; the caller decodes albedo sRGB->linear and outputs
  linear HDR to colortex0.
 */
@@ -89,7 +98,15 @@ vec3 alBlockLightTint(float bl, vec3 blGather) {
     vec3 base = AL_TORCH_TINT;
 #endif
 
-#ifdef COLORED_BLOCKLIGHT
+#if defined COLORED_BLOCKLIGHT || defined VOXEL_LIGHT
+    // 5.5.0: this branch now serves BOTH hue sources. deferred1 decides which one
+    // fills `blGather` — the voxel field (lib/voxel.glsl) when it has data at this
+    // point, otherwise the screen-space gather (colortex13) — and hands the winner
+    // in already scaled into these units. Everything from here down is identical
+    // for both, which is the point: there is still exactly ONE place that decides
+    // the block-light tint, and the two producers cannot drift apart in how
+    // confidently they are believed.
+    //
     // NaN LAW. colortex13 is a clear=false persistent buffer that deferred1
     // reads BEFORE deferred2 has written it this frame (see deferred2.fsh), so
     // on the very first frame it holds undefined driver garbage. Every test here
@@ -110,7 +127,18 @@ vec3 alBlockLightTint(float bl, vec3 blGather) {
         // there), so a torch drifting off-screen fades its colour out instead
         // of popping back to amber.
         float conf = alSaturate((peak - AL_CBL_EPS) / max(AL_CBL_FULL - AL_CBL_EPS, 1e-4));
-        base = mix(base, hue, alSaturate(conf * COLORED_BLOCKLIGHT_STRENGTH));
+        // Which slider owns "how far a confident hue may pull the tint". Normally
+        // it is COLORED_BLOCKLIGHT_STRENGTH, which predates the voxel path and is
+        // the one users already know. If the screen-space feature has been turned
+        // OFF and only the voxel path is live, that slider is not on screen for
+        // this configuration, so VOXEL_LIGHT_STRENGTH takes over instead of the
+        // tint silently inheriting a control the user cannot see.
+#if defined COLORED_BLOCKLIGHT
+        float tintAmt = COLORED_BLOCKLIGHT_STRENGTH;
+#else
+        float tintAmt = VOXEL_LIGHT_STRENGTH;
+#endif
+        base = mix(base, hue, alSaturate(conf * tintAmt));
     }
 #endif
     return base;

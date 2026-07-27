@@ -103,9 +103,38 @@
                          colortex13 (an MRT pass requires all its targets to
                          share a size). `const bool colortex14Clear = false;`
                          -> reads are NaN-proof range-validated in deferred2.fsh.
-   shadowcolor0 RGBA8    reserved for Phase 2 (coloured/translucent shadows);
-                         Phase 1's shadow pass is depth-only, so nothing is
-                         allocated yet — this only reserves the format.
+   shadowcolor0 RGBA8    VOXEL EMITTER / OCCUPANCY MAP (5.5.0): written by the
+                         one-texel splats shadow.gsh emits into the reserved
+                         atlas strip of the shadow buffer. rgb = the block's own
+                         albedo as sampled (sRGB), a = (1 + lightLevel)/32, a
+                         band chosen so that BOTH plausible shadow-buffer clear
+                         values (0.0 and opaque white) read as "empty" — see
+                         lib/voxel.glsl. CLEARED every frame, deliberately: a
+                         broken torch must stop existing.
+   shadowcolor1 R11F_G11F_B10F
+                         THE VOXEL LIGHT FIELD (5.5.0): rgb = flood-filled
+                         coloured block light, one texel per voxel of a
+                         128x64x128 grid centred on the camera, flattened as
+                         16x4 tiles of 128x128 = 2048x512 texels in the top
+                         strip of the shadow buffer. Written by shadowcomp1,
+                         read by next frame's shadowcomp and by deferred1 (as a
+                         HUE only — the intensity stays with vanilla's lm.x).
+                         `const bool shadowcolor1Clear = false;` — it is the
+                         accumulator the whole flood fill lives in; clearing it
+                         would restart the diffusion from black every frame and
+                         the light would never propagate anywhere at all.
+                         No alpha: occupancy is re-read fresh from shadowcolor0
+                         each pass rather than stored one frame stale.
+   shadowcolor2 R11F_G11F_B10F
+                         Voxel field PING-PONG target (5.5.0): shadowcomp writes
+                         the half-propagated field here and shadowcomp1 reads it
+                         back. Exists so that no shadow-composite program ever
+                         reads and writes the same buffer, which would depend on
+                         Iris' shadowcolor main/alt flip semantics — see the long
+                         note in shadowcomp.fsh. `shadowcolor2Clear = false`
+                         purely to avoid a pointless full-buffer clear; every
+                         read of it is NaN-proof range-validated (lib/voxel.glsl)
+                         so an undefined first frame self-heals in one step.
  ==========================================================================
 */
 
@@ -126,6 +155,8 @@ const int colortex12Format = R8;
 const int colortex13Format = R11F_G11F_B10F;
 const int colortex14Format = RGBA16F;
 const int shadowcolor0Format = RGBA8;
+const int shadowcolor1Format = R11F_G11F_B10F;
+const int shadowcolor2Format = R11F_G11F_B10F;
 */
 
 /* ==========================================================================
@@ -158,6 +189,18 @@ const bool colortex11Clear = false;   // shadow-visibility history
 const bool colortex12Clear = false;   // SSR temporal confidence
 const bool colortex13Clear = false;   // coloured block light (read a frame late)
 const bool colortex14Clear = false;   // coloured block-light history
+// VOXEL LIGHT (5.5.0). shadowcolor1 is the flood fill's accumulator: each frame's
+// two propagation steps build on the previous frame's field, so persistence is
+// not an optimisation here, it is the mechanism. A cleared shadowcolor1 would
+// restart every frame from black and light would never travel more than two
+// voxels from a source — the feature would appear to do almost nothing while
+// costing full price. shadowcolor2 is only the ping-pong intermediate; it is
+// declared non-clearing purely to skip a pointless full-buffer clear, and every
+// read of both is NaN-proof range-validated in lib/voxel.glsl.
+// shadowcolor0 (the emitter/occupancy map) is deliberately NOT listed: it MUST
+// be re-cleared every frame or a torch that has been broken would haunt the grid.
+const bool shadowcolor1Clear = false;   // voxel light field (the accumulator)
+const bool shadowcolor2Clear = false;   // voxel field ping-pong intermediate
 
 // Shadow-map sizing (shadowMapResolution / shadowDistance) is declared in
 // settings.glsl as literal-valued const GUI options — Iris' ConstDirectiveParser

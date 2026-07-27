@@ -55,6 +55,22 @@
 */
 
 #include "/lib/common.glsl"
+// 5.5.0 VOXEL_LIGHT: lib/voxel.glsl owns the shadow-buffer split (the shadow map
+// is squeezed into a sub-square so the voxel atlas can own texels of its own —
+// the full argument is in that file's header). It is sampler-free and
+// uniform-free, so including it here is safe even from the shadow VERTEX stage.
+//
+// EVERYTHING in this file continues to work in LOGICAL shadow-map UV, i.e. [0,1]
+// across the shadow map itself. The split touches exactly three things:
+//   * alShadowCompare()   — the only compare-tap texture() call site,
+//   * alShadowRawDepth()  — the only blocker-search texture() call site,
+//   * the logical texel size (1 / AL_SHADOW_MAP_SIDE instead of
+//     1 / shadowMapResolution), which every bias / radius / offset derives from.
+// Bounds tests, PCSS maths, the Vogel disc, biases and the distortion warp are
+// untouched. With VOXEL_LIGHT off, AL_SHADOW_MAP_SIDE == shadowMapResolution and
+// alShadowMapUV() is the identity, so this file compiles to exactly the code
+// that shipped — that containment is the point.
+#include "/lib/voxel.glsl"
 
 // ---------------------------------------------------------------------------
 // Distortion warp (always compiled; used by shadow.vsh and by lookups here).
@@ -176,14 +192,17 @@ float alShadowRotation() {
 // on RAW depth: step(refD, stored) == (stored >= refD) == lit — the field-proven
 // 0.1.1 convention. Averaged over the Vogel disc this gives the soft edge.
 float alShadowCompare(vec2 uv, float refD) {
+    // LOGICAL -> PHYSICAL. Identity unless VOXEL_LIGHT squeezed the map into a
+    // sub-region of the shadow buffer (lib/voxel.glsl).
+    vec2 puv = alShadowMapUV(uv);
 #ifdef AL_SHADOW_HW
     #ifdef IRIS_FEATURE_SEPARATE_HARDWARE_SAMPLERS
-    return texture(shadowtex1HW, vec3(uv, refD));
+    return texture(shadowtex1HW, vec3(puv, refD));
     #else
-    return texture(shadowtex1,   vec3(uv, refD));
+    return texture(shadowtex1,   vec3(puv, refD));
     #endif
 #else
-    return step(refD, texture(shadowtex1, uv).r);
+    return step(refD, texture(shadowtex1, puv).r);
 #endif
 }
 
@@ -192,10 +211,11 @@ float alShadowCompare(vec2 uv, float refD) {
 // reads shadowtex0 (its raw-depth alias).
 #ifdef AL_SHADOW_PCSS_ACTIVE
 float alShadowRawDepth(vec2 uv) {
+    vec2 puv = alShadowMapUV(uv);   // see alShadowCompare
     #if defined AL_SHADOW_HW && defined IRIS_FEATURE_SEPARATE_HARDWARE_SAMPLERS
-    return texture(shadowtex0, uv).r;
+    return texture(shadowtex0, puv).r;
     #else
-    return texture(shadowtex1, uv).r;
+    return texture(shadowtex1, puv).r;
     #endif
 }
 #endif
@@ -261,7 +281,11 @@ float alShadowVisibility(vec3 playerPos, vec3 worldN, float NdotL) {
 
     // Normal offset: push along the surface normal by one LOCAL warped texel,
     // grown at grazing angles where the projected footprint is largest.
-    float baseTexelWorld = 2.0 * shadowDistance / float(shadowMapResolution);
+    // NB AL_SHADOW_MAP_SIDE, not shadowMapResolution: the shadow map is rendered
+    // into a square SUB-REGION of the buffer when VOXEL_LIGHT reserves the atlas
+    // strip, so one shadow texel is 1/side of the logical map, not 1/buffer.
+    // Identical to the old expression when VOXEL_LIGHT is off.
+    float baseTexelWorld = 2.0 * shadowDistance / float(AL_SHADOW_MAP_SIDE);
     float offsetWorld = baseTexelWorld * localScale
                       * (AL_SHADOW_NOFFSET_BASE + (1.0 - NdotL) * AL_SHADOW_NOFFSET_SLOPE);
     // Cap the ABSOLUTE offset: near-camera localScale<1 keeps it tiny/crisp, but
@@ -294,7 +318,9 @@ float alShadowVisibility(vec3 playerPos, vec3 worldN, float NdotL) {
     depthBias = min(depthBias, AL_SHADOW_BIAS_MAX_NDC);
     float refD  = uvz.z - depthBias;
 
-    float texel = 1.0 / float(shadowMapResolution);
+    // One texel in LOGICAL UV. See baseTexelWorld above for why this is the
+    // sub-region side and not the buffer resolution.
+    float texel = 1.0 / float(AL_SHADOW_MAP_SIDE);
     float phi   = alShadowRotation();
 
     // --- Penumbra radius (distorted UV) ----------------------------------
