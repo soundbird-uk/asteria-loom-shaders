@@ -28,8 +28,8 @@
  incapable machine is turned away with a capability message instead of a compile
  failure. The Mac path keeps composite14's mip-average metering, untouched.
 
- This is a NEW file, not a replacement: `shaders/world*/final.vsh` and
- `final.fsh` are untouched and still the only things that draw.
+ This is a NEW file, not a replacement: the base tree's final.vsh and final.fsh
+ are untouched and still the only things that draw.
 
  WHAT IT REPLACES, WHAT IT PRESERVES, AND WHY IT CANNOT DOUBLE-INTEGRATE: all
  documented at length in lib/advanced/exposure_histogram.glsl, which holds the
