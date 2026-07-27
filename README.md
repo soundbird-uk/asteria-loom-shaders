@@ -10,15 +10,17 @@ Windows/Linux-only features unlock automatically on capable machines and compile
 of the build on macOS. Development is **Mac-first** against OpenGL 4.1, so the baseline is
 guaranteed to run on Apple Silicon; Windows and Linux gain an advanced tier on top.
 
-> **Current version: 5.2.5.** Phases 1–5 are shipped and field-hardened on M4 Mac and
+> **Current release: 0.5.0.** Phases 1–5 are shipped and field-hardened on M4 Mac and
 > Windows: lighting/shadows, PB atmosphere/clouds/fog, the water & post stack, all three
-> dimensions (Overworld, Nether, End), and an ongoing visual-fix pass (a Gerstner water
-> rewrite, deterministic grain removal, and material-correct reflections). See the
-> [changelog](CHANGELOG.md) for the full release history.
+> dimensions (Overworld, Nether, End), plus an ongoing visual-fix pass (a Gerstner water
+> rewrite, temporally-accumulated reflections and shadows, a micro-facet PBR reflection
+> model, and a dual-filter bloom pyramid). Changes since the last tag live under
+> **Unreleased** in the [changelog](CHANGELOG.md), which is the authoritative release
+> history.
 
 ## Features
 
-Live today (0.3.3):
+Lighting, atmosphere & sky:
 
 - **Soft PCSS shadows** with shadow-map distortion warp (higher centre resolution),
   blocker-search penumbrae and contact-hardening, plus screen-space **contact shadows** on
@@ -55,21 +57,33 @@ Water & post (Phase 4, shipped):
   image, no camera jitter, no shimmer); **TAA** (Halton-jittered temporal accumulation with
   reprojection + variance clip) is offered as a choice. A temporal-resolve pass runs in both
   modes for anti-flicker.
-- **Deterministic grain removal** — a depth+normal bilateral denoise on GTAO, a glossy
-  pre-filter on SSR, and non-tiling (IGN) dithers, so reflections, AO and soft shadows are
-  clean without the distance jitter that pure temporal accumulation introduces.
-- **Bloom** — threshold-free, energy-conserving dual-filter pyramid bloom (progressive downsample + tent-cascade upsample) driving emissive spill.
-- **AgX tonemap** with mip-average auto-exposure and temporal adaptation, plus
-  biome-adaptive grading and **weather storytelling** (rain desaturates and cools, thunder
-  darkens, post-rain wetness lifts freshness, lightning flashes brighten the frame).
+- **Grain removal, spatial + temporal.** SSR and PCSS are stochastic, so a single frame of
+  either is a noisy estimate — the source of the fuzzy crawl over reflective surfaces and
+  soft shadow edges. Both are now **temporally accumulated** against dedicated history
+  buffers, reprojected with real motion vectors derived from the previous-frame matrices and
+  statistically clipped (mean ± γ·σ) so accumulation stays sharp rather than smearing.
+  Layered on top are the deterministic defences: a depth+normal bilateral denoise on GTAO,
+  a glossy pre-filter on SSR, footprint (`fwidth`) normal anti-aliasing on water, and
+  non-tiling Interleaved Gradient Noise instead of `noisetex` lookups that used to print a
+  repeating 256 px grid.
+- **Bloom** — a threshold-free, energy-conserving **dual-filter pyramid** (Jimenez/COD style):
+  a progressive downsample chain builds six levels, then a tent cascade walks them back up,
+  giving the soft, generous spill the pack's identity asks for without a bright-pass cutoff.
+- **AgX tonemap** with auto-exposure that is a true multi-frame exponential integrator
+  (converging over a time constant, frame-rate independent, asymmetrically clamped so dark
+  nights are never lifted), plus biome-adaptive grading and **weather storytelling** (rain
+  desaturates and cools, thunder darkens, post-rain wetness lifts freshness, lightning
+  flashes brighten the frame).
 
 Dimensions & materials (Phase 5, shipped):
 
 - **All three dimensions** have a bespoke pass: Overworld, a Nether with toned distance fog
   and a deep reflective portal, and an End with a purple-gradient sky, moving aurora, and a
-  remastered swirling portal. Reflective blocks (ice / metal / polished) use a material-aware
-  micro-facet reflection (GGX-style roughness + Schlick Fresnel) so iron reads as rough metal
-  rather than chrome. Emissive block-entity eyes (end-portal frames) glow correctly.
+  remastered swirling portal. Reflective blocks (ice / metal / polished) go through a real
+  micro-facet BRDF in [`lib/pbr.glsl`](shaders/lib/pbr.glsl) — GGX distribution,
+  height-correlated Smith visibility, Schlick Fresnel, and a split-sum environment
+  approximation — so iron reads as rough metal rather than chrome, with metals tinting the
+  reflection by their own albedo. Emissive block-entity eyes (end-portal frames) glow correctly.
 
 ## Roadmap
 
