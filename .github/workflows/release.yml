@@ -13,6 +13,14 @@ on:
     tags:
       - "v[0-9]+.[0-9]+.[0-9]+"
       - "v[0-9]+.[0-9]+.[0-9]+-*"
+    # Release branches are an alternative trigger for environments that cannot
+    # push tags or dispatch workflows (sandboxed agents, restricted git proxies,
+    # tokens without `actions: write`). Pushing `release/v0.5.1` cuts release
+    # v0.5.1 from that branch's head — `gh release create` creates the tag itself,
+    # so the result is identical to having pushed the tag directly.
+    branches:
+      - "release/v[0-9]+.[0-9]+.[0-9]+"
+      - "release/v[0-9]+.[0-9]+.[0-9]+-*"
   workflow_dispatch:
     inputs:
       version:
@@ -48,6 +56,9 @@ jobs:
         run: |
           if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
             version="${GITHUB_REF_NAME#v}"
+          elif [ "${GITHUB_REF_NAME}" != "${GITHUB_REF_NAME#release/v}" ]; then
+            # release/vX.Y.Z branch -> X.Y.Z
+            version="${GITHUB_REF_NAME#release/v}"
           else
             version="${INPUT_VERSION#v}"
           fi
