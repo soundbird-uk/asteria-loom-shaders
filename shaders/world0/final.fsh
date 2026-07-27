@@ -103,6 +103,35 @@ const int colortex12Format = R8;
 const int shadowcolor0Format = RGBA8;
 */
 
+/* ==========================================================================
+   BUFFER PERSISTENCE  (clear=false) — CANONICAL DECLARATION SITE
+   --------------------------------------------------------------------------
+   These MUST be live GLSL `const bool`s, NOT `clear.colortexN = false` keys in
+   shaders.properties. Iris parses buffer clearing ONLY as a shader const
+   directive (`const bool <buffer>Clear = <bool>;`) — its ShaderProperties
+   parser has no `clear.` key at all, so the properties form is silently
+   IGNORED. The pack shipped the properties form for seven buffers, so every
+   one of them was being cleared to vec4(0) every frame and NO temporal
+   accumulation in the pack actually accumulated: the TAA resolve had no
+   history to reproject, GTAO/SSR/shadow histories reset every frame, the
+   cloud history never built up, and the auto-exposure integrator re-read 0
+   and restarted instead of converging over AL_EXPOSURE_TAU. Every read of
+   these buffers is already NaN-proof and range-validated (the standing law for
+   clear=false buffers), which is exactly why the breakage was SILENT — the
+   validated reads fell back to "current frame only" instead of erroring.
+
+   Unlike the *Format directives above these are valid GLSL, so they are live
+   code rather than a parsed comment block. Declared once per dimension here,
+   alongside the formats, so persistence and format never drift apart.
+   ========================================================================== */
+const bool colortex5Clear  = false;   // AO history (rgb) + exposure slot in .a
+const bool colortex6Clear  = false;   // sky-view LUT tile (rebuilt by prepare)
+const bool colortex7Clear  = false;   // cloud history
+const bool colortex8Clear  = false;   // TAA history
+const bool colortex10Clear = false;   // SSR history
+const bool colortex11Clear = false;   // shadow-visibility history
+const bool colortex12Clear = false;   // SSR temporal confidence
+
 // Shadow-map sizing (shadowMapResolution / shadowDistance) is declared in
 // settings.glsl as literal-valued const GUI options — Iris' ConstDirectiveParser
 // reads their literal text with no macro expansion, so the option must BE the

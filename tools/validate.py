@@ -936,6 +936,40 @@ def lint_includes(programs, shaders_root):
     return errs
 
 
+def lint_buffer_clear_directives(shaders_root):
+    """`clear.colortexN` in shaders.properties is a NO-OP and must never reappear.
+
+    Iris configures buffer clearing ONLY through the GLSL const directive
+    `const bool <buffer>Clear = <bool>;`. Its ShaderProperties parser has no
+    `clear.` key, so a `clear.colortex5 = false` line is read by nobody: the
+    buffer keeps being cleared to vec4(0) every frame while the pack believes it
+    is persistent. That failure is SILENT — this pack's history reads are all
+    NaN-proof range-validated, so they quietly degrade to "current frame only"
+    instead of erroring, which is how it went unnoticed while every temporal
+    feature (TAA, GTAO/SSR/shadow accumulation, cloud history, the auto-exposure
+    integrator) was left not accumulating at all.
+
+    So: hard-fail the properties form, and require that any buffer the pack
+    treats as persistent is declared the real way somewhere in the shader tree.
+    """
+    errs = []
+    props = os.path.join(shaders_root, "shaders.properties")
+    if os.path.isfile(props):
+        with open(props, "r", encoding="utf-8", errors="replace") as fh:
+            for n, line in enumerate(fh, 1):
+                stripped = line.strip()
+                if stripped.startswith("#"):
+                    continue
+                m = re.match(r"clear\.(\w+)\s*=", stripped)
+                if m:
+                    errs.append(
+                        "shaders.properties:%d: `clear.%s` is not a real Iris directive "
+                        "and is silently ignored (the buffer stays cleared every frame). "
+                        "Declare `const bool %sClear = false;` in a shader file instead."
+                        % (n, m.group(1), m.group(1)))
+    return errs
+
+
 def lint_no_compute_programs(shaders_root):
     """HARD invariant (field regression 2026-07): this pack MUST run on macOS
     (OpenGL 4.1), which has NO compute-shader support. Iris still attempts to
@@ -1333,6 +1367,7 @@ def run_validation(shaders_root, out_dir, profile_filter=None, program_glob=None
     result.programs = [rel for rel, _p, _s, _w in all_programs]
 
     result.lint_fails += lint_no_compute_programs(shaders_root)
+    result.lint_fails += lint_buffer_clear_directives(shaders_root)
     result.lint_fails += lint_includes(all_programs, shaders_root)
     result.lint_fails += lint_rendertargets(all_programs, shaders_root)
     result.lint_fails += lint_sampler_budget(all_programs, shaders_root)
