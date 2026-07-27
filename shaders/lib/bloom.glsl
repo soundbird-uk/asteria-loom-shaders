@@ -80,30 +80,99 @@ vec4 alBloomTileRect(int L) {
     return vec4(x0, 0.0, x1, invCur);      // y0=0, y1=2^-L
 }
 
-// Map a level-local UV (0..1 over the screen) into the atlas, clamped to a
-// half-texel-inset sub-rectangle so bilinear taps never sample a neighbour tile
-// (the sky-LUT-tile no-bleed pattern). `atlasTexel` = 1/buffer-resolution.
-vec2 alBloomToAtlas(int L, vec2 localUV, vec2 atlasTexel) {
-    vec4 r = alBloomTileRect(L);
+/*
+ Map a level-local UV (0..1 over the screen) into the atlas, clamped to a
+ half-texel-inset sub-rectangle so bilinear taps never sample a neighbour tile
+ (the sky-LUT-tile no-bleed pattern). `atlasTexel` = 1/buffer-resolution.
+
+ This is the RECT-TAKING form. The tile rect is loop-invariant across the taps
+ of a kernel — every tap of a 13-tap downsample or a 9-tap tent addresses the
+ SAME source tile — but alBloomTileRect() costs two exp2() calls, so recomputing
+ it per tap burned 26 exp2 per pixel in the downsample and 18 in the tent (and
+ the tent runs for EVERY screen pixel in composite14). The kernels below hoist
+ the rect out of the tap fan and pass it in here; the arithmetic is otherwise
+ byte-for-byte the pre-hoist expression, so the sampled coordinates — and hence
+ the filtered output — are unchanged.
+*/
+vec2 alBloomToAtlasRect(vec4 r, vec2 localUV, vec2 atlasTexel) {
     vec2 inset = atlasTexel * 0.5;
     vec2 lo = r.xy + inset;
     vec2 hi = r.zw - inset;
     return clamp(mix(r.xy, r.zw, alSaturate(localUV)), lo, hi);
 }
 
-// Which tile does an atlas texel belong to? Returns the level (1..6) and writes
-// the level-local UV; returns 0 when the texel is outside every tile.
+// Level-taking convenience wrapper, for the handful of one-off taps that have no
+// fan to hoist out of (composite14's single L1 fetch). Identical maths.
+vec2 alBloomToAtlas(int L, vec2 localUV, vec2 atlasTexel) {
+    return alBloomToAtlasRect(alBloomTileRect(L), localUV, atlasTexel);
+}
+
+/*
+ Which tile does an atlas texel belong to? Returns the level (1..6) and writes
+ the level-local UV; returns 0 when the texel is outside every tile.
+
+ CLOSED FORM, not a search. Every one of the ~11 atlas passes calls this for
+ every texel of colortex9, and the old version looped all AL_BLOOM_LEVELS levels
+ doing 2 exp2() + 4 comparisons each — worst case (the dead atlas region, which
+ is most of the buffer) paying the full 12 exp2 + 24 compares to learn "no tile".
+
+ The layout makes the search unnecessary. Writing t = 1 - x (distance from the
+ atlas's right edge), tile L's x-span [1-2^-(L-1), 1-2^-L) is exactly
+
+     2^-L  <  t  <=  2^-(L-1)      <=>      L-1 <= -log2(t) < L
+
+ so L = floor(-log2(t)) + 1 recovers the column DIRECTLY. That is sound because
+ the x-columns are disjoint AND contiguous: they tile [0, 63/64) with no gap, so
+ at most one level can ever pass the x-test and the formula names it. The y-test
+ is then the only thing left to decide — and because only that one level could
+ have matched, "L's y-test fails" is equivalent to "the old loop fell through all
+ six levels", which is why a single y check replaces the other five iterations.
+
+ Boundary/degenerate behaviour is preserved exactly:
+   * x < 0                       -> outside; the old loop's `x >= r.x` failed too.
+   * t <= 2^-6  (x >= 63/64)     -> the dead right margin, and the x = 1 case that
+                                    would send log2 to -inf. Rejected up front.
+   * NaN x or y -> the guards are written as POSITIVE comparisons, which NaN
+                   fails, so we return 0 — exactly as every comparison in the old
+                   loop failed on NaN.
+
+ ONE FLOAT SUBTLETY, and the reason level 1 is not fed through the log at all:
+ `1.0 - x` is EXACT only for x in [0.5, 2] (Sterbenz), which covers levels 2..6
+ since their columns all start at x >= 1/2. Below 1/2 the subtraction can round,
+ and at exactly x = 0.5 - 2^-25 (the last float under 1/2) it rounds 1-x UP to
+ 0.5, which the formula would read as level 2 for a level-1 texel. Level 1 is the
+ whole left half by definition, so it is decided by a direct `x < 0.5` compare —
+ cheaper than the log anyway, and exact by construction.
+
+ The rect arithmetic below is also chosen to reproduce the loop bit-for-bit:
+ tile width and height are both 2^-L, and (1-2^-L)-(1-2^-(L-1)) evaluates to
+ exactly 2^-L in float for every L here, so dividing by invCur is the same
+ division the loop did. max(2^-L, 1e-6) is a no-op for L <= 6, so it is dropped.
+*/
 int alBloomFromAtlas(vec2 atlasUV, out vec2 localUV) {
     localUV = vec2(0.0);
-    for (int L = 1; L <= AL_BLOOM_LEVELS; L++) {
-        vec4 r = alBloomTileRect(L);
-        if (atlasUV.x >= r.x && atlasUV.x < r.z &&
-            atlasUV.y >= r.y && atlasUV.y < r.w) {
-            localUV = (atlasUV - r.xy) / max(r.zw - r.xy, vec2(1e-6));
-            return L;
-        }
+
+    // Positive test: a negative or NaN x leaves via this line, as it did before.
+    if (!(atlasUV.x >= 0.0)) return 0;
+
+    int L = 1;                                 // x < 0.5 => level 1, exactly
+    if (atlasUV.x >= 0.5) {
+        float t = 1.0 - atlasUV.x;             // exact for x >= 0.5, so t <= 0.5
+        // t <= 2^-LEVELS is the dead right margin (and x == 1, where log2 -> -inf).
+        if (!(t > exp2(-float(AL_BLOOM_LEVELS)))) return 0;
+        // t in (2^-LEVELS, 0.5] pins -log2(t) into [1, LEVELS), so the clamp is
+        // never active on real input; it is there so a driver log2() landing one
+        // ULP the wrong side of a level boundary degrades to the neighbouring
+        // (correct) tile instead of indexing a rect that does not exist.
+        L = clamp(int(floor(-log2(t))) + 1, 2, AL_BLOOM_LEVELS);
     }
-    return 0;
+
+    float invCur = exp2(-float(L));            // 2^-L: tile width AND height
+    if (!(atlasUV.y >= 0.0 && atlasUV.y < invCur)) return 0;
+
+    float x0 = 1.0 - 2.0 * invCur;             // == 1 - 2^-(L-1), exactly
+    localUV = vec2(atlasUV.x - x0, atlasUV.y) / invCur;
+    return L;
 }
 
 /*
@@ -151,19 +220,23 @@ vec3 alBloomDownsample(sampler2D tex, vec2 uv, vec2 d, float lod) {
 */
 vec3 alBloomDownsampleTile(sampler2D atlas, int srcLevel, vec2 localUV,
                            vec2 dLocal, vec2 atlasTexel) {
-    vec3 a = texture(atlas, alBloomToAtlas(srcLevel, localUV + dLocal*vec2(-2.0,-2.0), atlasTexel)).rgb;
-    vec3 b = texture(atlas, alBloomToAtlas(srcLevel, localUV + dLocal*vec2( 0.0,-2.0), atlasTexel)).rgb;
-    vec3 c = texture(atlas, alBloomToAtlas(srcLevel, localUV + dLocal*vec2( 2.0,-2.0), atlasTexel)).rgb;
-    vec3 e = texture(atlas, alBloomToAtlas(srcLevel, localUV + dLocal*vec2(-2.0, 0.0), atlasTexel)).rgb;
-    vec3 f = texture(atlas, alBloomToAtlas(srcLevel, localUV,                          atlasTexel)).rgb;
-    vec3 g = texture(atlas, alBloomToAtlas(srcLevel, localUV + dLocal*vec2( 2.0, 0.0), atlasTexel)).rgb;
-    vec3 h = texture(atlas, alBloomToAtlas(srcLevel, localUV + dLocal*vec2(-2.0, 2.0), atlasTexel)).rgb;
-    vec3 i = texture(atlas, alBloomToAtlas(srcLevel, localUV + dLocal*vec2( 0.0, 2.0), atlasTexel)).rgb;
-    vec3 j = texture(atlas, alBloomToAtlas(srcLevel, localUV + dLocal*vec2( 2.0, 2.0), atlasTexel)).rgb;
-    vec3 k = texture(atlas, alBloomToAtlas(srcLevel, localUV + dLocal*vec2(-1.0,-1.0), atlasTexel)).rgb;
-    vec3 l = texture(atlas, alBloomToAtlas(srcLevel, localUV + dLocal*vec2( 1.0,-1.0), atlasTexel)).rgb;
-    vec3 m = texture(atlas, alBloomToAtlas(srcLevel, localUV + dLocal*vec2(-1.0, 1.0), atlasTexel)).rgb;
-    vec3 n = texture(atlas, alBloomToAtlas(srcLevel, localUV + dLocal*vec2( 1.0, 1.0), atlasTexel)).rgb;
+    // All 13 taps address the SAME source tile, so its rect is loop-invariant:
+    // compute it once (2 exp2) instead of once per tap (26 exp2). Same values.
+    vec4 r = alBloomTileRect(srcLevel);
+
+    vec3 a = texture(atlas, alBloomToAtlasRect(r, localUV + dLocal*vec2(-2.0,-2.0), atlasTexel)).rgb;
+    vec3 b = texture(atlas, alBloomToAtlasRect(r, localUV + dLocal*vec2( 0.0,-2.0), atlasTexel)).rgb;
+    vec3 c = texture(atlas, alBloomToAtlasRect(r, localUV + dLocal*vec2( 2.0,-2.0), atlasTexel)).rgb;
+    vec3 e = texture(atlas, alBloomToAtlasRect(r, localUV + dLocal*vec2(-2.0, 0.0), atlasTexel)).rgb;
+    vec3 f = texture(atlas, alBloomToAtlasRect(r, localUV,                          atlasTexel)).rgb;
+    vec3 g = texture(atlas, alBloomToAtlasRect(r, localUV + dLocal*vec2( 2.0, 0.0), atlasTexel)).rgb;
+    vec3 h = texture(atlas, alBloomToAtlasRect(r, localUV + dLocal*vec2(-2.0, 2.0), atlasTexel)).rgb;
+    vec3 i = texture(atlas, alBloomToAtlasRect(r, localUV + dLocal*vec2( 0.0, 2.0), atlasTexel)).rgb;
+    vec3 j = texture(atlas, alBloomToAtlasRect(r, localUV + dLocal*vec2( 2.0, 2.0), atlasTexel)).rgb;
+    vec3 k = texture(atlas, alBloomToAtlasRect(r, localUV + dLocal*vec2(-1.0,-1.0), atlasTexel)).rgb;
+    vec3 l = texture(atlas, alBloomToAtlasRect(r, localUV + dLocal*vec2( 1.0,-1.0), atlasTexel)).rgb;
+    vec3 m = texture(atlas, alBloomToAtlasRect(r, localUV + dLocal*vec2(-1.0, 1.0), atlasTexel)).rgb;
+    vec3 n = texture(atlas, alBloomToAtlasRect(r, localUV + dLocal*vec2( 1.0, 1.0), atlasTexel)).rgb;
 
     vec3 sum  = (k + l + m + n) * 0.5;
     sum += (a + b + e + f) * 0.125;
@@ -183,16 +256,20 @@ vec3 alBloomDownsampleTile(sampler2D atlas, int srcLevel, vec2 localUV,
 */
 vec3 alBloomTentTile(sampler2D atlas, int srcLevel, vec2 localUV,
                      vec2 sLocal, vec2 atlasTexel) {
+    // Rect hoisted out of the 9-tap fan: 2 exp2 per pixel instead of 18. This
+    // one matters most — composite14 runs this tent for EVERY screen pixel.
+    vec4 r = alBloomTileRect(srcLevel);
+
     vec3 sum = vec3(0.0);
-    sum += texture(atlas, alBloomToAtlas(srcLevel, localUV + sLocal*vec2(-1.0,-1.0), atlasTexel)).rgb * 1.0;
-    sum += texture(atlas, alBloomToAtlas(srcLevel, localUV + sLocal*vec2( 0.0,-1.0), atlasTexel)).rgb * 2.0;
-    sum += texture(atlas, alBloomToAtlas(srcLevel, localUV + sLocal*vec2( 1.0,-1.0), atlasTexel)).rgb * 1.0;
-    sum += texture(atlas, alBloomToAtlas(srcLevel, localUV + sLocal*vec2(-1.0, 0.0), atlasTexel)).rgb * 2.0;
-    sum += texture(atlas, alBloomToAtlas(srcLevel, localUV,                          atlasTexel)).rgb * 4.0;
-    sum += texture(atlas, alBloomToAtlas(srcLevel, localUV + sLocal*vec2( 1.0, 0.0), atlasTexel)).rgb * 2.0;
-    sum += texture(atlas, alBloomToAtlas(srcLevel, localUV + sLocal*vec2(-1.0, 1.0), atlasTexel)).rgb * 1.0;
-    sum += texture(atlas, alBloomToAtlas(srcLevel, localUV + sLocal*vec2( 0.0, 1.0), atlasTexel)).rgb * 2.0;
-    sum += texture(atlas, alBloomToAtlas(srcLevel, localUV + sLocal*vec2( 1.0, 1.0), atlasTexel)).rgb * 1.0;
+    sum += texture(atlas, alBloomToAtlasRect(r, localUV + sLocal*vec2(-1.0,-1.0), atlasTexel)).rgb * 1.0;
+    sum += texture(atlas, alBloomToAtlasRect(r, localUV + sLocal*vec2( 0.0,-1.0), atlasTexel)).rgb * 2.0;
+    sum += texture(atlas, alBloomToAtlasRect(r, localUV + sLocal*vec2( 1.0,-1.0), atlasTexel)).rgb * 1.0;
+    sum += texture(atlas, alBloomToAtlasRect(r, localUV + sLocal*vec2(-1.0, 0.0), atlasTexel)).rgb * 2.0;
+    sum += texture(atlas, alBloomToAtlasRect(r, localUV,                          atlasTexel)).rgb * 4.0;
+    sum += texture(atlas, alBloomToAtlasRect(r, localUV + sLocal*vec2( 1.0, 0.0), atlasTexel)).rgb * 2.0;
+    sum += texture(atlas, alBloomToAtlasRect(r, localUV + sLocal*vec2(-1.0, 1.0), atlasTexel)).rgb * 1.0;
+    sum += texture(atlas, alBloomToAtlasRect(r, localUV + sLocal*vec2( 0.0, 1.0), atlasTexel)).rgb * 2.0;
+    sum += texture(atlas, alBloomToAtlasRect(r, localUV + sLocal*vec2( 1.0, 1.0), atlasTexel)).rgb * 1.0;
     return sum * (1.0 / 16.0);
 }
 
