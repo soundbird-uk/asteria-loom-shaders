@@ -418,7 +418,15 @@ vec3 alReflectiveBlock(vec3 base, float reflAmt, float metal,
     float rough = mix(AL_REFL_ROUGH_DIELECTRIC, AL_REFL_ROUGH_METAL, metal);
     float lobe  = alEnvLobeBlend(rough);            // 0 = mirror, 1 = fully diffuse env
 
-    vec3  albedo = texture(colortex1, texcoord).rgb;
+    // colortex1 stores the RAW (sRGB-encoded) texture sample — gbuffers_terrain
+    // writes albedo.rgb with no conversion, which is why deferred1 calls
+    // alSrgbToLinear() on the same buffer before lighting with it. F0 is a LINEAR
+    // reflectance, so it must be built from linear albedo: feeding the encoded
+    // value made iron's F0 ~55% too high (0.7 sRGB reads as 0.7 instead of 0.45
+    // linear), i.e. metals came out brighter and flatter than the GGX/split-sum
+    // tuning intends — re-introducing a chrome-ish look from the other direction.
+    // sRGB also compresses channel ratios, desaturating gold/copper reflections.
+    vec3  albedo = alSrgbToLinear(texture(colortex1, texcoord).rgb);
     vec3  F0     = alF0FromAlbedo(albedo, metal, AL_REFL_F0_DIELECTRIC);
 
     float skyLm   = alSaturate(texture(colortex2, texcoord).a);

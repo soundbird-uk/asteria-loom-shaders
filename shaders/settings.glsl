@@ -1176,16 +1176,36 @@ const vec3 AL_UW_SNOW_TINT  = vec3(0.82, 0.86, 0.94);
 // wherever possible, because temporal reprojection without a velocity buffer rejects
 // history at distance and falls back to the raw noisy frame — that is what produced
 // the "distance jitter" in both FXAA and TAA.
-//   * GTAO grain  -> removed by a depth+normal BILATERAL denoise at read time
-//                    (deferred1.fsh, AL_AO_DENOISE). No motion, no flicker.
-//   * SSR grain    -> softened by a distance-scaled GLOSSY blur of the reflection
-//                    (composite.fsh). The dither is FROZEN under FXAA (AL_TAA unset)
-//                    so it is a fixed sub-pixel offset, not crawling noise.
-//   * Shadow PCF   -> per-pixel Vogel rotation is frozen under FXAA; the soft edge
-//                    is smoothed by the sample count, not by temporal averaging.
-// The composite3 temporal RESOLVE still runs (history reproject + variance clip) as
-// an anti-flicker pass in both AA modes; the per-frame dither ANIMATION is enabled
-// only under TAA (AL_TAA), where jitter + resolve genuinely average it.
+// Each stochastic effect therefore has a SPATIAL defence that works with the dither
+// frozen, and the per-frame dither ANIMATION is gated per effect. Current policy —
+// this list is normative; if you change a gate, change it here too:
+//
+//   * GTAO       -> dither FROZEN under FXAA (deferred.fsh, `#ifdef AL_TAA`).
+//                   Spatial defence: the depth+normal BILATERAL denoise at READ
+//                   time in deferred1.fsh (AL_AO_DENOISE). That denoise must stay
+//                   at read time and NEVER be written back into the colortex5
+//                   history — deferred blends colortex5 into colortex4 and
+//                   composite1 copies it back, so a filter inside that loop
+//                   re-filters an already-filtered signal every frame and the blur
+//                   compounds until each surface flattens to a constant patch.
+//   * Shadow PCF -> Vogel rotation + contact-shadow dither FROZEN under FXAA
+//                   (lib/shadow.glsl, deferred1.fsh). Spatial defence: 12+ Vogel
+//                   taps and non-tiling IGN. The colortex11 accumulator therefore
+//                   contributes nothing under FXAA — that is deliberate. Animating
+//                   it made every accumulation FAILURE (off-screen reprojection on
+//                   a camera turn, disocclusion, distance depth-reject) fall back
+//                   to noise that changes every frame, i.e. crawling shadow edges,
+//                   which is the regression this pack has already shipped once.
+//   * SSR        -> dither IS animated whenever AL_SSR_TEMPORAL is set (which is
+//                   unconditional), so it animates under FXAA too. This is the one
+//                   effect that deviates, and it is deliberate: SSR owns a
+//                   dedicated validated accumulator (colortex10 + the colortex12
+//                   confidence ramp) plus a glossy ring pre-filter, and reflections
+//                   have not shown the crawl that shadows did. If reflection crawl
+//                   IS reported, gate this to `#ifdef AL_TAA` like the others —
+//                   composite.fsh has two sites.
+//
+// The composite3 temporal RESOLVE runs in both AA modes as an anti-flicker pass.
 
 // --- FXAA shaping (internal, not GUI — composite3.fsh) --------------------
 // Lottes console-FXAA thresholds. EDGE_MIN/EDGE_MUL gate which luma steps count

@@ -7,6 +7,110 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — water normals were built in the wrong component order (root cause of the "grainy grid" and "just blue" water)
+
+- **`alBlendNormals` emitted `(x, z, y)` into a Y-up frame.** The reoriented-normal
+  blend is written for a Z-up tangent frame; when it was converted to the pack's
+  world Y-up wave frame the *input* swizzle was changed to `.xz` but the
+  `vec3(vec2, float)` construction was left alone. GLSL fills components in order,
+  so the z-slope landed in `.y` and the up term in `.z`. For typical wave slopes the
+  result was roughly `(-0.26, -0.26, 0.93)` — **every water pixel's normal pointed
+  nearly horizontally**, on every surface, at every distance, in every dimension.
+  Consequences, each of which was previously chased as a separate symptom:
+  - SSR rejected the ray on its first `dot(dir, normal)` test for roughly half of all
+    water pixels, in a high-frequency pattern — the "dark patchy grainy grid".
+  - The reflected ray's `Rw.y` hovered around zero and flipped sign per pixel, so the
+    occluded-horizon ramp became a binary selector between the flat body tone and the
+    much brighter sky sample — the same grid at a different scale, and the "just blue".
+  - The refraction offset used `Nv.xy ≈ 0.93` instead of ~0.2, displacing the
+    submerged image by roughly 5× the intended amount.
+
+  The components are now built explicitly (`base.x + detail.x`, `base.y * detail.y`,
+  `base.z + detail.z`) so the ordering cannot drift again. This bug predates the
+  reflection/foam work and the footprint anti-aliasing, all of which were treating
+  its symptoms.
+
+### Fixed — the AO bilateral denoise was compounding inside a temporal feedback loop
+
+- `composite1` spatially denoised the GTAO buffer **before** storing it in the
+  colortex5 history. But `deferred` blends colortex5 back into colortex4 (blend
+  ceiling 0.9) and `composite1` copies that back into colortex5 — a closed loop with
+  a filter inside it. An edge-stopped filter iterated to convergence flattens each
+  surface to a piecewise-constant patch, washing out exactly the within-surface
+  contact gradient AO exists to draw. The history now stores the AO **verbatim**; the
+  single spatial denoise happens once, at read time, in `deferred1`, where it shades
+  the frame but never re-enters the history. This also removes ~75 texture fetches
+  per pixel per frame (the filter was running twice on every pixel).
+
+### Fixed — shadow dither was re-animated under FXAA, re-introducing crawling edges
+
+- `AL_SHADOW_ANIMATE` advanced the per-pixel Vogel rotation and the contact-shadow
+  dither every frame in **every** AA mode, on the reasoning that the new colortex11
+  accumulator resolves it. Animation is only safe where accumulation succeeds — and
+  it falls back to the raw single-frame estimate on off-screen reprojection (a band
+  along the leading edge of every camera turn), disocclusion, distance depth-rejection
+  and post-reset frames. In all of those the user sees PCF noise that changes every
+  frame: crawling soft shadow edges, worst in the distance, which is the exact
+  regression this pack shipped and reverted once before. Animation is gated back to
+  TAA only; under FXAA the rotation is frozen and the edge is carried by 12+ Vogel
+  taps and non-tiling IGN. The now-unused `AL_SHADOW_ANIMATE` define was removed so
+  the gate cannot be silently widened again.
+
+### Fixed — turning aerial fog off also disabled unrelated systems
+
+- `program.composite2.enabled = AERIAL_FOG` gated the **whole** pass, but `composite2`
+  is also the only home of the `isEyeInWater` medium (water / lava / powder snow),
+  both god-ray marches, the below-horizon void seal, and debug views 9–11. With fog
+  off, swimming or standing in lava looked identical to standing in air, `GOD_RAYS`
+  (a separate toggle, in a different settings screen) silently did nothing, and the
+  void seal reverted. Nothing errored, so it read as a broken pack rather than a
+  disabled option. The program now always runs and `AERIAL_FOG` gates only the fog
+  integral, in-shader.
+
+### Fixed — metal F0 was built from gamma-encoded albedo
+
+- `composite.fsh` fed the raw `colortex1` sample (sRGB-encoded — `deferred1` calls
+  `alSrgbToLinear` on the same buffer) into `alF0FromAlbedo`. F0 is a linear
+  reflectance, so iron's F0 came out ~55% too high (0.7 read as 0.7 instead of 0.45),
+  making metals brighter and flatter than the GGX/split-sum tuning intends and
+  desaturating coloured metals. Now converted to linear first.
+
+### Fixed — bloom tile inset was 3× the no-bleed requirement
+
+- `lib/bloom.glsl` inset atlas tile reads by 1.5 texels where a bilinear tap reaches
+  only ±0.5 (the function's own doc comment said "half-texel"). The inset is
+  *absolute* while tiles shrink by 2^-L, so it consumed a large fraction of the coarse
+  tiles: at 1080p the outer ~8.9% of screen height read a **frozen** L6 value (over
+  half the screen height at 640×360). Since every level carries equal weight in the
+  final combine, that smeared up to a third of the bloom into flat bands at the screen
+  edges and displaced the halo centroid by ~4 px. Now 0.5 texels.
+
+### Fixed — GGX denominator guard truncated the specular peak
+
+- `alD_GGX` clamped the whole denominator at `1e-7` rather than guarding division by
+  zero, silently capping the lobe for perceptual roughness below ~0.116 (at the
+  roughness floor the peak was capped at 41 instead of ~77,600). Currently latent —
+  the direct-specular helpers are defined but not yet wired to a light — but it would
+  bite the first sun glint on a smooth surface. Guard lowered to `1e-20`.
+
+### Fixed — reflected moon was 6.25× the pack's own night key
+
+- `lib/water.glsl` built the moon reflection as `AL_MOON_TINT * SUN_INTENSITY`,
+  dropping the `0.16` factor the atmosphere uses everywhere else for the night key.
+  The reflected moon was therefore 6.25× brighter than the moon lighting the world.
+
+### Documentation
+
+- The screen-space noise policy in `settings.glsl` claimed all dithers are frozen
+  under FXAA. That was true of the 5.2.x line but not of the current code. The policy
+  block is now normative and per-effect, and states plainly that SSR is the one
+  effect that still animates under FXAA, why, and what to change if reflection crawl
+  is reported.
+- `README.md`: corrected two contradictory version claims (`5.2.5` banner vs a
+  `0.3.3` heading, neither matching the `0.5.0` changelog/tag), and rewrote the grain,
+  bloom, auto-exposure and reflective-block bullets, which described superseded
+  implementations.
+
 ### Changed — bloom is now a real dual-filter pyramid
 
 - **Bloom is a true progressive-downsample + tent-cascade-upsample pyramid

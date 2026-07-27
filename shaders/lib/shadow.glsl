@@ -147,13 +147,23 @@ float alShadowRotation() {
                       fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))));
     // Under TAA the rotation is additionally advanced per frame (jitter + the
     // composite3 resolve then average it to a sharper edge). Under FXAA/Off it is
-    // frozen so it can't crawl; IGN alone already keeps the frozen edge smooth.
-    // AL_SHADOW_ANIMATE is defined by a pass that TEMPORALLY ACCUMULATES the
-    // result itself (deferred1, colortex11): there the rotation MUST advance in
-    // every AA mode, because a frozen pattern accumulates to itself and would
-    // converge to the same grainy edge it started with. Passes without their own
-    // history (forward translucents) leave it undefined and keep the old rule.
-#if defined(AL_TAA) || defined(AL_SHADOW_ANIMATE)
+    // FROZEN so it can't crawl; IGN alone already keeps the frozen edge smooth.
+    //
+    // WHY NOT ALSO ANIMATE FOR THE colortex11 ACCUMULATOR (AL_SHADOW_ANIMATE):
+    // animating is only safe where accumulation actually SUCCEEDS. deferred1 falls
+    // back to the raw single-frame PCF estimate in four situations — reprojection
+    // landing off-screen (a band along the leading edge of every camera turn),
+    // disocclusion, history depth-rejection at distance, and the frames after any
+    // buffer reset. In all of those the user sees PCF noise that CHANGES EVERY
+    // FRAME instead of a fixed pattern, i.e. boiling/crawling soft shadow edges,
+    // worst in the distance. That is precisely the regression this pack shipped
+    // once before and had to revert ("in TAA it still looks bad and has jittering
+    // and stuff in the distance"). A frozen pattern accumulates to itself and so
+    // gains nothing from colortex11 under FXAA — but 12 Vogel taps + non-tiling
+    // IGN is already a smooth edge on its own, and a stable wrong-ish edge beats
+    // an unstable one. Animation therefore stays gated on TAA, where the jitter
+    // and the composite3 resolve genuinely average it.
+#if defined(AL_TAA)
     float r2 = fract(float(frameCounter) * 0.75487766624669276);
 #else
     float r2 = 0.0;

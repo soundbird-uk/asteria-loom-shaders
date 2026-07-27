@@ -9,7 +9,6 @@
 // Tell lib/shadow.glsl that THIS pass accumulates its shadow result over time,
 // so the per-pixel Vogel disc rotation must advance every frame (a frozen
 // rotation would accumulate the same taps and converge to the same grainy edge).
-#define AL_SHADOW_ANIMATE
 #endif
 #include "/lib/shadow.glsl"
 #include "/lib/contact.glsl"
@@ -262,11 +261,14 @@ void main() {
             // lookup: the tiling lookup printed a repeating grid into the contact
             // shadows (part of the "fuzzy grain everywhere"). IGN does not tile and
             // is spatially coherent, so neighbouring rays march together. It is
-            // advanced per frame whenever something resolves it (TAA, or this
-            // pass's own shadow accumulation) and frozen otherwise.
+            // advanced per frame ONLY under TAA (which jitters and resolves it);
+            // frozen otherwise. Animating it for the colortex11 accumulator is
+            // unsafe for the same reason as the Vogel rotation — see the long note
+            // in lib/shadow.glsl alShadowRotation(): wherever accumulation falls
+            // back to the current frame, animated dither reads as crawling grain.
             float dither = fract(52.9829189 * fract(dot(gl_FragCoord.xy,
                                                         vec2(0.06711056, 0.00583715))));
-#if defined(AL_TAA) || defined(AL_SHADOW_TEMPORAL)
+#if defined(AL_TAA)
             dither = fract(dither + float(frameCounter) * 0.61803398875);
 #endif
             float cs = alContactShadow(depthtex0, viewPos, viewLightDir, dither);

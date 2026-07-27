@@ -57,7 +57,7 @@ float alRoughnessToAlpha(float rough) {
 float alD_GGX(float NoH, float alpha) {
     float a2 = alpha * alpha;
     float d  = (NoH * NoH) * (a2 - 1.0) + 1.0;
-    return a2 / max(AL_PI * d * d, 1.0e-7);
+    return a2 / max(AL_PI * d * d, 1.0e-20);
 }
 
 // Height-correlated Smith visibility (Heitz 2014) = G / (4 NoL NoV).

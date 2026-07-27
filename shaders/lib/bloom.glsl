@@ -85,7 +85,7 @@ vec4 alBloomTileRect(int L) {
 // (the sky-LUT-tile no-bleed pattern). `atlasTexel` = 1/buffer-resolution.
 vec2 alBloomToAtlas(int L, vec2 localUV, vec2 atlasTexel) {
     vec4 r = alBloomTileRect(L);
-    vec2 inset = atlasTexel * 1.5;
+    vec2 inset = atlasTexel * 0.5;
     vec2 lo = r.xy + inset;
     vec2 hi = r.zw - inset;
     return clamp(mix(r.xy, r.zw, alSaturate(localUV)), lo, hi);

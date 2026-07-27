@@ -354,8 +354,22 @@ vec3 alWaterMicroNormal(vec2 wp, float t, float amt) {
 
 // Combine a detail normal (world Y-up) onto a base normal (reoriented-normal
 // blend): keeps the base slope and adds the detail's tilt. Both are Y-up frames.
+//
+// COMPONENT ORDER IS LOad-BEARING. The textbook RNM blend is written for a Z-up
+// tangent frame (`vec3(base.xy + detail.xy, base.z * detail.z)`); this pack's
+// wave normals are world Y-UP, so the SLOPE pair is .xz and the UP term is .y.
+// Converting only the input swizzle and leaving `vec3(vec2, float)` construction
+// alone silently emitted (x, z, y) — GLSL fills components in order, so the
+// z-slope landed in .y and the up term in .z. That tipped every water normal
+// nearly horizontal (~±0.26, ±0.26, 0.93 for typical slopes), which in turn made
+// SSR reject about half its rays on the first dot(), turned the reflected-ray
+// horizon cut into a per-pixel two-tone selector, and blew up the refraction
+// offset — i.e. the "dark patchy grainy grid" and "just blue" water reports.
+// Build the components explicitly so the ordering can never drift again.
 vec3 alBlendNormals(vec3 base, vec3 detail) {
-    return normalize(vec3(base.xz + detail.xz, base.y * detail.y));
+    return normalize(vec3(base.x + detail.x,      // x slope
+                          base.y * detail.y,      // up  (RNM product)
+                          base.z + detail.z));    // z slope
 }
 
 /*
@@ -493,7 +507,7 @@ vec3 alWaterSkyReflection(highp vec3 reflDir, highp vec3 sunDirWorld,
     highp float muSun  = max(dot(reflDir, sunDirWorld),  0.0);
     highp float muMoon = max(dot(reflDir, moonDirWorld), 0.0);
     vec3 sunCol  = alDirectColor(sunDirWorld);          // warm, atmosphere-tinted key
-    vec3 moonCol = AL_MOON_TINT * SUN_INTENSITY;        // cool night key
+    vec3 moonCol = AL_MOON_TINT * 0.16 * SUN_INTENSITY;        // cool night key
     vec3 sunResp  = sunCol  * (AL_WATER_REFL_SUN_BROAD_GAIN  * pow(muSun,  AL_WATER_REFL_SUN_BROAD_POW)
                              + AL_WATER_REFL_SUN_TIGHT_GAIN  * pow(muSun,  AL_WATER_REFL_SUN_TIGHT_POW));
     vec3 moonResp = moonCol * (AL_WATER_REFL_MOON_BROAD_GAIN * pow(muMoon, AL_WATER_REFL_MOON_BROAD_POW)

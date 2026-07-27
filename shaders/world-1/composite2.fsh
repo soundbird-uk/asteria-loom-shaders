@@ -360,8 +360,16 @@ void main() {
     // World-space sun direction for the time-of-day scene tone / night factor.
     vec3 worldSunDir = normalize(alViewDirToWorld(sunPosition));
 
-#ifdef AL_DBG_NO_FOG
-    vec3 fogged = scene;   // DIAGNOSTIC: aerial fog disabled
+// AERIAL_FOG gates ONLY the fog integral, in-shader — NOT the whole program.
+// composite2 is also the sole home of the isEyeInWater medium (water / lava /
+// powder snow), BOTH god-ray marches, the below-horizon void seal and debug
+// views 9-11. Gating the program on AERIAL_FOG therefore silently removed all
+// of those when a user turned fog off: swimming or standing in lava looked
+// exactly like standing in air, GOD_RAYS (a separate toggle, in another
+// screen) did nothing, and the void seal reverted. That reads as a broken
+// pack, not as a disabled option.
+#if defined(AL_DBG_NO_FOG) || !defined(AERIAL_FOG)
+    vec3 fogged = scene;   // fog off (or DIAGNOSTIC): scene passes through
 #else
     vec3 fogged = alApplyAerialFog(scene, cameraPosition.y, worldDir, dist,
                                    FOG_DENSITY, skyLm, far, worldSunDir,
