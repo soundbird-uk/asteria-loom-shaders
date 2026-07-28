@@ -159,7 +159,8 @@
         It rides the SHADOW pass, so it sees everything within shadowDistance —
         off screen, behind you, round the corner, all of it.
      2. shadowcomp + shadowcomp1 flood-fill that grid: a 6/18/26-neighbour
-        gather over the persistent field (shadowcolor1 <-> shadowcolor2), where
+        gather over the persistent field (shadowcolor1, ping-ponged via its
+        own alt buffer — Iris only allocates two shadowcolors), where
         SOLID voxels hold no light and therefore block it. Two steps per frame
         on a field that persists, so it converges in a fraction of a second and
         then tracks the world.

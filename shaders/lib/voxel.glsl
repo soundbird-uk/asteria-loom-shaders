@@ -264,7 +264,7 @@ float alVoxelLevel(float a) {
 }
 
 /* ---------------------------------------------------------------------------
-   THE FIELD  (shadowcolor1 / shadowcolor2, R11F_G11F_B10F, PERSISTENT)
+   THE FIELD  (shadowcolor1, R11F_G11F_B10F, PERSISTENT)
    ---------------------------------------------------------------------------
    rgb = the diffused coloured light in this voxel. No alpha: solidity is read
    fresh from shadowcolor0 every pass, so storing it here would only be a

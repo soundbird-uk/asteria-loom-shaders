@@ -990,6 +990,55 @@ def lint_includes(programs, shaders_root):
     return errs
 
 
+def lint_shadowcolor_limit(shaders_root):
+    """Iris allocates only shadowcolor0/1 unless HIGHER_SHADOWCOLOR is declared.
+
+    Field-confirmed the hard way (0.7.0): the voxel-light ping-pong used
+    shadowcolor2 as a third target, and Iris threw
+    `Index 2 out of bounds for length 2` at load — the pack would not start at
+    all. glslang compiles a `uniform sampler2D shadowcolor2` perfectly happily,
+    so nothing caught it: this is a RUNTIME allocation limit, invisible to the
+    compiler, and the previous gate passed the broken pack green.
+
+    A pack needing more than two may declare HIGHER_SHADOWCOLOR in
+    iris.features.required/optional; without that declaration, referencing
+    shadowcolor2+ is a load-time crash and therefore a hard failure here.
+    """
+    errs = []
+    props = os.path.join(shaders_root, "shaders.properties")
+    higher = False
+    if os.path.isfile(props):
+        with open(props, "r", encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                if line.strip().startswith("#"):
+                    continue
+                if line.startswith("iris.features") and "HIGHER_SHADOWCOLOR" in line:
+                    higher = True
+    if higher:
+        return errs
+
+    for path in sorted(glob.glob(os.path.join(shaders_root, "**", "*.*sh"),
+                                 recursive=True)):
+        rel = os.path.relpath(path, shaders_root)
+        with open(path, "r", encoding="utf-8", errors="replace") as fh:
+            for n, line in enumerate(fh, 1):
+                stripped = line.strip()
+                if stripped.startswith("//") or stripped.startswith("*"):
+                    continue
+                for m in re.finditer(r"\bshadowcolor([2-9]|1[0-5])\b", line):
+                    # Only flag real GLSL references, not prose in a block comment.
+                    if ("uniform" in line or "const " in line
+                            or "RENDERTARGETS" in line):
+                        errs.append(
+                            "%s:%d: references shadowcolor%s, but Iris allocates only "
+                            "shadowcolor0/1 unless HIGHER_SHADOWCOLOR is declared in "
+                            "iris.features — this fails at LOAD with "
+                            "\"Index N out of bounds for length 2\", not at compile time."
+                            % (rel, n, m.group(1)))
+                        break
+    return errs
+
+
 def lint_buffer_clear_directives(shaders_root):
     """`clear.colortexN` in shaders.properties is a NO-OP and must never reappear.
 
@@ -1525,6 +1574,7 @@ def run_validation(shaders_root, out_dir, profile_filter=None, program_glob=None
     if base_root and overlay_root:
         result.lint_fails += lint_advanced_isolation(base_root, overlay_root)
     result.lint_fails += lint_buffer_clear_directives(shaders_root)
+    result.lint_fails += lint_shadowcolor_limit(shaders_root)
     result.lint_fails += lint_includes(all_programs, shaders_root)
     result.lint_fails += lint_rendertargets(all_programs, shaders_root)
     result.lint_fails += lint_sampler_budget(all_programs, shaders_root)

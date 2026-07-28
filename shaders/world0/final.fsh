@@ -125,16 +125,6 @@
                          the light would never propagate anywhere at all.
                          No alpha: occupancy is re-read fresh from shadowcolor0
                          each pass rather than stored one frame stale.
-   shadowcolor2 R11F_G11F_B10F
-                         Voxel field PING-PONG target (5.5.0): shadowcomp writes
-                         the half-propagated field here and shadowcomp1 reads it
-                         back. Exists so that no shadow-composite program ever
-                         reads and writes the same buffer, which would depend on
-                         Iris' shadowcolor main/alt flip semantics — see the long
-                         note in shadowcomp.fsh. `shadowcolor2Clear = false`
-                         purely to avoid a pointless full-buffer clear; every
-                         read of it is NaN-proof range-validated (lib/voxel.glsl)
-                         so an undefined first frame self-heals in one step.
  ==========================================================================
 */
 
@@ -156,7 +146,6 @@ const int colortex13Format = R11F_G11F_B10F;
 const int colortex14Format = RGBA16F;
 const int shadowcolor0Format = RGBA8;
 const int shadowcolor1Format = R11F_G11F_B10F;
-const int shadowcolor2Format = R11F_G11F_B10F;
 */
 
 /* ==========================================================================
@@ -194,13 +183,13 @@ const bool colortex14Clear = false;   // coloured block-light history
 // not an optimisation here, it is the mechanism. A cleared shadowcolor1 would
 // restart every frame from black and light would never travel more than two
 // voxels from a source — the feature would appear to do almost nothing while
-// costing full price. shadowcolor2 is only the ping-pong intermediate; it is
+// costing full price. The ping-pong intermediate is shadowcolor1's own alt
+// buffer (Iris double-buffers each shadowcolor), not a third target; it is
 // declared non-clearing purely to skip a pointless full-buffer clear, and every
 // read of both is NaN-proof range-validated in lib/voxel.glsl.
 // shadowcolor0 (the emitter/occupancy map) is deliberately NOT listed: it MUST
 // be re-cleared every frame or a torch that has been broken would haunt the grid.
 const bool shadowcolor1Clear = false;   // voxel light field (the accumulator)
-const bool shadowcolor2Clear = false;   // voxel field ping-pong intermediate
 
 // Shadow-map sizing (shadowMapResolution / shadowDistance) is declared in
 // settings.glsl as literal-valued const GUI options — Iris' ConstDirectiveParser

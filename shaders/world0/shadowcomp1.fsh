@@ -5,10 +5,20 @@
 #include "/lib/voxel.glsl"
 
 /*
+ IRIS SHADOWCOLOR LIMIT (field-confirmed 0.7.0): Iris allocates exactly TWO
+ shadowcolor buffers (shadowcolor0/1) unless the pack declares the
+ HIGHER_SHADOWCOLOR feature. Using shadowcolor2 threw
+ "Index 2 out of bounds for length 2" at load and the pack refused to start.
+ Rather than require a feature flag (which would fail on Iris builds that lack
+ it), the ping-pong now lives INSIDE shadowcolor1: Iris backs every shadowcolor
+ with two physical buffers, so a pass that both reads and writes one reads the
+ previous content and writes the other, then flips. That is exactly a ping-pong,
+ supplied by the driver instead of by a third buffer.
+
  shadowcomp1 (fragment) — FLOOD-FILL STEP 2 of 2.
 
  Reads : shadowcolor0 — this frame's emitter/occupancy map
-         shadowcolor2 — the half-propagated field from shadowcomp
+         shadowcolor1 — the half-propagated field from shadowcomp
  Writes: shadowcolor1 — THE field. Persistent (`shadowcolor1Clear = false`),
                         read by next frame's shadowcomp and by deferred1.
 
@@ -25,11 +35,11 @@
  million-texel gather every frame. It is not a good trade, and the field is a HUE
  — being an eighth of a second late to a torch being placed is invisible.
 
- Sampler count: 2 (shadowcolor0, shadowcolor2).
+ Sampler count: 2 (shadowcolor0, shadowcolor1).
 */
 
 uniform sampler2D shadowcolor0;   // rgb = block albedo (sRGB), a = occupancy+level
-uniform sampler2D shadowcolor2;   // rgb = the half-propagated field
+uniform sampler2D shadowcolor1;   // rgb = the half-propagated field
 
 /* RENDERTARGETS: 1 */
 layout(location = 0) out vec3 outField;
@@ -51,5 +61,5 @@ void main() {
         outField = vec3(0.0);
         return;
     }
-    outField = alVoxelPropagate(shadowcolor2, v, ivec3(0));
+    outField = alVoxelPropagate(shadowcolor1, v, ivec3(0));
 }

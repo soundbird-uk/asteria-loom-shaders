@@ -5,12 +5,23 @@
 #include "/lib/voxel.glsl"
 
 /*
+ IRIS SHADOWCOLOR LIMIT (field-confirmed 0.7.0): Iris allocates exactly TWO
+ shadowcolor buffers (shadowcolor0/1) unless the pack declares the
+ HIGHER_SHADOWCOLOR feature. Using shadowcolor2 threw
+ "Index 2 out of bounds for length 2" at load and the pack refused to start.
+ Rather than require a feature flag (which would fail on Iris builds that lack
+ it), the ping-pong now lives INSIDE shadowcolor1: Iris backs every shadowcolor
+ with two physical buffers, so a pass that both reads and writes one reads the
+ previous content and writes the other, then flips. That is exactly a ping-pong,
+ supplied by the driver instead of by a third buffer.
+
  shadowcomp (fragment) — FLOOD-FILL STEP 1 of 2, with reprojection.
 
  Reads : shadowcolor0 — this frame's emitter/occupancy map (written by the splats
                         in shadow.gsh/shadow.fsh)
          shadowcolor1 — LAST frame's finished light field
- Writes: shadowcolor2 — the half-propagated field, consumed by shadowcomp1
+ Writes: shadowcolor1 — the half-propagated field, consumed by shadowcomp1
+         (read-and-write of the same buffer; see the SHADOWCOLOR LIMIT note)
 
  =========================================================================
  WHY PING-PONG ACROSS TWO BUFFERS INSTEAD OF ONE
@@ -28,7 +39,7 @@
    * Iris flips between passes  -> each pass sees the previous pass's output.
    * Iris does not flip at all  -> each pass sees the previous pass's output.
    * Iris flips only at the end -> shadowcomp1 reads a one-frame-old
-                                   shadowcolor2, i.e. the field converges one
+                                   shadowcolor1, i.e. the field converges one
                                    step slower. Invisible, never wrong.
  The cost is one extra shadow-buffer-sized RGB float target; the benefit is that
  this cannot be subtly broken by a detail we cannot test on CI.
@@ -55,7 +66,7 @@ uniform sampler2D shadowcolor1;   // rgb = last frame's finished light field
 uniform vec3 cameraPosition;
 uniform vec3 previousCameraPosition;
 
-/* RENDERTARGETS: 2 */
+/* RENDERTARGETS: 1 */
 layout(location = 0) out vec3 outField;
 
 void main() {
