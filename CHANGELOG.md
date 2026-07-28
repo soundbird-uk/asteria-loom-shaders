@@ -7,6 +7,88 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — flood-fill coloured voxel light (Phase 6, all platforms, no compute)
+
+- **Block light now propagates as a real volumetric field**, so a torch around a
+  corner or entirely off-screen still colours the wall it lights — the limitation
+  the screen-space gather below could never remove. Built with a geometry shader
+  and fragment passes only, so it runs on the macOS GL 4.1 baseline; no compute
+  anywhere in the canonical tree.
+- **Voxelisation** (`shadow.gsh`) dual-emits per triangle: the real shadow
+  triangle, plus a one-texel splat at the block's flattened voxel address carrying
+  albedo × light level. A splat is a rasterised primitive, so it writes the
+  **shared depth attachment** no matter which colour buffer it targets — which
+  means "the splat survives the depth test" and "the shadow map is untouched" are
+  mutually exclusive, and a separate colour buffer cannot avoid it. Spatial
+  separation is the only resolution: the shadow map is squeezed into the square
+  `(shadowMapResolution − 512)²` sub-region and the 2048×512 voxel atlas takes the
+  top strip. Because the atlas indexes Y by tile, each voxel owns a distinct texel
+  and the splat's depth is free to act as a **priority** instead — brightest
+  emitter wins, so multiple faces of one block resolve deterministically rather
+  than by submission order.
+- **Containment:** the remap is a single uniform scale applied at exactly the two
+  `texture()` call sites in `lib/shadow.glsl` plus the logical texel size that every
+  bias and radius derives from. Bounds tests, PCSS blocker search, Vogel disc and
+  distortion warp are byte-identical. With `VOXEL_LIGHT` **off** the scale is the
+  literal identity and the shadow path compiles to exactly the previously shipped
+  code. This mattered: two past releases were broken by shadow changes.
+- **Propagation** is two ping-ponged diffusion passes per frame (`shadowcomp`,
+  `shadowcomp1`) over a persistent 128×64×128 field snapped to
+  `floor(cameraPosition)` and reprojected by the integer camera-block delta. No
+  program reads and writes the same buffer, so correctness does not depend on Iris'
+  shadowcolor flip semantics. The occlusion model is the storage itself: emitter
+  voxels hold their emission, solid voxels hold nothing, air voxels average their
+  neighbours — a wall blocks light *because it has nothing to give*, so there is no
+  separate mask that can fall out of sync.
+- **The invariant is unchanged:** the field supplies HUE and a bounded boost only.
+  Intensity is still vanilla's `lm.x`, so light cannot leak through geometry.
+- Costs shadow-map resolution while enabled (2048 → 1536, 3072 → 2560); softer
+  distant shadows are expected. Off on Potato/Low.
+
+### Added — compute histogram auto-exposure (Advanced zip only)
+
+- Replaces the frame-mean metering with a **trimmed mean of a 128-bin
+  log-luminance histogram** (16384 stratified samples, R2-jittered per frame; bins
+  split fractionally at the 30%/15% trim points so the estimate moves continuously
+  rather than stepping). A bright sky or a single torch in a dark cave can no
+  longer drag the whole frame's exposure.
+- **The adaptation contract is preserved verbatim** — same asymmetric
+  `AL_EXPOSURE_MIN/MAX/STRENGTH` clamp (field-approved dark nights are never
+  lifted), same `AL_EXPOSURE_TAU` integrator, same `colortex5.a(0,0)` output slot.
+  Only the *metering* changed. `AL_EXPOSURE_*` deliberately stay in the canonical
+  `settings.glsl` so adaptation cannot fork between the two builds.
+- Lives in `world*/final.csh`, **not** a `composite15.csh`: Iris requires composite
+  passes to have vertex+fragment stages, so a compute-only composite is not
+  guaranteed to dispatch — and padding one with a dummy fragment would give it a
+  `RENDERTARGETS` list, making Iris flip those buffers and swap in a stale
+  colortex5, destroying the AO history. `final` lists compute as an optional stage
+  and runs it before its fragment, which is exactly the required ordering.
+- **Double integration is prevented structurally in both directions:** the compute
+  pass runs after `composite14` and overwrites `(0,0)` so the fragment path's value
+  is never displayed, and the compute integrator's own previous value lives at
+  `(1,0)` so the fragment path can never feed the loop. The fragment path is
+  deliberately left alive, so if the dispatch ever does not happen the build
+  degrades to Mac behaviour instead of freezing.
+
+### Fixed — geometry shaders were invisible to the compile gate
+
+- `tools/validate.py` globbed only `.vsh`/`.fsh`/`.csh`, so the new `.gsh` files
+  were never compiled by CI. Since Iris compiles every stage file a pack ships
+  regardless of whether the feature is toggled on, that made it possible to ship a
+  pack that **fails to load** with a fully green validation run. `.gsh` is now
+  compiled (`-S geom`) and exempt from the fragment-only lints. Program count
+  234 → 237.
+
+### Changed — the advanced overlay can no longer ship stale properties
+
+- The overlay originally had to supply a full-replacement `shaders.properties`,
+  which would silently go stale every time the canonical file changed — a
+  guaranteed future bug where the Advanced pack quietly diverges from the default
+  one. It now supplies `shaders.properties.append`, concatenated onto the canonical
+  file by `tools/overlay_props.py`, which both the packager and the validator
+  import so the merge logic cannot drift. A full-replacement copy in the overlay is
+  now a hard build error naming the append file.
+
 ### Added — coloured block light (screen-space)
 
 - **Light sources now tint what they illuminate with their OWN colour.** A redstone
