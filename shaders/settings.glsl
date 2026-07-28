@@ -139,7 +139,19 @@
 // (fall back to the constant ramp), at FULL the emitter owns the hue outright.
 // EPS is deliberately above the R11F_G11F_B10F denormal floor.
 #define AL_CBL_EPS           0.004
-#define AL_CBL_FULL          0.050
+// CONFIDENCE MUST NOT RE-ENCODE DISTANCE. This ramp answers one question only —
+// "is this a real emitter hue, or noise?" — and it has to saturate just above the
+// noise floor. It is NOT a falloff curve: the distance falloff is already owned,
+// completely, by the vanilla lm.x lightmap, which is the entire design principle
+// of this feature (hue here, intensity there). Setting FULL far above EPS made
+// the ramp a second, much steeper falloff stacked on top of lm.x, so the colour
+// died about half a block from a redstone torch and everything past that snapped
+// back to the warm constant — field-reported, and predicted verbatim by the
+// calibration note in the VOXEL section below. FULL is now a small multiple of
+// EPS: anything the gather can actually distinguish from nothing is believed.
+// Tinting a faint far detection is harmless — out there lm.x has faded to ~0, so
+// the block-light term it multiplies is ~0 regardless of its hue.
+#define AL_CBL_FULL          0.010
 // Range-validation ceiling for the persistent-buffer reads (NaN law).
 #define AL_CBL_MAX           65000.0
 // Temporal accumulation (colortex14). The hue field is smooth and slow, so a

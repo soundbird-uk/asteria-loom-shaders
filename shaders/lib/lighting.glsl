@@ -122,10 +122,19 @@ vec3 alBlockLightTint(float bl, vec3 blGather) {
         // magnitude is a screen-space artefact (how many taps happened to land
         // on the emitter) and has no business modulating brightness.
         vec3 hue = blGather / peak;
-        // Confidence: how convincingly an emitter was found. Ramps from 0 at
-        // EPS (indistinguishable from nothing) to 1 at FULL (a source right
-        // there), so a torch drifting off-screen fades its colour out instead
-        // of popping back to amber.
+        // Confidence: whether an emitter hue was found AT ALL — deliberately NOT
+        // how near it is. The ramp saturates just above the noise floor, so any
+        // detectable hue is believed in full.
+        //
+        // This is the same argument as the unit-chroma step above, applied one
+        // line later. Magnitude is thrown away there because it is a screen-space
+        // artefact; letting it drive `conf` here would smuggle it straight back in
+        // as a brightness-dependent tint. Worse, gather magnitude falls off with
+        // distance, so a wide EPS..FULL window becomes a SECOND falloff curve
+        // stacked on top of lm.x — and since lm.x already reaches ~15 blocks while
+        // the gather is faint by two, the colour died about half a block from a
+        // redstone torch and everything beyond snapped back to warm amber. That
+        // was the field report. The distance falloff belongs to lm.x, exclusively.
         float conf = alSaturate((peak - AL_CBL_EPS) / max(AL_CBL_FULL - AL_CBL_EPS, 1e-4));
         // Which slider owns "how far a confident hue may pull the tint". Normally
         // it is COLORED_BLOCKLIGHT_STRENGTH, which predates the voxel path and is
