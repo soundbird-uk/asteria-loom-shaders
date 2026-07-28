@@ -7,6 +7,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — nearby geometry erased the clouds ahead of you (cloud history pollution)
+
+- **Field report: walking with grass in view painted a delayed, grass-shaped hole
+  in the clouds ahead.** `composite1` wrote the cloud history for EVERY pixel, but
+  behind opaque geometry the cloud march is deliberately empty (terrain occludes
+  the layer) — so a terrain pixel stored `(0,0,0, alpha 1.0)`, which the read side
+  accepts as a well-formed sample meaning "clear sky here, no cloud". As the camera
+  moved, genuine SKY pixels reprojected onto the texels the terrain had just
+  vacated, trusted that reading, and blended toward no-cloud: a silhouette of the
+  nearby geometry erasing the cloud layer, trailing the camera by the history
+  blend's time constant.
+- The read side already had the mechanism to reject a texel — an alpha below
+  `AL_CLOUD_TRANS_EPS` is the "uninitialised / do not trust" sentinel — the write
+  side had simply never used it. Terrain texels now store that sentinel, so a
+  reprojection landing on one is rejected and falls through to the current frame's
+  march, exactly like an off-screen or disoccluded sample. Every texel is still
+  written, so the flipped buffer never keeps stale content.
+- The clouds-OFF default was fixed the same way: it wrote alpha 1.0, so re-enabling
+  clouds would read a full screen of "no cloud anywhere" and blend toward it until
+  it converged.
+- **This was latent until buffer persistence was fixed.** `colortex7` carried
+  `clear.colortex7 = false` in `shaders.properties`, which Iris ignores, so the
+  cloud history was wiped every frame and no reprojection ever read anything. Now
+  that the histories genuinely persist, reprojection errors are observable for the
+  first time — expect the same class from the other newly-live histories, and
+  recognise it by geometry-shaped ghosting or erasure that trails the camera.
+
+### Fixed — the pack could not load: "Index 2 out of bounds for length 2"
+
+- **0.7.0 did not start at all.** Iris allocates exactly TWO shadowcolor buffers
+  (`shadowcolor0`/`shadowcolor1`) unless a pack declares the `HIGHER_SHADOWCOLOR`
+  feature; the voxel-light propagation used `shadowcolor2` as its ping-pong target,
+  and Iris threw on the array index at load time.
+- Fixed by removing the third buffer rather than requiring the feature flag (which
+  would only move the failure to Iris builds that lack it). Iris backs every
+  shadowcolor with two physical buffers, so a pass that reads and writes the same
+  one reads the previous contents and writes the other, then flips — the driver
+  supplies the ping-pong. Both propagation passes now work within `shadowcolor1`.
+- **CI could not have caught this**, and now can: `glslang` compiles
+  `uniform sampler2D shadowcolor2` happily because the limit is a RUNTIME
+  allocation, not a language rule. `tools/validate.py` gained a lint that hard-fails
+  any `shadowcolor2`+ reference without `HIGHER_SHADOWCOLOR` declared. This is the
+  second load-blocking bug in a row to pass a green gate (the first being geometry
+  shaders never being compiled at all) — both were valid GLSL violating an Iris
+  runtime contract, which is this pack's real failure mode.
+
 ### Added — flood-fill coloured voxel light (Phase 6, all platforms, no compute)
 
 - **Block light now propagates as a real volumetric field**, so a torch around a

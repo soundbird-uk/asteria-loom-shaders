@@ -114,7 +114,12 @@ void main() {
     // ---- Scene passthrough (clouds may overwrite outColor below) ----------
     vec3 scene = texture(colortex0, texcoord).rgb;
     outColor   = vec4(scene, 1.0);
-    outCloud   = vec4(0.0, 0.0, 0.0, 1.0);   // neutral history when clouds off
+    // Clouds off: store the INVALID sentinel (alpha < AL_CLOUD_TRANS_EPS), not a
+    // 'valid clear sky'. Nothing reads colortex7 while clouds are off, but the
+    // buffer is persistent — so if the option is switched back on the stale
+    // contents are read on the very next frame, and an alpha of 1.0 would be
+    // trusted as 'no cloud anywhere' and blended toward until it converged.
+    outCloud   = vec4(0.0, 0.0, 0.0, 0.0);   // invalid: no trustworthy history
 
 #ifdef VOLUMETRIC_CLOUDS
     float depth1 = texture(depthtex1, texcoord).r;
@@ -199,7 +204,30 @@ void main() {
     // Store with transmittance floored to the validity epsilon so a real write
     // is never mistaken for the invalid sentinel next frame. HISTORY IS RAW (no
     // distance fade) — the fade is view-dependent and must not enter reprojection.
-    outCloud   = vec4(outScatter, max(outTrans, AL_CLOUD_TRANS_EPS));
+    // TERRAIN PIXELS MUST STORE THE INVALID SENTINEL, NOT THEIR (EMPTY) MARCH.
+    // The cloud march is deliberately empty behind opaque geometry (terrain
+    // occludes the layer), so a terrain pixel's result is curTrans == 1.0 /
+    // curScatter == 0 — i.e. "clear sky". Storing THAT verbatim makes it valid
+    // history: next frame the camera moves, a genuine SKY pixel reprojects onto
+    // the texel the terrain used to occupy, passes the validity test, and blends
+    // toward "no cloud". The visible result is a silhouette of nearby geometry
+    // (grass, a hill) ERASING the clouds ahead of you, trailing the camera by the
+    // history blend's time constant. Field-reported walking through tall grass.
+    //
+    // The read side already has the mechanism to reject a texel — an alpha below
+    // AL_CLOUD_TRANS_EPS is the "uninitialised / do not trust" sentinel. The write
+    // side simply never used it. Terrain texels now store that sentinel, so any
+    // reprojection landing on one is rejected and falls through to the current
+    // frame's march, exactly like an off-screen or disoccluded sample.
+    //
+    // Every texel is still written (no skips), so the flipped buffer never keeps
+    // stale content — the terrain ones are just written as explicitly invalid.
+    //
+    // This was latent until buffer persistence was fixed: colortex7 previously
+    // carried `clear.colortex7 = false` in shaders.properties, which Iris ignores,
+    // so the history was wiped every frame and no reprojection ever read anything.
+    outCloud   = isSky ? vec4(outScatter, max(outTrans, AL_CLOUD_TRANS_EPS))
+                       : vec4(0.0, 0.0, 0.0, 0.0);
 
     // ---- Aerial distance-dissolve (post-temporal; 0.3.3 field fix) --------
     // Distant clouds DISSOLVE: both opacity and scattering fade toward zero,
